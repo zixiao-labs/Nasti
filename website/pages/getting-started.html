@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>快速开始 - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html" class="active">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html" class="active">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>快速开始</h1>
+    <p>只需几步即可使用 Nasti 启动你的项目。</p>
+
+    <h2>安装</h2>
+    <div class="code-block"><pre>npm install -D nasti-build</pre></div>
+
+    <h2>创建项目结构</h2>
+    <p>Nasti 的项目结构与 Vite 一致：</p>
+    <div class="code-block"><pre>my-project/
+├── index.html          <span class="comment"># 入口 HTML</span>
+├── src/
+│   ├── main.tsx        <span class="comment"># JS 入口</span>
+│   └── App.tsx
+├── public/             <span class="comment"># 静态资源</span>
+└── nasti.config.ts     <span class="comment"># 配置文件（可选）</span></pre></div>
+
+    <h2>入口 HTML</h2>
+    <p>在项目根目录创建 <code>index.html</code>：</p>
+    <div class="code-block"><pre><span class="keyword">&lt;!DOCTYPE html&gt;</span>
+<span class="keyword">&lt;html&gt;</span>
+<span class="keyword">&lt;head&gt;</span>
+  <span class="keyword">&lt;title&gt;</span>My App<span class="keyword">&lt;/title&gt;</span>
+<span class="keyword">&lt;/head&gt;</span>
+<span class="keyword">&lt;body&gt;</span>
+  <span class="keyword">&lt;div</span> <span class="type">id</span>=<span class="string">"root"</span><span class="keyword">&gt;&lt;/div&gt;</span>
+  <span class="keyword">&lt;script</span> <span class="type">type</span>=<span class="string">"module"</span> <span class="type">src</span>=<span class="string">"/src/main.tsx"</span><span class="keyword">&gt;&lt;/script&gt;</span>
+<span class="keyword">&lt;/body&gt;</span>
+<span class="keyword">&lt;/html&gt;</span></pre></div>
+
+    <h2>启动开发</h2>
+    <div class="code-block"><pre><span class="comment"># 启动开发服务器</span>
+npx nasti dev
+
+<span class="comment"># 生产构建</span>
+npx nasti build
+
+<span class="comment"># 预览构建产物</span>
+npx nasti preview</pre></div>
+
+    <h2>添加配置（可选）</h2>
+    <p>创建 <code>nasti.config.ts</code>：</p>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">framework</span>: <span class="string">'react'</span>,
+  <span class="type">server</span>: {
+    <span class="type">port</span>: <span class="orange">3000</span>,
+    <span class="type">host</span>: <span class="orange">true</span>,
+  },
+  <span class="type">resolve</span>: {
+    <span class="type">alias</span>: {
+      <span class="string">'@'</span>: <span class="string">'/src'</span>,
+    },
+  },
+})</pre></div>
+
+    <div class="tip">
+      <strong>TIP:</strong> Nasti 会自动检测框架类型。如果你的项目依赖了 <code>react</code>，
+      则自动启用 React 插件；依赖 <code>vue</code> 则启用 Vue 插件。
+    </div>
+
+    <h2>从 Vite 迁移</h2>
+    <p>Nasti 兼容 Vite 插件，迁移非常简单：</p>
+    <ol>
+      <li>将 <code>vite</code> 替换为 <code>nasti-build</code></li>
+      <li>将 <code>vite.config.ts</code> 重命名为 <code>nasti.config.ts</code></li>
+      <li>将 <code>import { defineConfig } from 'vite'</code> 改为 <code>from 'nasti-build'</code></li>
+      <li>现有的 Vite 插件可以直接使用，无需修改</li>
+    </ol>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

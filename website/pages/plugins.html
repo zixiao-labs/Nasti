@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>插件 API - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html" class="active">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html" class="active">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>插件 API</h1>
+    <p>Nasti 的插件接口与 Vite 完全兼容。现有的 Vite / Rollup 插件可以直接使用。</p>
+
+    <h2>基本结构</h2>
+    <div class="code-block"><pre><span class="keyword">import type</span> { <span class="type">NastiPlugin</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">function</span> <span class="func">myPlugin</span>(<span class="type">options</span> = {}): <span class="type">NastiPlugin</span> {
+  <span class="keyword">return</span> {
+    <span class="type">name</span>: <span class="string">'my-plugin'</span>,      <span class="comment">// 必需，唯一标识</span>
+    <span class="type">enforce</span>: <span class="string">'pre'</span>,          <span class="comment">// 可选: 'pre' | 'post'</span>
+    <span class="type">apply</span>: <span class="string">'build'</span>,           <span class="comment">// 可选: 'build' | 'serve'</span>
+
+    <span class="func">resolveId</span>(<span class="type">source</span>, <span class="type">importer</span>) {
+      <span class="comment">// 解析模块标识符</span>
+    },
+    <span class="func">load</span>(<span class="type">id</span>) {
+      <span class="comment">// 加载模块源代码</span>
+    },
+    <span class="func">transform</span>(<span class="type">code</span>, <span class="type">id</span>) {
+      <span class="comment">// 转换模块代码</span>
+    },
+  }
+}</pre></div>
+
+    <h2>通用钩子</h2>
+    <p>以下钩子在开发和构建模式下都会执行：</p>
+
+    <h3>resolveId</h3>
+    <div class="code-block"><pre><span class="func">resolveId</span>(<span class="type">source</span>: string, <span class="type">importer</span>: string | undefined, <span class="type">options</span>: { isEntry: boolean }): string | null | { id: string; external?: boolean }</pre></div>
+    <p>自定义模块解析逻辑。返回解析后的 ID，或 <code>null</code> 交给下一个插件处理。</p>
+
+    <h3>load</h3>
+    <div class="code-block"><pre><span class="func">load</span>(<span class="type">id</span>: string): string | null | { code: string; map?: any }</pre></div>
+    <p>自定义模块加载。返回模块源码，或 <code>null</code> 使用默认加载。</p>
+
+    <h3>transform</h3>
+    <div class="code-block"><pre><span class="func">transform</span>(<span class="type">code</span>: string, <span class="type">id</span>: string): string | null | { code: string; map?: any }</pre></div>
+    <p>转换模块代码。代码会按插件顺序依次通过 transform 管道。</p>
+
+    <h3>buildStart / buildEnd</h3>
+    <div class="code-block"><pre><span class="func">buildStart</span>(): void
+<span class="func">buildEnd</span>(<span class="type">error</span>?: Error): void</pre></div>
+    <p>构建生命周期钩子。</p>
+
+    <h2>Nasti / Vite 专有钩子</h2>
+
+    <h3>config</h3>
+    <div class="code-block"><pre><span class="func">config</span>(<span class="type">config</span>: NastiConfig, <span class="type">env</span>: { mode: string; command: string }): NastiConfig | null</pre></div>
+    <p>在配置解析前修改配置。</p>
+
+    <h3>configResolved</h3>
+    <div class="code-block"><pre><span class="func">configResolved</span>(<span class="type">config</span>: ResolvedConfig): void</pre></div>
+    <p>读取最终配置。</p>
+
+    <h3>configureServer</h3>
+    <div class="code-block"><pre><span class="func">configureServer</span>(<span class="type">server</span>: DevServer): void | (() => void)</pre></div>
+    <p>自定义开发服务器。返回函数会在内部中间件之后执行。</p>
+
+    <h3>transformIndexHtml</h3>
+    <div class="code-block"><pre><span class="func">transformIndexHtml</span>(<span class="type">html</span>: string): string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }</pre></div>
+    <p>转换入口 HTML 文件。</p>
+
+    <h3>handleHotUpdate</h3>
+    <div class="code-block"><pre><span class="func">handleHotUpdate</span>(<span class="type">ctx</span>: HmrContext): void | ModuleNode[]</pre></div>
+    <p>自定义 HMR 更新处理。</p>
+
+    <h2>插件顺序</h2>
+    <p>插件按以下顺序执行：</p>
+    <ol>
+      <li><code>enforce: 'pre'</code> 的插件</li>
+      <li>没有 enforce 的普通插件</li>
+      <li><code>enforce: 'post'</code> 的插件</li>
+    </ol>
+
+    <h2>条件应用</h2>
+    <p>使用 <code>apply</code> 让插件只在特定模式下生效：</p>
+    <div class="code-block"><pre>{
+  <span class="type">apply</span>: <span class="string">'build'</span>,    <span class="comment">// 仅在 nasti build 时生效</span>
+  <span class="type">apply</span>: <span class="string">'serve'</span>,    <span class="comment">// 仅在 nasti dev 时生效</span>
+  <span class="type">apply</span>: (<span class="type">config</span>, { <span class="type">command</span> }) => command === <span class="string">'build'</span>,  <span class="comment">// 函数形式</span>
+}</pre></div>
+
+    <h2>示例：Markdown 插件</h2>
+    <div class="code-block"><pre><span class="keyword">function</span> <span class="func">markdownPlugin</span>(): <span class="type">NastiPlugin</span> {
+  <span class="keyword">return</span> {
+    <span class="type">name</span>: <span class="string">'markdown'</span>,
+    <span class="func">transform</span>(<span class="type">code</span>, <span class="type">id</span>) {
+      <span class="keyword">if</span> (!id.endsWith(<span class="string">'.md'</span>)) <span class="keyword">return null</span>
+      <span class="keyword">const</span> html = <span class="func">marked</span>(code)
+      <span class="keyword">return</span> <span class="string">`export default ${JSON.stringify(html)}`</span>
+    },
+  }
+}</pre></div>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nasti - 基于 Rolldown 的高性能 Web 打包器</title>
+  <meta name="description" content="Nasti 是基于 Rolldown + OXC 的高性能 Web 打包器，兼容 Vite 插件生态，内置 React 和 Vue 支持。">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<section class="hero">
+  <h1><span>Nasti</span></h1>
+  <p class="tagline">基于 Rolldown + OXC 的下一代 Web 打包器。Rust 驱动，极致性能，兼容 Vite 插件生态。</p>
+  <div class="hero-actions">
+    <a href="/pages/getting-started.html" class="btn btn-primary">快速开始</a>
+    <a href="https://github.com/zixiao-labs/Nasti" class="btn btn-outline" target="_blank">GitHub</a>
+  </div>
+</section>
+
+<section class="install-section">
+  <h2>安装</h2>
+  <div class="install-cmd">
+    <code>npm install -D nasti-build</code>
+    <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+  </div>
+</section>
+
+<section class="features">
+  <div class="feature-card">
+    <div class="feature-icon">&#9889;</div>
+    <h3>Rolldown 驱动</h3>
+    <p>Rust 编写的打包内核，生产构建速度比 Rollup 快 10-30x，告别漫长的等待。</p>
+  </div>
+  <div class="feature-card">
+    <div class="feature-icon">&#128640;</div>
+    <h3>OXC 转译</h3>
+    <p>Rust 编写的 TS/JSX/TSX 转译器，比 Babel 快 20-50x，内存占用减少 70%。</p>
+  </div>
+  <div class="feature-card">
+    <div class="feature-icon">&#128268;</div>
+    <h3>Vite 插件兼容</h3>
+    <p>直接使用现有的 Vite / Rollup 插件，resolveId / load / transform 完全兼容。</p>
+  </div>
+  <div class="feature-card">
+    <div class="feature-icon">&#9883;</div>
+    <h3>内置 React</h3>
+    <p>开箱即用的 JSX 自动转换 + React Fast Refresh 热更新，零配置。</p>
+  </div>
+  <div class="feature-card">
+    <div class="feature-icon">&#128154;</div>
+    <h3>内置 Vue</h3>
+    <p>SFC 单文件组件编译 + Vue HMR，只需安装 @vue/compiler-sfc。</p>
+  </div>
+  <div class="feature-card">
+    <div class="feature-icon">&#128293;</div>
+    <h3>Dev Server + HMR</h3>
+    <p>内置开发服务器，WebSocket 热模块替换，代码修改即时生效。</p>
+  </div>
+</section>
+
+<section style="max-width:700px;margin:2rem auto 4rem;padding:0 2rem;">
+  <h2 style="text-align:center;margin-bottom:1.5rem;">一分钟上手</h2>
+  <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">framework</span>: <span class="string">'react'</span>,
+  <span class="type">server</span>: { <span class="type">port</span>: <span class="orange">3000</span> },
+  <span class="type">build</span>: { <span class="type">outDir</span>: <span class="string">'dist'</span> },
+})</pre></div>
+</section>
+
+<footer class="footer">
+  MIT License &copy; 2026 <a href="https://github.com/zixiao-labs">zixiao-labs</a> &mdash; Nasti, Arknights Operator naming :)
+</footer>
+
+<script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>React 支持 - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html" class="active">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>React 支持</h1>
+    <p>Nasti 内置 React 支持，无需额外安装插件。</p>
+
+    <h2>特性</h2>
+    <ul>
+      <li>使用 OXC 进行 JSX/TSX 转译（比 Babel 快 20-50x）</li>
+      <li>自动 JSX runtime（<code>react/jsx-runtime</code>，无需手动 import React）</li>
+      <li>React Fast Refresh 热更新（开发模式下组件状态保持）</li>
+      <li>TypeScript 原生支持</li>
+    </ul>
+
+    <h2>快速开始</h2>
+    <div class="code-block"><pre><span class="comment"># 初始化项目</span>
+npm init -y
+npm install react react-dom
+npm install -D nasti-build @types/react @types/react-dom typescript</pre></div>
+
+    <h2>配置</h2>
+    <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">framework</span>: <span class="string">'react'</span>,
+})</pre></div>
+
+    <div class="tip">
+      <strong>TIP:</strong> 当 <code>framework</code> 设为 <code>'auto'</code>（默认值）时，
+      Nasti 会检测 <code>package.json</code> 中是否有 <code>react</code> 依赖来自动启用。
+    </div>
+
+    <h2>入口文件</h2>
+    <div class="code-block"><pre><span class="comment">// src/main.tsx</span>
+<span class="keyword">import</span> { createRoot } <span class="keyword">from</span> <span class="string">'react-dom/client'</span>
+<span class="keyword">import</span> App <span class="keyword">from</span> <span class="string">'./App'</span>
+
+createRoot(document.<span class="func">getElementById</span>(<span class="string">'root'</span>)!).<span class="func">render</span>(&lt;<span class="type">App</span> /&gt;)</pre></div>
+
+    <div class="code-block"><pre><span class="comment">// src/App.tsx</span>
+<span class="keyword">import</span> { <span class="type">useState</span> } <span class="keyword">from</span> <span class="string">'react'</span>
+
+<span class="keyword">export default function</span> <span class="func">App</span>() {
+  <span class="keyword">const</span> [count, setCount] = <span class="func">useState</span>(<span class="orange">0</span>)
+
+  <span class="keyword">return</span> (
+    &lt;<span class="type">div</span>&gt;
+      &lt;<span class="type">h1</span>&gt;Nasti + React&lt;/<span class="type">h1</span>&gt;
+      &lt;<span class="type">button</span> onClick={() =&gt; <span class="func">setCount</span>(c =&gt; c + <span class="orange">1</span>)}&gt;
+        Count: {count}
+      &lt;/<span class="type">button</span>&gt;
+    &lt;/<span class="type">div</span>&gt;
+  )
+}</pre></div>
+
+    <h2>HMR 行为</h2>
+    <p>开发模式下，React 组件文件（<code>.jsx</code> / <code>.tsx</code>）的修改会触发 Fast Refresh：</p>
+    <ul>
+      <li>组件内部状态在更新后保持</li>
+      <li>非组件文件的修改会触发页面完整刷新</li>
+      <li>语法错误会显示错误覆盖层</li>
+    </ul>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

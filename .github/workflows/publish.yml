@@ -1,0 +1,52 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Trusted Publisher 需要的权限
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish  # 需要在 GitHub repo Settings → Environments 中创建
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish with provenance
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # 注意: 虽然使用 Trusted Publisher，仍需在 GitHub Secrets 中设置
+          # NPM_TOKEN (Automation 类型) 作为认证手段。
+          # Trusted Publisher 的作用是让 npm 自动验证来源，
+          # 并在包上显示 provenance 签名信息。
+          #
+          # === 设置步骤 ===
+          # 1. npmjs.com → 登录 → 包页面 → Settings → Trusted Publishers
+          #    - Repository owner: zixiao-labs
+          #    - Repository name: Nasti
+          #    - Workflow filename: publish.yml
+          #    - Environment: npm-publish
+          # 2. npmjs.com → Access Tokens → Generate New Token (Automation)
+          #    将 token 添加到 GitHub repo Settings → Secrets → NPM_TOKEN
+          # 3. GitHub repo → Settings → Environments → 新建 "npm-publish"

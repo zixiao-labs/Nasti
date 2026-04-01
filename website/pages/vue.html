@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vue 支持 - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html" class="active">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>Vue 支持</h1>
+    <p>Nasti 内置 Vue 3 单文件组件（SFC）支持。</p>
+
+    <h2>安装</h2>
+    <p>Vue 的 SFC 编译器作为可选依赖，需要手动安装：</p>
+    <div class="code-block"><pre>npm install vue
+npm install -D @vue/compiler-sfc</pre></div>
+
+    <h2>特性</h2>
+    <ul>
+      <li><code>.vue</code> 单文件组件完整支持（script、template、style）</li>
+      <li><code>&lt;script setup&gt;</code> 语法支持</li>
+      <li>Scoped CSS</li>
+      <li>Vue HMR 热更新（模板/样式修改不丢失状态）</li>
+      <li>TypeScript 支持（<code>&lt;script setup lang="ts"&gt;</code>）</li>
+    </ul>
+
+    <h2>配置</h2>
+    <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">framework</span>: <span class="string">'vue'</span>,
+})</pre></div>
+
+    <h2>示例</h2>
+
+    <h3>入口文件</h3>
+    <div class="code-block"><pre><span class="comment">// src/main.ts</span>
+<span class="keyword">import</span> { <span class="func">createApp</span> } <span class="keyword">from</span> <span class="string">'vue'</span>
+<span class="keyword">import</span> App <span class="keyword">from</span> <span class="string">'./App.vue'</span>
+
+<span class="func">createApp</span>(App).<span class="func">mount</span>(<span class="string">'#app'</span>)</pre></div>
+
+    <h3>组件</h3>
+    <div class="code-block"><pre><span class="comment">&lt;!-- src/App.vue --&gt;</span>
+<span class="keyword">&lt;script setup</span> <span class="type">lang</span>=<span class="string">"ts"</span><span class="keyword">&gt;</span>
+<span class="keyword">import</span> { <span class="type">ref</span> } <span class="keyword">from</span> <span class="string">'vue'</span>
+
+<span class="keyword">const</span> count = <span class="func">ref</span>(<span class="orange">0</span>)
+<span class="keyword">&lt;/script&gt;</span>
+
+<span class="keyword">&lt;template&gt;</span>
+  &lt;<span class="type">div</span>&gt;
+    &lt;<span class="type">h1</span>&gt;Nasti + Vue&lt;/<span class="type">h1</span>&gt;
+    &lt;<span class="type">button</span> @click=<span class="string">"count++"</span>&gt;Count: {{ count }}&lt;/<span class="type">button</span>&gt;
+  &lt;/<span class="type">div</span>&gt;
+<span class="keyword">&lt;/template&gt;</span>
+
+<span class="keyword">&lt;style scoped&gt;</span>
+<span class="type">h1</span> { <span class="type">color</span>: <span class="green">#42b883</span>; }
+<span class="keyword">&lt;/style&gt;</span></pre></div>
+
+    <h2>HMR 行为</h2>
+    <ul>
+      <li><code>&lt;template&gt;</code> 修改：热重渲染，保持组件状态</li>
+      <li><code>&lt;style&gt;</code> 修改：CSS 热替换，无需刷新页面</li>
+      <li><code>&lt;script&gt;</code> 修改：组件重新加载</li>
+    </ul>
+
+    <div class="tip">
+      <strong>注意：</strong> 如果没有安装 <code>@vue/compiler-sfc</code>，
+      Nasti 会在控制台输出警告并跳过 <code>.vue</code> 文件的编译。
+    </div>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

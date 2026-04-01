@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>配置参考 - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html" class="active">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html" class="active">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>配置参考</h1>
+    <p>Nasti 使用 <code>nasti.config.ts</code>（或 <code>.js</code> / <code>.mjs</code>）作为配置文件。</p>
+
+    <h2>完整配置示例</h2>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">root</span>: <span class="string">'.'</span>,
+  <span class="type">base</span>: <span class="string">'/'</span>,
+  <span class="type">mode</span>: <span class="string">'development'</span>,
+  <span class="type">framework</span>: <span class="string">'react'</span>,
+  <span class="type">logLevel</span>: <span class="string">'info'</span>,
+  <span class="type">envPrefix</span>: [<span class="string">'NASTI_'</span>, <span class="string">'VITE_'</span>],
+
+  <span class="type">resolve</span>: {
+    <span class="type">alias</span>: { <span class="string">'@'</span>: <span class="string">'/src'</span> },
+    <span class="type">extensions</span>: [<span class="string">'.ts'</span>, <span class="string">'.tsx'</span>, <span class="string">'.js'</span>, <span class="string">'.jsx'</span>],
+  },
+
+  <span class="type">server</span>: {
+    <span class="type">port</span>: <span class="orange">3000</span>,
+    <span class="type">host</span>: <span class="orange">true</span>,
+    <span class="type">open</span>: <span class="orange">true</span>,
+    <span class="type">cors</span>: <span class="orange">true</span>,
+    <span class="type">hmr</span>: <span class="orange">true</span>,
+  },
+
+  <span class="type">build</span>: {
+    <span class="type">outDir</span>: <span class="string">'dist'</span>,
+    <span class="type">assetsDir</span>: <span class="string">'assets'</span>,
+    <span class="type">sourcemap</span>: <span class="orange">true</span>,
+    <span class="type">minify</span>: <span class="orange">true</span>,
+    <span class="type">emptyOutDir</span>: <span class="orange">true</span>,
+    <span class="type">target</span>: <span class="string">'es2022'</span>,
+  },
+
+  <span class="type">plugins</span>: [],
+})</pre></div>
+
+    <h2>通用选项</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>root</code></td><td><code>string</code></td><td><code>'.'</code></td><td>项目根目录</td></tr>
+        <tr><td><code>base</code></td><td><code>string</code></td><td><code>'/'</code></td><td>公共基础路径</td></tr>
+        <tr><td><code>mode</code></td><td><code>string</code></td><td><code>'development'</code></td><td>运行模式</td></tr>
+        <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型</td></tr>
+        <tr><td><code>logLevel</code></td><td><code>'info' | 'warn' | 'error' | 'silent'</code></td><td><code>'info'</code></td><td>日志级别</td></tr>
+        <tr><td><code>envPrefix</code></td><td><code>string | string[]</code></td><td><code>['NASTI_', 'VITE_']</code></td><td>暴露给客户端的环境变量前缀</td></tr>
+        <tr><td><code>plugins</code></td><td><code>NastiPlugin[]</code></td><td><code>[]</code></td><td>插件列表</td></tr>
+      </tbody>
+    </table>
+
+    <h2>resolve 选项</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>alias</code></td><td><code>Record&lt;string, string&gt;</code></td><td><code>{}</code></td><td>路径别名</td></tr>
+        <tr><td><code>extensions</code></td><td><code>string[]</code></td><td><code>['.ts', '.tsx', ...]</code></td><td>导入时省略的扩展名</td></tr>
+        <tr><td><code>conditions</code></td><td><code>string[]</code></td><td><code>['import', 'module', ...]</code></td><td>package.json exports 条件</td></tr>
+        <tr><td><code>mainFields</code></td><td><code>string[]</code></td><td><code>['module', 'main']</code></td><td>package.json 入口字段</td></tr>
+      </tbody>
+    </table>
+
+    <h2>server 选项</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>port</code></td><td><code>number</code></td><td><code>3000</code></td><td>端口号</td></tr>
+        <tr><td><code>host</code></td><td><code>string | boolean</code></td><td><code>'localhost'</code></td><td>监听地址，<code>true</code> 表示 <code>0.0.0.0</code></td></tr>
+        <tr><td><code>https</code></td><td><code>boolean</code></td><td><code>false</code></td><td>是否启用 HTTPS</td></tr>
+        <tr><td><code>open</code></td><td><code>boolean | string</code></td><td><code>false</code></td><td>自动打开浏览器</td></tr>
+        <tr><td><code>cors</code></td><td><code>boolean</code></td><td><code>true</code></td><td>是否启用 CORS</td></tr>
+        <tr><td><code>hmr</code></td><td><code>boolean | HmrConfig</code></td><td><code>true</code></td><td>HMR 配置</td></tr>
+      </tbody>
+    </table>
+
+    <h2>build 选项</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>outDir</code></td><td><code>string</code></td><td><code>'dist'</code></td><td>输出目录</td></tr>
+        <tr><td><code>assetsDir</code></td><td><code>string</code></td><td><code>'assets'</code></td><td>资源子目录</td></tr>
+        <tr><td><code>minify</code></td><td><code>boolean</code></td><td><code>true</code></td><td>是否压缩</td></tr>
+        <tr><td><code>sourcemap</code></td><td><code>boolean | 'inline' | 'hidden'</code></td><td><code>false</code></td><td>Source map</td></tr>
+        <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
+        <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
+        <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>传递给 Rolldown 的额外选项</td></tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

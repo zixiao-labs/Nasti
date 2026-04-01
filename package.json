@@ -1,0 +1,69 @@
+{
+  "name": "nasti-build",
+  "version": "0.0.1",
+  "description": "娜斯提-基于Rolldown的统一Web打包工具（没错，明日方舟干员命名）",
+  "keywords": [
+    "rolldown",
+    "arknights",
+    "webpack-alternative",
+    "vite-alternative"
+  ],
+  "homepage": "https://github.com/zixiao-labs/Nasti#readme",
+  "bugs": {
+    "url": "https://github.com/zixiao-labs/Nasti/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zixiao-labs/Nasti.git"
+  },
+  "license": "MIT",
+  "author": "amiya167",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./client": {
+      "import": "./dist/client/hmr.js"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "nasti": "./bin/nasti.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "client"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "cac": "^6.7.14",
+    "chokidar": "^4.0.0",
+    "connect": "^3.7.0",
+    "dotenv": "^16.4.0",
+    "oxc-parser": "^0.121.0",
+    "oxc-transform": "^0.121.0",
+    "picocolors": "^1.1.0",
+    "rolldown": "^1.0.0-rc.12",
+    "sirv": "^3.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/connect": "^3.4.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  },
+  "optionalDependencies": {
+    "@vue/compiler-sfc": "^3.5.0"
+  }
+}

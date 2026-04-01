@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CLI 命令 - Nasti</title>
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html" class="active">CLI</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html" class="active">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>CLI 命令</h1>
+    <p>Nasti 提供三个核心命令。</p>
+
+    <h2>nasti dev</h2>
+    <p>启动开发服务器。</p>
+    <div class="code-block"><pre>nasti dev [root] [options]</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--port &lt;port&gt;</code></td><td>服务器端口</td><td><code>3000</code></td></tr>
+        <tr><td><code>--host [host]</code></td><td>监听地址</td><td><code>localhost</code></td></tr>
+        <tr><td><code>--open [path]</code></td><td>启动时打开浏览器</td><td><code>false</code></td></tr>
+        <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>development</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="code-block"><pre><span class="comment"># 基本使用</span>
+nasti dev
+
+<span class="comment"># 指定端口和主机</span>
+nasti dev --port 8080 --host
+
+<span class="comment"># 指定项目根目录</span>
+nasti dev ./my-project</pre></div>
+
+    <h2>nasti build</h2>
+    <p>生产构建，输出到 <code>dist/</code> 目录。</p>
+    <div class="code-block"><pre>nasti build [root] [options]</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
+        <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
+        <tr><td><code>--minify</code></td><td>是否压缩</td><td><code>true</code></td></tr>
+        <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="code-block"><pre><span class="comment"># 基本构建</span>
+nasti build
+
+<span class="comment"># 带 source map</span>
+nasti build --sourcemap
+
+<span class="comment"># 自定义输出目录</span>
+nasti build --outDir output</pre></div>
+
+    <h2>nasti preview</h2>
+    <p>本地预览生产构建产物。</p>
+    <div class="code-block"><pre>nasti preview [root] [options]</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--port &lt;port&gt;</code></td><td>预览服务器端口</td><td><code>4173</code></td></tr>
+        <tr><td><code>--host [host]</code></td><td>监听地址</td><td><code>localhost</code></td></tr>
+        <tr><td><code>--outDir &lt;dir&gt;</code></td><td>要预览的目录</td><td><code>dist</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>编程式调用</h2>
+    <p>所有 CLI 功能也可通过编程 API 调用：</p>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">build</span>, <span class="func">createServer</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="comment">// 等价于 nasti dev</span>
+<span class="keyword">const</span> server = <span class="keyword">await</span> <span class="func">createServer</span>({ <span class="type">server</span>: { <span class="type">port</span>: <span class="orange">3000</span> } })
+<span class="keyword">await</span> server.<span class="func">listen</span>()
+
+<span class="comment">// 等价于 nasti build</span>
+<span class="keyword">await</span> <span class="func">build</span>({ <span class="type">build</span>: { <span class="type">outDir</span>: <span class="string">'dist'</span> } })</pre></div>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>
