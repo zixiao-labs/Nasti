@@ -164,6 +164,7 @@ export interface DevServer {
 export interface ModuleGraph {
   getModuleByUrl: (url: string) => ModuleNode | undefined
   getModuleById: (id: string) => ModuleNode | undefined
+  getModulesByFile: (file: string) => Set<ModuleNode> | undefined
   ensureEntryFromUrl: (url: string) => Promise<ModuleNode>
   invalidateModule: (mod: ModuleNode) => void
   invalidateAll: () => void
