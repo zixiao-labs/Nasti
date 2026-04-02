@@ -20,8 +20,11 @@ export function cssPlugin(config: ResolvedConfig): NastiPlugin {
         return {
           code: `
 const css = ${escaped};
+const __nasti_css_id__ = ${JSON.stringify(id)};
+const __nasti_existing__ = document.querySelector('style[data-nasti-css=' + JSON.stringify(__nasti_css_id__) + ']');
+if (__nasti_existing__) __nasti_existing__.remove();
 const style = document.createElement('style');
-style.setAttribute('data-nasti-css', ${JSON.stringify(id)});
+style.setAttribute('data-nasti-css', __nasti_css_id__);
 style.textContent = css;
 document.head.appendChild(style);
 

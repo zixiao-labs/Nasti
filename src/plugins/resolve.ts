@@ -55,11 +55,13 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
     },
 
     load(id) {
-      // 读取文件内容
-      if (fs.existsSync(id)) {
-        return fs.readFileSync(id, 'utf-8')
+      if (!fs.existsSync(id)) return null
+      // JSON 文件包装为 ES 模块
+      if (id.endsWith('.json')) {
+        const content = fs.readFileSync(id, 'utf-8')
+        return `export default ${content}`
       }
-      return null
+      return fs.readFileSync(id, 'utf-8')
     },
   }
 }

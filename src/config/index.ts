@@ -4,6 +4,33 @@ import fs from 'node:fs'
 import type { NastiConfig, ResolvedConfig, NastiPlugin } from '../types.js'
 import { defaults } from './defaults.js'
 
+/** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
+function loadTsconfigPaths(root: string): Record<string, string> {
+  const tsconfigPath = path.resolve(root, 'tsconfig.json')
+  if (!fs.existsSync(tsconfigPath)) return {}
+
+  try {
+    const content = fs.readFileSync(tsconfigPath, 'utf-8')
+    // 简单剥离注释后 JSON.parse（tsconfig 允许注释）
+    const stripped = content.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')
+    const tsconfig = JSON.parse(stripped)
+    const paths: Record<string, string[]> = tsconfig?.compilerOptions?.paths ?? {}
+    const baseUrl: string = tsconfig?.compilerOptions?.baseUrl ?? '.'
+
+    const alias: Record<string, string> = {}
+    for (const [pattern, targets] of Object.entries(paths)) {
+      if (!targets.length) continue
+      // 只处理简单别名（不含通配符 * 的键），通配符形式留给插件处理
+      const cleanKey = pattern.replace(/\/\*$/, '')
+      const cleanTarget = targets[0].replace(/\/\*$/, '')
+      alias[cleanKey] = path.resolve(root, baseUrl, cleanTarget)
+    }
+    return alias
+  } catch {
+    return {}
+  }
+}
+
 export function defineConfig(config: NastiConfig): NastiConfig {
   return config
 }
@@ -73,13 +100,7 @@ export async function resolveConfig(
     }
   }
 
-  // 过滤插件 (apply)
-  const filteredPlugins = rawPlugins.filter((p) => {
-    if (!p.apply) return true
-    if (typeof p.apply === 'function') return p.apply(resolved as ResolvedConfig, env)
-    return p.apply === command
-  })
-
+  // 先构建 resolved，plugins 稍后填入（避免过滤时引用未初始化变量）
   const resolved: ResolvedConfig = {
     root,
     base: merged.base ?? defaults.base,
@@ -87,12 +108,13 @@ export async function resolveConfig(
     framework: merged.framework ?? defaults.framework,
     command,
     resolve: {
-      alias: { ...defaults.resolve.alias, ...merged.resolve?.alias },
+      // tsconfig paths 优先级最低：tsconfig < defaults < user config
+      alias: { ...loadTsconfigPaths(root), ...defaults.resolve.alias, ...merged.resolve?.alias },
       extensions: (merged.resolve?.extensions ?? defaults.resolve.extensions) as string[],
       conditions: (merged.resolve?.conditions ?? defaults.resolve.conditions) as string[],
       mainFields: (merged.resolve?.mainFields ?? defaults.resolve.mainFields) as string[],
     },
-    plugins: filteredPlugins,
+    plugins: [],
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
     build: { ...defaults.build, ...merged.build } as ResolvedConfig['build'],
     envPrefix: (Array.isArray(merged.envPrefix)
@@ -102,6 +124,14 @@ export async function resolveConfig(
         : [...defaults.envPrefix]) as string[],
     logLevel: merged.logLevel ?? defaults.logLevel,
   }
+
+  // 过滤插件（apply 为函数时可安全访问已初始化的 resolved）
+  const filteredPlugins = rawPlugins.filter((p) => {
+    if (!p.apply) return true
+    if (typeof p.apply === 'function') return p.apply(resolved, env)
+    return p.apply === command
+  })
+  resolved.plugins = filteredPlugins
 
   // 执行插件 configResolved 钩子
   for (const plugin of resolved.plugins) {
