@@ -48,6 +48,11 @@ export function transformCode(
     sourcemap: options.sourcemap ?? true,
   })
 
+  if (result.errors && result.errors.length > 0) {
+    const msg = result.errors.map((e: any) => e.message ?? String(e)).join('\n')
+    throw new Error(`OXC transform failed for ${filename}:\n${msg}`)
+  }
+
   return {
     code: result.code,
     map: result.map ? JSON.stringify(result.map) : null,

@@ -1,6 +1,7 @@
 // Dev Server 主逻辑
 import http from 'node:http'
 import path from 'node:path'
+import os from 'node:os'
 import connect from 'connect'
 import sirv from 'sirv'
 import { watch } from 'chokidar'
@@ -140,7 +141,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
 }
 
 function getNetworkAddress(): string {
-  const os = require('node:os')
   const interfaces = os.networkInterfaces()
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name] ?? []) {
