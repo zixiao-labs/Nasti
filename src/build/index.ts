@@ -9,6 +9,7 @@ import { cssPlugin } from '../plugins/css.js'
 import { assetsPlugin } from '../plugins/assets.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
+import { loadEnv, buildEnvDefine } from '../core/env.js'
 import pc from 'picocolors'
 
 export interface BuildResult {
@@ -83,9 +84,14 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
     },
   }
 
+  // 加载环境变量并生成 define 替换表
+  const env = loadEnv(config.mode, config.root, config.envPrefix)
+  const envDefine = buildEnvDefine(env, config.mode)
+
   // 调用 Rolldown
   const bundle = await rolldown({
     input: entryPoints,
+    define: envDefine,
     plugins: [
       oxcTransformPlugin,
       // 转换 Nasti 插件为 Rolldown 插件格式
@@ -129,10 +135,10 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
       }
     }
 
-    // 替换 script src 为打包后的路径
+    // 替换 script src 为打包后的路径（支持多入口）
     for (const chunk of output) {
-      if (chunk.type === 'chunk' && chunk.isEntry) {
-        const originalEntry = path.relative(config.root, entryPoints[0])
+      if (chunk.type === 'chunk' && chunk.isEntry && chunk.facadeModuleId) {
+        const originalEntry = path.relative(config.root, chunk.facadeModuleId)
         processedHtml = processedHtml.replace(
           new RegExp(`(src=["'])/?(${escapeRegExp(originalEntry)})(["'])`, 'g'),
           `$1${config.base}${chunk.fileName}$3`,

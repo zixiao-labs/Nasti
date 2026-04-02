@@ -1,12 +1,14 @@
 // HTTP 中间件 - 请求拦截与按需转译
 import path from 'node:path'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { ModuleGraph } from '../core/module-graph.js'
 import { transformCode, shouldTransform, getModuleType } from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
+import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
 
 export interface TransformMiddlewareContext {
   config: ResolvedConfig
@@ -49,11 +51,13 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
           }
         }
 
-        // 注入 HMR 客户端
-        processedHtml = processedHtml.replace(
-          '<head>',
-          '<head>\n  <script type="module" src="/@nasti/client"></script>',
-        )
+        // 注入 HMR 客户端（仅当 hmr 未被禁用时）
+        if (ctx.config.server.hmr !== false) {
+          processedHtml = processedHtml.replace(
+            '<head>',
+            '<head>\n  <script type="module" src="/@nasti/client"></script>',
+          )
+        }
 
         res.setHeader('Content-Type', 'text/html')
         res.end(processedHtml)
@@ -127,6 +131,11 @@ export async function transformRequest(
     code = result.code
   }
 
+  // 替换 import.meta.env.* 为实际值
+  const env = loadEnv(config.mode, config.root, config.envPrefix)
+  const envDefine = buildEnvDefine(env, config.mode)
+  code = replaceEnvInCode(code, envDefine)
+
   // 重写 bare imports 为浏览器可用路径
   code = rewriteImports(code, config)
 
@@ -135,21 +144,25 @@ export async function transformRequest(
   return transformResult
 }
 
-/** 重写 import 语句中的 bare specifier */
-function rewriteImports(code: string, config: ResolvedConfig): string {
-  // 简单的 import 重写: bare imports → /node_modules/.nasti/...
+/** 重写 import/export 语句中的 bare specifier */
+function rewriteImports(code: string, _config: ResolvedConfig): string {
+  // 处理所有 from '...' 形式（import ... from、export ... from、export * from）
   return code.replace(
-    /from\s+['"]([^'"./][^'"]*)['"]/g,
-    (match, specifier: string) => {
-      // 跳过已经是路径的
-      if (specifier.startsWith('/') || specifier.startsWith('.')) return match
-      return `from "/@modules/${specifier}"`
+    /\bfrom\s+(['"])([^'"./][^'"]*)\1/g,
+    (match, quote: string, specifier: string) => {
+      return `from ${quote}/@modules/${specifier}${quote}`
     },
   ).replace(
-    /import\s+['"]([^'"./][^'"]*)['"]/g,
-    (match, specifier: string) => {
-      if (specifier.startsWith('/') || specifier.startsWith('.')) return match
-      return `import "/@modules/${specifier}"`
+    // 处理纯副作用导入: import 'bare-specifier'
+    /\bimport\s+(['"])([^'"./][^'"]*)\1/g,
+    (match, quote: string, specifier: string) => {
+      return `import ${quote}/@modules/${specifier}${quote}`
+    },
+  ).replace(
+    // 处理动态导入: import('bare-specifier')
+    /\bimport\s*\(\s*(['"])([^'"./][^'"]*)\1\s*\)/g,
+    (match, quote: string, specifier: string) => {
+      return `import(${quote}/@modules/${specifier}${quote})`
     },
   )
 }
@@ -162,7 +175,6 @@ function resolveUrlToFile(url: string, root: string): string | null {
   if (cleanUrl.startsWith('/@modules/')) {
     const moduleName = cleanUrl.slice('/@modules/'.length)
     try {
-      const { createRequire } = require('node:module')
       const req = createRequire(path.resolve(root, 'package.json'))
       return req.resolve(moduleName)
     } catch {
@@ -236,7 +248,18 @@ function showErrorOverlay(err) {
   const overlay = document.createElement('div');
   overlay.id = 'nasti-error-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.85);color:#fff;font-family:monospace;padding:2rem;overflow:auto;';
-  overlay.innerHTML = \`<h2 style="color:#ff5555">Build Error</h2><pre>\${err.message}\\n\${err.stack || ''}</pre><button onclick="this.parentElement.remove()" style="margin-top:1rem;padding:0.5rem 1rem;cursor:pointer">Close</button>\`;
+  const title = document.createElement('h2');
+  title.style.color = '#ff5555';
+  title.textContent = 'Build Error';
+  const pre = document.createElement('pre');
+  pre.textContent = err.message + '\\n' + (err.stack || '');
+  const btn = document.createElement('button');
+  btn.style.cssText = 'margin-top:1rem;padding:0.5rem 1rem;cursor:pointer';
+  btn.textContent = 'Close';
+  btn.onclick = () => overlay.remove();
+  overlay.appendChild(title);
+  overlay.appendChild(pre);
+  overlay.appendChild(btn);
   document.body.appendChild(overlay);
 }
 
