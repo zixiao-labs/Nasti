@@ -14,9 +14,12 @@ export function cssPlugin(config: ResolvedConfig): NastiPlugin {
     transform(code, id) {
       if (!id.endsWith('.css')) return null
 
+      // 将 CSS 中的相对 url() 路径重写为绝对路径，确保打包后资源路径正确
+      const rewritten = rewriteCssUrls(code, id, config.root)
+
       if (config.command === 'serve') {
         // Dev 模式: 将 CSS 转为 JS 模块，通过 style 标签注入
-        const escaped = JSON.stringify(code)
+        const escaped = JSON.stringify(rewritten)
         return {
           code: `
 const css = ${escaped};
@@ -41,8 +44,8 @@ export default css;
         }
       }
 
-      // Build 模式: 保持 CSS 原样，后续由 rolldown 处理
-      return null
+      // Build 模式: 返回重写后的 CSS，由 rolldown 处理提取
+      return rewritten !== code ? { code: rewritten } : null
     },
   }
 }

@@ -10,6 +10,7 @@ import { assetsPlugin } from '../plugins/assets.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
+import { PluginContainer } from '../core/plugin-container.js'
 import pc from 'picocolors'
 
 export interface BuildResult {
@@ -70,6 +71,10 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   ]
   const allPlugins = [...builtinPlugins, ...config.plugins]
 
+  // 运行插件的 buildStart 钩子，并收集 emitFile 输出文件
+  const pluginContainer = new PluginContainer(config)
+  await pluginContainer.buildStart()
+
   // oxc-transform 插件（作为 Rolldown 插件）
   const oxcTransformPlugin = {
     name: 'nasti:oxc-transform',
@@ -111,12 +116,21 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
     dir: outDir,
     format: 'esm',
     sourcemap: !!config.build.sourcemap,
+    minify: !!config.build.minify,
     entryFileNames: 'assets/[name].[hash].js',
     chunkFileNames: 'assets/[name].[hash].js',
     assetFileNames: 'assets/[name].[hash][extname]',
   })
 
   await bundle.close()
+  await pluginContainer.buildEnd()
+
+  // 将 emitFile 产出的文件写入输出目录
+  for (const ef of pluginContainer.getEmittedFiles()) {
+    const dest = path.resolve(outDir, ef.fileName)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.writeFileSync(dest, ef.source)
+  }
 
   // 处理 HTML
   if (html) {
