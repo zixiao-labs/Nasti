@@ -1,6 +1,6 @@
 {
   "name": "nasti-build",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "娜斯提-基于Rolldown的统一Web打包工具（没错，明日方舟干员命名）",
   "keywords": [
     "rolldown",
