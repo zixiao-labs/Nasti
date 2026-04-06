@@ -21,6 +21,19 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
   return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url ?? '/'
 
+    // 设置 CORS 响应头
+    if (ctx.config.server.cors) {
+      const origin = req.headers.origin ?? '*'
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204
+        res.end()
+        return
+      }
+    }
+
     // 跳过非 GET 请求
     if (req.method !== 'GET') return next()
 

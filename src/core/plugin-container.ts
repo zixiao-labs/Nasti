@@ -15,6 +15,7 @@ export class PluginContainer {
   private plugins: NastiPlugin[]
   private config: ResolvedConfig
   private ctx: PluginContext
+  private emittedFiles: Map<string, { fileName: string; source: string | Uint8Array }> = new Map()
 
   constructor(config: ResolvedConfig) {
     this.config = config
@@ -29,14 +30,24 @@ export class PluginContainer {
       async resolve(source: string, importer?: string) {
         return container.resolveId(source, importer)
       },
-      emitFile(_file) {
-        // TODO: 实现 emitFile
-        return ''
+      emitFile(file) {
+        const fileName = file.fileName ?? file.name ?? `asset-${container.emittedFiles.size}`
+        const id = `emitted:${fileName}`
+        container.emittedFiles.set(id, {
+          fileName,
+          source: file.source ?? '',
+        })
+        return id
       },
       getModuleInfo(_id): ModuleInfo | null {
         return null
       },
     }
+  }
+
+  /** 返回所有通过 emitFile() 输出的文件 */
+  getEmittedFiles(): Array<{ fileName: string; source: string | Uint8Array }> {
+    return Array.from(this.emittedFiles.values())
   }
 
   async buildStart(): Promise<void> {
