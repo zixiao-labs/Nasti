@@ -22,8 +22,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
+          registry-url: 'https://registry.npmjs.org'
 
 
       - name: Install dependencies
@@ -47,6 +48,8 @@ jobs:
 
       - name: Publish with provenance
         run: npm publish --provenance --access public
+        env: 
+          NODE_AUTH_TOKEN: ''
         # 使用 OIDC Trusted Publisher 认证，不需要 NPM_TOKEN
         #
         # === 首次配置步骤 ===
