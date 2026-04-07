@@ -1,7 +1,7 @@
 {
   "name": "@nasti-toolchain/nasti",
-  "version": "1.1.0",
-  "publishConfig":{
+  "version": "1.2.0",
+  "publishConfig": {
     "access": "public"
   },
   "description": "娜斯提-基于Rolldown的统一Web打包工具（没错，明日方舟干员命名）",
