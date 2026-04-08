@@ -14,10 +14,16 @@ export interface TransformMiddlewareContext {
   config: ResolvedConfig
   pluginContainer: PluginContainer
   moduleGraph: ModuleGraph
+  envDefine?: Record<string, string>
 }
 
 /** 主转译中间件 - 处理模块请求 */
 export function transformMiddleware(ctx: TransformMiddlewareContext) {
+  // 预加载环境变量，避免每次请求都重新读取 .env 文件
+  ctx.envDefine = buildEnvDefine(
+    loadEnv(ctx.config.mode, ctx.config.root, ctx.config.envPrefix),
+    ctx.config.mode,
+  )
   return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url ?? '/'
 
@@ -62,14 +68,6 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
               processedHtml = processHtml(processedHtml, result)
             }
           }
-        }
-
-        // 注入 HMR 客户端（仅当 hmr 未被禁用时）
-        if (ctx.config.server.hmr !== false) {
-          processedHtml = processedHtml.replace(
-            '<head>',
-            '<head>\n  <script type="module" src="/@nasti/client"></script>',
-          )
         }
 
         res.setHeader('Content-Type', 'text/html')
@@ -145,8 +143,10 @@ export async function transformRequest(
   }
 
   // 替换 import.meta.env.* 为实际值
-  const env = loadEnv(config.mode, config.root, config.envPrefix)
-  const envDefine = buildEnvDefine(env, config.mode)
+  const envDefine = ctx.envDefine ?? buildEnvDefine(
+    loadEnv(config.mode, config.root, config.envPrefix),
+    config.mode,
+  )
   code = replaceEnvInCode(code, envDefine)
 
   // 重写 bare imports 为浏览器可用路径

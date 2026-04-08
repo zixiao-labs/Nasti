@@ -21,7 +21,7 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   const config = await resolveConfig(inlineConfig, 'build')
   const startTime = performance.now()
 
-  console.log(pc.cyan('\n🔨 nasti build') + pc.dim(` v${process.env.npm_package_version ?? '0.0.1'}`))
+  console.log(pc.cyan('\n🔨 nasti build') + pc.dim(` v${__NASTI_VERSION__}`))
   console.log(pc.dim(`  root: ${config.root}`))
   console.log(pc.dim(`  mode: ${config.mode}`))
 

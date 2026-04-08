@@ -98,12 +98,15 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       await pluginContainer.buildStart()
 
       return new Promise((resolve, reject) => {
-        httpServer.listen(finalPort, host, () => {
-          const localUrl = `http://localhost:${finalPort}`
-          const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${finalPort}` : null
+        let currentPort = finalPort
+
+        const onListening = () => {
+          const actualPort = (httpServer.address() as any)?.port ?? currentPort
+          const localUrl = `http://localhost:${actualPort}`
+          const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}` : null
 
           console.log()
-          console.log(pc.cyan('  nasti dev server') + pc.dim(` v0.0.1`))
+          console.log(pc.cyan('  nasti dev server') + pc.dim(` v${__NASTI_VERSION__}`))
           console.log()
           console.log(`  ${pc.green('>')} Local:   ${pc.cyan(localUrl)}`)
           if (networkUrl) {
@@ -112,15 +115,20 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
           console.log()
 
           resolve(server)
-        })
+        }
+
+        httpServer.on('listening', onListening)
         httpServer.on('error', (err: NodeJS.ErrnoException) => {
           if (err.code === 'EADDRINUSE') {
-            console.log(pc.yellow(`Port ${finalPort} is in use, trying ${finalPort + 1}...`))
-            httpServer.listen(finalPort + 1, host)
+            currentPort++
+            console.log(pc.yellow(`Port ${currentPort - 1} is in use, trying ${currentPort}...`))
+            httpServer.listen(currentPort, host)
           } else {
             reject(err)
           }
         })
+
+        httpServer.listen(currentPort, host)
       })
     },
 
