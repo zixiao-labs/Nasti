@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsup'
+import pkg from './package.json' with { type: 'json' }
 
 export default defineConfig({
   entry: {
@@ -13,4 +14,7 @@ export default defineConfig({
   target: 'node18',
   splitting: false,
   external: ['@vue/compiler-sfc'],
+  define: {
+    __NASTI_VERSION__: JSON.stringify(pkg.version),
+  },
 })
