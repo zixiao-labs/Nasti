@@ -1,7 +1,6 @@
 // HTTP 中间件 - 请求拦截与按需转译
 import path from 'node:path'
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
@@ -181,6 +180,100 @@ function rewriteImports(code: string, _config: ResolvedConfig): string {
 }
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
+const ESM_CONDITIONS = ['import', 'browser', 'module', 'default']
+
+/**
+ * ESM-aware node_modules 解析：支持 package.json exports 字段的 import/browser/module/default 条件，
+ * 兼容 ESM-only 包（如只有 "import" 条件而无 "require" 的包）。
+ * createRequire 使用 CJS 解析逻辑，遇到 ESM-only exports 会抛异常，因此不能用于此场景。
+ */
+function resolveNodeModule(root: string, moduleName: string): string | null {
+  // 解析包名和子路径（处理 scoped 包如 @scope/pkg/sub）
+  let pkgName: string
+  let subpath: string
+  if (moduleName.startsWith('@')) {
+    const parts = moduleName.split('/')
+    pkgName = parts.slice(0, 2).join('/')
+    subpath = parts.slice(2).join('/')
+  } else {
+    const slash = moduleName.indexOf('/')
+    pkgName = slash === -1 ? moduleName : moduleName.slice(0, slash)
+    subpath = slash === -1 ? '' : moduleName.slice(slash + 1)
+  }
+
+  // 向上查找 node_modules
+  let pkgDir: string | null = null
+  let dir = root
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules', pkgName)
+    if (fs.existsSync(candidate)) { pkgDir = candidate; break }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  if (!pkgDir) return null
+
+  const pkgJsonPath = path.join(pkgDir, 'package.json')
+  if (!fs.existsSync(pkgJsonPath)) return null
+  let pkg: Record<string, any>
+  try { pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8')) } catch { return null }
+
+  // 优先使用 exports 字段（ESM-aware 条件解析）
+  if (pkg.exports) {
+    const exportKey = subpath ? `./${subpath}` : '.'
+    const resolved = resolvePackageExports(pkg.exports, exportKey, pkgDir)
+    if (resolved) return resolved
+  }
+
+  // 子路径直接文件
+  if (subpath) {
+    const direct = path.join(pkgDir, subpath)
+    if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct
+    for (const ext of RESOLVE_EXTENSIONS) {
+      if (fs.existsSync(direct + ext)) return direct + ext
+    }
+    return null
+  }
+
+  // 主入口回退：module > main
+  for (const field of ['module', 'jsnext:main', 'jsnext', 'main']) {
+    if (typeof pkg[field] === 'string') {
+      const entry = path.join(pkgDir, pkg[field])
+      if (fs.existsSync(entry)) return entry
+    }
+  }
+
+  return null
+}
+
+function resolvePackageExports(exports: any, key: string, pkgDir: string): string | null {
+  if (typeof exports === 'string') {
+    return key === '.' ? path.join(pkgDir, exports) : null
+  }
+  const entry = exports[key]
+  if (entry === undefined) return null
+  return resolveExportValue(entry, pkgDir)
+}
+
+function resolveExportValue(value: any, pkgDir: string): string | null {
+  if (typeof value === 'string') return path.join(pkgDir, value)
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const r = resolveExportValue(item, pkgDir)
+      if (r) return r
+    }
+    return null
+  }
+  if (value && typeof value === 'object') {
+    for (const cond of ESM_CONDITIONS) {
+      if (cond in value) {
+        const r = resolveExportValue(value[cond], pkgDir)
+        if (r) return r
+      }
+    }
+  }
+  return null
+}
 
 function resolveUrlToFile(url: string, root: string): string | null {
   // 去除查询参数
@@ -189,12 +282,7 @@ function resolveUrlToFile(url: string, root: string): string | null {
   // /@modules/ 前缀 → node_modules 预构建
   if (cleanUrl.startsWith('/@modules/')) {
     const moduleName = cleanUrl.slice('/@modules/'.length)
-    try {
-      const req = createRequire(path.resolve(root, 'package.json'))
-      return req.resolve(moduleName)
-    } catch {
-      return null
-    }
+    return resolveNodeModule(root, moduleName)
   }
 
   // 普通路径
