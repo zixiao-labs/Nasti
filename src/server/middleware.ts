@@ -180,6 +180,8 @@ function rewriteImports(code: string, _config: ResolvedConfig): string {
   )
 }
 
+const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
+
 function resolveUrlToFile(url: string, root: string): string | null {
   // 去除查询参数
   const cleanUrl = url.split('?')[0]
@@ -196,13 +198,35 @@ function resolveUrlToFile(url: string, root: string): string | null {
   }
 
   // 普通路径
-  return path.resolve(root, cleanUrl.replace(/^\//, ''))
+  const filePath = path.resolve(root, cleanUrl.replace(/^\//, ''))
+
+  // 精确路径存在
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    return filePath
+  }
+
+  // 扩展名补全（处理无扩展名导入，如 ./App → ./App.tsx）
+  for (const ext of RESOLVE_EXTENSIONS) {
+    const withExt = filePath + ext
+    if (fs.existsSync(withExt)) return withExt
+  }
+
+  // 目录 index 文件（如 ./utils → ./utils/index.ts）
+  for (const ext of RESOLVE_EXTENSIONS) {
+    const indexFile = path.join(filePath, 'index' + ext)
+    if (fs.existsSync(indexFile)) return indexFile
+  }
+
+  return null
 }
 
 function isModuleRequest(url: string): boolean {
   const cleanUrl = url.split('?')[0]
-  return /\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl) ||
-    cleanUrl.startsWith('/@modules/')
+  if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
+  if (cleanUrl.startsWith('/@modules/')) return true
+  // 无扩展名路径可能是省略扩展名的模块导入（如 /src/App）
+  if (!path.extname(cleanUrl)) return true
+  return false
 }
 
 function getHmrClientCode(): string {
