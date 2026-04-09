@@ -227,7 +227,7 @@ async function injectCjsNamedExports(code: string, entryFile: string): Promise<s
     const { createRequire } = await import('module')
     const req = createRequire(entryFile)
     const cjsExports = req(entryFile)
-    if (!cjsExports || typeof cjsExports !== 'object' || Array.isArray(cjsExports)) return code
+    if (!cjsExports || (typeof cjsExports !== 'object' && typeof cjsExports !== 'function') || Array.isArray(cjsExports)) return code
 
     const namedKeys = Object.keys(cjsExports).filter(
       (k) => k !== '__esModule' && k !== 'default' && VALID_IDENT.test(k),
