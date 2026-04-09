@@ -30,7 +30,7 @@
 
 ```bash
 # 安装
-npm install -D nasti-build
+npm install -D @nasti-toolchain/nasti
 
 # 启动开发服务器
 npx nasti dev
