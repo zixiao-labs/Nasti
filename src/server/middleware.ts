@@ -121,6 +121,16 @@ export async function transformRequest(
   const mod = await moduleGraph.ensureEntryFromUrl(url)
   moduleGraph.registerModule(mod, filePath)
 
+  // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
+  // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
+  const cleanReqUrl = url.split('?')[0]
+  if (cleanReqUrl.startsWith('/@modules/')) {
+    const code = await bundlePackageAsEsm(filePath)
+    const transformResult = { code }
+    mod.transformResult = transformResult
+    return transformResult
+  }
+
   // 读取源码
   let code = fs.readFileSync(filePath, 'utf-8')
 
@@ -156,6 +166,92 @@ export async function transformRequest(
   return transformResult
 }
 
+/** 用 rolldown 将 node_modules 包打包为浏览器可用的 ESM（含 CJS→ESM 转换） */
+// Promise 缓存：同一入口文件只打包一次，防止并发重复打包
+const esmBundleCache = new Map<string, Promise<string>>()
+
+async function bundlePackageAsEsm(entryFile: string): Promise<string> {
+  if (!esmBundleCache.has(entryFile)) {
+    esmBundleCache.set(entryFile, doBundlePackage(entryFile))
+  }
+  return esmBundleCache.get(entryFile)!
+}
+
+async function doBundlePackage(entryFile: string): Promise<string> {
+  const { rolldown } = await import('rolldown')
+
+  const bundle = await rolldown({
+    input: entryFile,
+    // 仅将其他 npm 包外部化；相对路径（包内部文件）全部内联打包
+    external: (id: string) => {
+      if (id.startsWith('.') || id.startsWith('/') || /^[A-Za-z]:\\/.test(id)) return false
+      return true
+    },
+    define: {
+      // CJS 包（如 react）通过 process.env.NODE_ENV 判断环境，需在打包时替换
+      'process.env.NODE_ENV': '"development"',
+    },
+  })
+
+  const result = await bundle.generate({ format: 'esm', exports: 'named' })
+  await bundle.close()
+
+  let code = result.output[0].code
+
+  // 替换 process.env.NODE_ENV（rolldown 的 define 选项在此版本无效）
+  code = code.replace(/process\.env\.NODE_ENV/g, '"development"')
+
+  // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载
+  // ⚠️ 必须用 ^ + m 锚定行首，只匹配真正的 import/export 声明，
+  // 避免误匹配字符串内出现的 from "..." 导致 SyntaxError
+  code = code
+    .replace(/^(import\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
+      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+    .replace(/^(export\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
+      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+    .replace(/^(import\s+)(['"])([^'"./][^'"]*)(\2)/gm,
+      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+
+  // CJS 包的具名导出补全：
+  // rolldown 将 CJS 包包装为 __commonJSMin，只输出 export default，
+  // 导致 import { parse } from '/@modules/cookie' 等具名导入失败。
+  // 通过 createRequire 在 Node.js 侧加载 CJS 模块，取出 exports 的 key，
+  // 在 ESM bundle 末尾补上静态具名 export。
+  if (code.includes('__commonJSMin')) {
+    code = await injectCjsNamedExports(code, entryFile)
+  }
+
+  return code
+}
+
+const VALID_IDENT = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
+
+async function injectCjsNamedExports(code: string, entryFile: string): Promise<string> {
+  try {
+    const { createRequire } = await import('module')
+    const req = createRequire(entryFile)
+    const cjsExports = req(entryFile)
+    if (!cjsExports || typeof cjsExports !== 'object' || Array.isArray(cjsExports)) return code
+
+    const namedKeys = Object.keys(cjsExports).filter(
+      (k) => k !== '__esModule' && k !== 'default' && VALID_IDENT.test(k),
+    )
+    if (namedKeys.length === 0) return code
+
+    // 把末尾的 "export default require_xxx();" 改写为带具名 export 的形式
+    return code.replace(
+      /^export default (\w+\(\));?\s*$/m,
+      (_, call) => [
+        `const __cjsMod = ${call};`,
+        `export default __cjsMod;`,
+        ...namedKeys.map((k) => `export const ${k} = __cjsMod[${JSON.stringify(k)}];`),
+      ].join('\n'),
+    )
+  } catch {
+    return code
+  }
+}
+
 /** 重写 import/export 语句中的 bare specifier */
 function rewriteImports(code: string, _config: ResolvedConfig): string {
   // 处理所有 from '...' 形式（import ... from、export ... from、export * from）
@@ -181,6 +277,51 @@ function rewriteImports(code: string, _config: ResolvedConfig): string {
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
 const ESM_CONDITIONS = ['import', 'browser', 'module', 'default']
+
+/** 从 /@modules/pkgName/... URL 中提取包名（支持 scoped 包） */
+function modulesUrlToPkgName(url: string): string {
+  const modulePath = url.slice('/@modules/'.length).split('?')[0]
+  if (modulePath.startsWith('@')) {
+    return modulePath.split('/').slice(0, 2).join('/')
+  }
+  return modulePath.split('/')[0]
+}
+
+/** 从 root 开始向上查找包目录 */
+function findPkgDir(root: string, pkgName: string): string | null {
+  let dir = root
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules', pkgName)
+    if (fs.existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/**
+ * 将 node_modules 文件中的相对导入改写为 /@modules/pkgName/subpath 形式。
+ * 浏览器加载 /@modules/pkgName 时，相对路径 ./foo.js 会被解析为 /@modules/foo.js
+ * 而非正确的 /@modules/pkgName/dist/foo.js，因此必须在服务端将其改写为绝对路径。
+ */
+function rewriteNodeModuleRelativeImports(
+  code: string,
+  pkgName: string,
+  filePath: string,
+  pkgDir: string,
+): string {
+  const fileDir = path.dirname(filePath)
+  const rewrite = (spec: string): string => {
+    const abs = path.resolve(fileDir, spec)
+    const rel = path.relative(pkgDir, abs).replace(/\\/g, '/')
+    return `/@modules/${pkgName}/${rel}`
+  }
+  return code
+    .replace(/\bfrom\s+(['"])(\.\.?\/[^'"]*)\1/g, (_, q, spec) => `from ${q}${rewrite(spec)}${q}`)
+    .replace(/\bimport\s+(['"])(\.\.?\/[^'"]*)\1/g, (_, q, spec) => `import ${q}${rewrite(spec)}${q}`)
+    .replace(/\bimport\s*\(\s*(['"])(\.\.?\/[^'"]*)\1\s*\)/g, (_, q, spec) => `import(${q}${rewrite(spec)}${q})`)
+}
 
 /**
  * ESM-aware node_modules 解析：支持 package.json exports 字段的 import/browser/module/default 条件，
