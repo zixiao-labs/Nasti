@@ -187,10 +187,6 @@ async function doBundlePackage(entryFile: string): Promise<string> {
       if (id.startsWith('.') || id.startsWith('/') || /^[A-Za-z]:\\/.test(id)) return false
       return true
     },
-    define: {
-      // CJS 包（如 react）通过 process.env.NODE_ENV 判断环境，需在打包时替换
-      'process.env.NODE_ENV': '"development"',
-    },
   })
 
   const result = await bundle.generate({ format: 'esm', exports: 'named' })
