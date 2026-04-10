@@ -407,6 +407,10 @@ function resolveNodeModule(root: string, moduleName: string): string | null {
     }
   }
 
+  // 最终回退：index.js
+  const indexFallback = path.join(pkgDir, 'index.js')
+  if (fs.existsSync(indexFallback)) return indexFallback
+
   return null
 }
 
