@@ -9,6 +9,28 @@ import { transformCode, shouldTransform, getModuleType } from '../core/transform
 import { readHtmlFile, processHtml } from '../plugins/html.js'
 import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
 
+const REACT_REFRESH_RUNTIME = `
+export function createSignatureFunctionForTransform() {
+  return function(type, key, forceReset, getCustomHooks) { return type; };
+}
+export function register(type, id) {}
+export default { createSignatureFunctionForTransform, register };
+`
+
+const REACT_REFRESH_PREAMBLE = `
+import RefreshRuntime from '/@react-refresh';
+if (!window.$RefreshReg$) {
+  window.$RefreshReg$ = (type, id) => RefreshRuntime.register(type, import.meta.url + ' ' + id);
+  window.$RefreshSig$ = RefreshRuntime.createSignatureFunctionForTransform;
+}
+`
+
+const REACT_REFRESH_FOOTER = `
+if (import.meta.hot) {
+  import.meta.hot.accept();
+}
+`
+
 export interface TransformMiddlewareContext {
   config: ResolvedConfig
   pluginContainer: PluginContainer
@@ -107,10 +129,17 @@ export async function transformRequest(
 ): Promise<{ code: string; map?: unknown } | null> {
   const { config, pluginContainer, moduleGraph } = ctx
 
+  const cleanReqUrl = url.split('?')[0]
+
   // 检查缓存
   const cached = moduleGraph.getModuleByUrl(url)
   if (cached?.transformResult) {
     return cached.transformResult as { code: string; map?: unknown }
+  }
+
+  // React Refresh 运行时 shim（虚拟模块）
+  if (cleanReqUrl === '/@react-refresh') {
+    return { code: REACT_REFRESH_RUNTIME }
   }
 
   // 解析文件路径
@@ -123,7 +152,6 @@ export async function transformRequest(
 
   // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
   // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
-  const cleanReqUrl = url.split('?')[0]
   if (cleanReqUrl.startsWith('/@modules/')) {
     const code = await bundlePackageAsEsm(filePath)
     const transformResult = { code }
@@ -142,13 +170,18 @@ export async function transformRequest(
 
   // OXC 转译 (TS/JSX/TSX)
   if (shouldTransform(filePath)) {
+    const isJsx = /\.[jt]sx$/.test(filePath)
+    const useRefresh = isJsx && config.framework !== 'vue'
     const result = transformCode(filePath, code, {
       sourcemap: true,
       jsxRuntime: 'automatic',
       jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
-      reactRefresh: config.framework !== 'vue',
+      reactRefresh: useRefresh,
     })
     code = result.code
+    if (useRefresh) {
+      code = REACT_REFRESH_PREAMBLE + code + REACT_REFRESH_FOOTER
+    }
   }
 
   // 替换 import.meta.env.* 为实际值
