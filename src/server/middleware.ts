@@ -208,6 +208,11 @@ async function doBundlePackage(entryFile: string): Promise<string> {
     .replace(/^(import\s+)(['"])([^'"./][^'"]*)(\2)/gm,
       (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
 
+  // CJS 外部 require 改写：
+  // rolldown 将 CJS 的 require("pkg") 转为 __require("pkg")，在浏览器中抛异常。
+  // 收集所有 __require("pkg")，替换为顶层 ESM import 的变量引用。
+  code = rewriteExternalRequires(code)
+
   // CJS 包的具名导出补全：
   // rolldown 将 CJS 包包装为 __commonJSMin，只输出 export default，
   // 导致 import { parse } from '/@modules/cookie' 等具名导入失败。
@@ -218,6 +223,28 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   }
 
   return code
+}
+
+/** 将 rolldown 生成的 __require("pkg") 调用转换为顶层 ESM import */
+function rewriteExternalRequires(code: string): string {
+  const pkgs = new Set<string>()
+  const re = /__require\(["']([^"']+)["']\)/g
+  let m
+  while ((m = re.exec(code)) !== null) {
+    pkgs.add(m[1])
+  }
+  if (pkgs.size === 0) return code
+
+  let result = code
+  const imports: string[] = []
+  for (const pkg of pkgs) {
+    const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
+    imports.push(`import __req_${safe} from "/@modules/${pkg}";`)
+    result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
+    result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
+  }
+
+  return imports.join('\n') + '\n' + result
 }
 
 const VALID_IDENT = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
