@@ -258,7 +258,10 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   return code
 }
 
-/** 将 rolldown 生成的 __require("pkg") 调用转换为顶层 ESM import */
+/** 将 rolldown 生成的 __require("pkg") 调用转换为顶层 ESM import
+ *  使用 namespace import + default 回退，兼容 CJS 和 ESM 模块：
+ *  - CJS 包有 default export（__cjsMod）→ 取 .default
+ *  - ESM 包只有 named exports → 取 namespace 本身 */
 function rewriteExternalRequires(code: string): string {
   const pkgs = new Set<string>()
   const re = /__require\(["']([^"']+)["']\)/g
@@ -272,7 +275,8 @@ function rewriteExternalRequires(code: string): string {
   const imports: string[] = []
   for (const pkg of pkgs) {
     const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
-    imports.push(`import __req_${safe} from "/@modules/${pkg}";`)
+    imports.push(`import * as __ns_${safe} from "/@modules/${pkg}";`)
+    imports.push(`var __req_${safe} = "default" in __ns_${safe} ? __ns_${safe}["default"] : __ns_${safe};`)
     result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
     result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
   }
