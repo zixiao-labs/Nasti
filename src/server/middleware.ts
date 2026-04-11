@@ -424,10 +424,21 @@ function resolveNodeModule(root: string, moduleName: string): string | null {
 
   // 子路径直接文件
   if (subpath) {
-    const direct = path.join(pkgDir, subpath)
-    if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct
-    for (const ext of RESOLVE_EXTENSIONS) {
-      if (fs.existsSync(direct + ext)) return direct + ext
+    // 收集候选目录：包根目录 + module/main 字段所在的目录
+    // 如 dom-helpers 的 module: 'esm/index.js'，子路径 addClass 应查找 esm/addClass.js
+    const subDirs = ['']
+    for (const field of ['module', 'main']) {
+      if (typeof pkg[field] === 'string') {
+        const dir = path.dirname(pkg[field])
+        if (dir && dir !== '.' && !subDirs.includes(dir)) subDirs.push(dir)
+      }
+    }
+    for (const dir of subDirs) {
+      const direct = path.join(pkgDir, dir, subpath)
+      if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct
+      for (const ext of RESOLVE_EXTENSIONS) {
+        if (fs.existsSync(direct + ext)) return direct + ext
+      }
     }
     return null
   }
