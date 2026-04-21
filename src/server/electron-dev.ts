@@ -196,10 +196,10 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
 
   const bundle = await rolldown({
     input: entry,
-    define: envDefine,
+    transform: { define: envDefine },
     platform: 'node',
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
-  } as any)
+  })
   fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
   await bundle.write({
     file: opts.outFile,
@@ -207,7 +207,7 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
     sourcemap: false,
     minify: false,
     inlineDynamicImports: true,
-  } as any)
+  })
   await bundle.close()
 }
 

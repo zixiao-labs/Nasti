@@ -155,7 +155,7 @@ async function bundleNode(
     platform: 'node',
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
     ...(config.build.rolldownOptions as any),
-  } as any)
+  })
 
   fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
 
@@ -165,7 +165,7 @@ async function bundleNode(
     sourcemap: !!config.build.sourcemap,
     minify: !!config.build.minify,
     inlineDynamicImports: true,
-  } as any)
+  })
 
   await bundle.close()
 
