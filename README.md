@@ -20,7 +20,7 @@
 
 - **Rolldown 驱动** - Rust 编写的打包内核，生产构建速度比 Rollup 快 10-30x
 - **OXC 转译** - Rust 编写的 TS/JSX/TSX 转译器，比 Babel 快 20-50x
-- **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform，Electron的移植工作正在进行中）
+- **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform，Electron 移植工作正在进行中）
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR（可选依赖 `@vue/compiler-sfc`）
 - **Dev Server + HMR** - 开发服务器 + WebSocket 热模块替换
