@@ -105,6 +105,7 @@ export async function resolveConfig(
     root,
     base: merged.base ?? defaults.base,
     mode: (command === 'build' ? 'production' : 'development') as ResolvedConfig['mode'],
+    target: (merged.target ?? defaults.target) as ResolvedConfig['target'],
     framework: merged.framework ?? defaults.framework,
     command,
     resolve: {
@@ -117,6 +118,7 @@ export async function resolveConfig(
     plugins: [],
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
     build: { ...defaults.build, ...merged.build } as ResolvedConfig['build'],
+    electron: { ...defaults.electron, ...merged.electron } as ResolvedConfig['electron'],
     envPrefix: (Array.isArray(merged.envPrefix)
       ? merged.envPrefix
       : merged.envPrefix

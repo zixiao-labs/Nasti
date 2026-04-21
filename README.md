@@ -23,6 +23,7 @@
 - **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform）
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR（可选依赖 `@vue/compiler-sfc`）
+- **Electron 41+ 支持** - 一键构建主进程 / Preload / 渲染进程，支持 ESM 主进程
 - **Dev Server + HMR** - 开发服务器 + WebSocket 热模块替换
 - **TypeScript 优先** - 原生 TS 支持，零配置
 
@@ -92,11 +93,17 @@ export default defineConfig({
 # 开发服务器
 nasti dev [root] [--port 3000] [--host] [--open]
 
-# 生产构建
-nasti build [root] [--outDir dist] [--sourcemap] [--minify]
+# 生产构建（Web / Electron）
+nasti build [root] [--outDir dist] [--sourcemap] [--minify] [--target web|electron]
 
 # 预览构建产物
 nasti preview [root] [--port 4173]
+
+# Electron 开发模式（需预装 electron ^41）
+nasti electron [root] [--port 3000] [--no-spawn] [--no-restart]
+
+# Electron 生产构建（等价于 nasti build --target electron）
+nasti electron-build [root] [--outDir dist]
 ```
 
 ## Programmatic API
@@ -161,6 +168,80 @@ export default defineConfig({
   framework: 'vue',
 })
 ```
+
+## Electron 支持
+
+Nasti 原生支持 Electron，**最低 Electron 41**（对应 Node 22 / Chromium 138，完整 ESM 主进程）。
+
+```bash
+# 安装 Electron（按需选择版本，支持 41、42、43+）
+npm install -D electron@^41
+```
+
+```ts
+// nasti.config.ts
+import { defineConfig } from 'nasti-build'
+
+export default defineConfig({
+  target: 'electron',
+  electron: {
+    main: 'src/electron/main.ts',        // 主进程入口
+    preload: 'src/electron/preload.ts',  // Preload 脚本（可传数组）
+    mainFormat: 'cjs',                   // 主进程输出格式：'cjs' | 'esm'
+    preloadFormat: 'cjs',                // Preload 输出格式
+    nodeTarget: 'node22',                // Electron 41 捆绑 Node 22
+    autoRestart: true,                   // 主/preload 变更后自动重启
+    minVersion: 41,                      // 最低 Electron 版本
+  },
+})
+```
+
+开发：
+
+```bash
+# 同时启动渲染进程 dev server + Electron，主/preload 变更自动重启
+nasti electron
+```
+
+生产构建（产物结构）：
+
+```
+dist/
+├── renderer/            # Web 渲染层
+├── main.cjs             # 主进程（可配置为 .mjs）
+└── preload.cjs          # Preload 脚本
+```
+
+主进程示例：
+
+```ts
+// src/electron/main.ts
+import { app, BrowserWindow } from 'electron'
+import path from 'node:path'
+
+async function createWindow() {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      preload: path.resolve(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+    },
+  })
+
+  // 开发模式下 Nasti 会通过环境变量传入 dev server URL
+  if (process.env.NASTI_DEV_SERVER_URL) {
+    await win.loadURL(process.env.NASTI_DEV_SERVER_URL)
+  } else {
+    await win.loadFile(path.resolve(__dirname, 'renderer/index.html'))
+  }
+}
+
+app.whenReady().then(createWindow)
+```
+
+> 详细说明见 [Electron 指南](https://nasti.zixiaolabs.com/pages/electron.html)。
 
 ## License
 

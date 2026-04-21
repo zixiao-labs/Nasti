@@ -16,6 +16,7 @@
     <li><a href="/pages/config.html">配置</a></li>
     <li><a href="/pages/plugins.html">插件</a></li>
     <li><a href="/pages/cli.html" class="active">CLI</a></li>
+    <li><a href="/pages/electron.html">Electron</a></li>
   </ul>
   <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
 </nav>
@@ -38,6 +39,12 @@
       </ul>
     </div>
     <div class="sidebar-section">
+      <div class="sidebar-title">目标平台</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/electron.html">Electron</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
       <div class="sidebar-title">进阶</div>
       <ul class="sidebar-links">
         <li><a href="/pages/plugins.html">插件 API</a></li>
@@ -47,7 +54,7 @@
 
   <main class="doc-content">
     <h1>CLI 命令</h1>
-    <p>Nasti 提供三个核心命令。</p>
+    <p>Nasti 提供 Web 与 Electron 两套命令，共 5 个子命令。</p>
 
     <h2>nasti dev</h2>
     <p>启动开发服务器。</p>
@@ -72,7 +79,7 @@ nasti dev --port 8080 --host
 nasti dev ./my-project</pre></div>
 
     <h2>nasti build</h2>
-    <p>生产构建，输出到 <code>dist/</code> 目录。</p>
+    <p>生产构建，输出到 <code>dist/</code> 目录。支持 Web 与 Electron 两种目标。</p>
     <div class="code-block"><pre>nasti build [root] [options]</pre></div>
     <table>
       <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
@@ -81,6 +88,7 @@ nasti dev ./my-project</pre></div>
         <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
         <tr><td><code>--minify</code></td><td>是否压缩</td><td><code>true</code></td></tr>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
+        <tr><td><code>--target &lt;target&gt;</code></td><td>构建目标：<code>web</code> 或 <code>electron</code></td><td><code>web</code></td></tr>
       </tbody>
     </table>
 
@@ -92,6 +100,29 @@ nasti build --sourcemap
 
 <span class="comment"># 自定义输出目录</span>
 nasti build --outDir output</pre></div>
+
+    <h2>nasti electron</h2>
+    <p>启动 Electron 开发模式，等价于 dev server + spawn Electron。需预装 <code>electron@^41</code>。</p>
+    <div class="code-block"><pre>nasti electron [root] [options]</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--port &lt;port&gt;</code></td><td>渲染进程 dev server 端口</td><td><code>3000</code></td></tr>
+        <tr><td><code>--host [host]</code></td><td>监听地址</td><td><code>localhost</code></td></tr>
+        <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>development</code></td></tr>
+        <tr><td><code>--no-spawn</code></td><td>仅编译主/preload，不启动 Electron</td><td><code>false</code></td></tr>
+        <tr><td><code>--no-restart</code></td><td>禁用主/preload 变更自动重启</td><td><code>false</code></td></tr>
+      </tbody>
+    </table>
+
+    <h2>nasti electron-build</h2>
+    <p>Electron 生产构建，等价于 <code>nasti build --target electron</code>。</p>
+    <div class="code-block"><pre>nasti electron-build [root] [options]
+
+<span class="comment"># 产物:</span>
+<span class="comment"># dist/renderer/   Web 渲染层</span>
+<span class="comment"># dist/main.cjs    主进程</span>
+<span class="comment"># dist/preload.cjs Preload</span></pre></div>
 
     <h2>nasti preview</h2>
     <p>本地预览生产构建产物。</p>

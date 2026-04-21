@@ -39,12 +39,79 @@ cli
   .option('--sourcemap', 'Generate source map')
   .option('--minify', 'Minify output', { default: true })
   .option('--mode <mode>', 'Set env mode')
+  .option('--target <target>', 'Build target: web | electron', { default: 'web' })
   .action(async (root: string | undefined, options: any) => {
     try {
-      const { build } = await import('./build/index.js')
-      await build({
+      const inline = {
         root: root ?? '.',
         mode: options.mode ?? 'production',
+        target: options.target,
+        build: {
+          outDir: options.outDir,
+          sourcemap: options.sourcemap,
+          minify: options.minify,
+        },
+      }
+      if (options.target === 'electron') {
+        const { buildElectron } = await import('./build/electron.js')
+        await buildElectron(inline)
+      } else {
+        const { build } = await import('./build/index.js')
+        await build(inline)
+      }
+    } catch (err: any) {
+      console.error(pc.red(`\n  Build failed:\n  ${err.message}\n`))
+      if (err.stack) console.error(pc.dim(err.stack))
+      process.exit(1)
+    }
+  })
+
+// nasti electron - 启动 Electron 开发模式
+cli
+  .command('electron [root]', 'Start Electron dev mode (requires electron ^41)')
+  .alias('electron-dev')
+  .option('--port <port>', 'Renderer dev server port', { default: 3000 })
+  .option('--host [host]', 'Hostname')
+  .option('--mode <mode>', 'Set env mode')
+  .option('--no-spawn', 'Compile main/preload but do not spawn Electron')
+  .option('--no-restart', 'Disable auto-restart on main/preload changes')
+  .action(async (root: string | undefined, options: any) => {
+    try {
+      const { startElectronDev } = await import('./server/electron-dev.js')
+      await startElectronDev({
+        root: root ?? '.',
+        mode: options.mode ?? 'development',
+        target: 'electron',
+        server: {
+          port: options.port,
+          host: options.host,
+        },
+        electron: {
+          autoRestart: options.restart !== false,
+        },
+        noSpawn: options.spawn === false,
+      })
+    } catch (err: any) {
+      console.error(pc.red(`\n  Electron dev failed:\n  ${err.message}\n`))
+      if (err.stack) console.error(pc.dim(err.stack))
+      process.exit(1)
+    }
+  })
+
+// nasti electron-build - Electron 生产构建
+cli
+  .command('electron-build [root]', 'Build Electron app for production')
+  .option('--outDir <dir>', 'Output directory', { default: 'dist' })
+  .option('--sourcemap', 'Generate source map')
+  .option('--minify', 'Minify output', { default: true })
+  .option('--mode <mode>', 'Set env mode')
+  .action(async (root: string | undefined, options: any) => {
+    try {
+      const { buildElectron } = await import('./build/electron.js')
+      await buildElectron({
+        root: root ?? '.',
+        mode: options.mode ?? 'production',
+        target: 'electron',
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
@@ -52,7 +119,7 @@ cli
         },
       })
     } catch (err: any) {
-      console.error(pc.red(`\n  Build failed:\n  ${err.message}\n`))
+      console.error(pc.red(`\n  Electron build failed:\n  ${err.message}\n`))
       if (err.stack) console.error(pc.dim(err.stack))
       process.exit(1)
     }

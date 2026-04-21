@@ -16,6 +16,7 @@
     <li><a href="/pages/config.html" class="active">配置</a></li>
     <li><a href="/pages/plugins.html">插件</a></li>
     <li><a href="/pages/cli.html">CLI</a></li>
+    <li><a href="/pages/electron.html">Electron</a></li>
   </ul>
   <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
 </nav>
@@ -35,6 +36,12 @@
       <ul class="sidebar-links">
         <li><a href="/pages/react.html">React</a></li>
         <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">目标平台</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/electron.html">Electron</a></li>
       </ul>
     </div>
     <div class="sidebar-section">
@@ -92,6 +99,7 @@
         <tr><td><code>root</code></td><td><code>string</code></td><td><code>'.'</code></td><td>项目根目录</td></tr>
         <tr><td><code>base</code></td><td><code>string</code></td><td><code>'/'</code></td><td>公共基础路径</td></tr>
         <tr><td><code>mode</code></td><td><code>string</code></td><td><code>'development'</code></td><td>运行模式</td></tr>
+        <tr><td><code>target</code></td><td><code>'web' | 'electron'</code></td><td><code>'web'</code></td><td>打包目标平台，详见 <a href="/pages/electron.html">Electron</a></td></tr>
         <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型</td></tr>
         <tr><td><code>logLevel</code></td><td><code>'info' | 'warn' | 'error' | 'silent'</code></td><td><code>'info'</code></td><td>日志级别</td></tr>
         <tr><td><code>envPrefix</code></td><td><code>string | string[]</code></td><td><code>['NASTI_', 'VITE_']</code></td><td>暴露给客户端的环境变量前缀</td></tr>
@@ -134,6 +142,25 @@
         <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
         <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
         <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>传递给 Rolldown 的额外选项</td></tr>
+      </tbody>
+    </table>
+
+    <h2>electron 选项</h2>
+    <p>仅在 <code>target: 'electron'</code> 时生效，要求 Electron 41+。完整示例见 <a href="/pages/electron.html">Electron 指南</a>。</p>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>main</code></td><td><code>string</code></td><td><code>'src/electron/main.ts'</code></td><td>主进程入口</td></tr>
+        <tr><td><code>preload</code></td><td><code>string | string[]</code></td><td><code>'src/electron/preload.ts'</code></td><td>Preload 脚本，可多入口</td></tr>
+        <tr><td><code>renderer</code></td><td><code>string</code></td><td><code>'index.html'</code></td><td>渲染进程入口 HTML</td></tr>
+        <tr><td><code>mainFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>主进程输出格式（ESM 需 Electron 41+）</td></tr>
+        <tr><td><code>preloadFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>Preload 输出格式</td></tr>
+        <tr><td><code>nodeTarget</code></td><td><code>string</code></td><td><code>'node22'</code></td><td>主/preload 的 Node 版本目标</td></tr>
+        <tr><td><code>autoRestart</code></td><td><code>boolean</code></td><td><code>true</code></td><td>dev 模式下自动重启 Electron</td></tr>
+        <tr><td><code>minVersion</code></td><td><code>number</code></td><td><code>41</code></td><td>允许的最低 Electron 大版本</td></tr>
+        <tr><td><code>electronPath</code></td><td><code>string</code></td><td><code>''</code></td><td>自定义 Electron 可执行文件路径</td></tr>
+        <tr><td><code>electronArgs</code></td><td><code>string[]</code></td><td><code>[]</code></td><td>传递给 Electron 的 CLI 参数</td></tr>
+        <tr><td><code>external</code></td><td><code>string[]</code></td><td><code>['electron']</code></td><td>主/preload 外部化依赖</td></tr>
       </tbody>
     </table>
   </main>

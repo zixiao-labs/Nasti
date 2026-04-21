@@ -8,6 +8,8 @@ export interface NastiConfig {
   base?: string
   /** 运行模式 */
   mode?: 'development' | 'production'
+  /** 打包目标平台：web（默认）或 electron */
+  target?: 'web' | 'electron'
   /** 框架自动检测或手动指定 */
   framework?: 'react' | 'vue' | 'auto'
   /** 路径解析配置 */
@@ -18,10 +20,44 @@ export interface NastiConfig {
   server?: ServerConfig
   /** 构建配置 */
   build?: BuildConfig
+  /** Electron 配置（当 target === 'electron' 时生效） */
+  electron?: ElectronConfig
   /** 环境变量前缀 */
   envPrefix?: string | string[]
   /** 日志级别 */
   logLevel?: 'info' | 'warn' | 'error' | 'silent'
+}
+
+/** Electron 目标专用配置，支持 Electron 41+ */
+export interface ElectronConfig {
+  /** 主进程入口文件，相对项目根目录 */
+  main?: string
+  /** Preload 脚本入口，相对项目根目录。可传入多个 */
+  preload?: string | string[]
+  /** 渲染进程（Web）入口 HTML，默认沿用根目录 index.html */
+  renderer?: string
+  /**
+   * 主进程与 preload 打包目标 Node 版本。
+   * Electron 41 捆绑 Node 22.x，默认为 'node22'
+   */
+  nodeTarget?: string
+  /**
+   * 主进程输出格式：cjs（默认，兼容 Electron 加载器）或 esm
+   * （Electron 41+ 完整支持 ESM 主进程）
+   */
+  mainFormat?: 'cjs' | 'esm'
+  /** Preload 输出格式，默认 cjs（Electron contextIsolation 推荐） */
+  preloadFormat?: 'cjs' | 'esm'
+  /** Electron 可执行文件路径，默认从 node_modules/electron 查找 */
+  electronPath?: string
+  /** 传递给 Electron 的命令行参数（dev 模式） */
+  electronArgs?: string[]
+  /** 开发时主/preload 文件变化后自动重启 Electron，默认 true */
+  autoRestart?: boolean
+  /** 声明最低 Electron 版本，默认 41（低于此版本将警告） */
+  minVersion?: number
+  /** 主进程/preload 的外部依赖（不参与打包，运行时 require） */
+  external?: string[]
 }
 
 export interface ResolveConfig {
@@ -139,12 +175,14 @@ export interface ResolvedConfig {
   root: string
   base: string
   mode: 'development' | 'production'
+  target: 'web' | 'electron'
   framework: 'react' | 'vue' | 'auto'
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
   plugins: NastiPlugin[]
   server: Required<ServerConfig>
   build: Required<BuildConfig>
+  electron: Required<ElectronConfig>
   envPrefix: string[]
   logLevel: 'info' | 'warn' | 'error' | 'silent'
 }
