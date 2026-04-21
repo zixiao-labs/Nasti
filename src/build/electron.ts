@@ -27,6 +27,15 @@ export interface ElectronBuildResult {
   preloadFiles: string[]
 }
 
+/**
+ * Performs a full Electron build pipeline producing renderer, main, and preload artifacts.
+ *
+ * Resolves an Electron-targeted config, validates the installed Electron version, prepares the output directory, builds the renderer (via the web build), bundles the main process, bundles configured preload scripts, and logs a summary.
+ *
+ * @param inlineConfig - Optional config overrides merged into the resolved build configuration
+ * @returns An object with `rendererOutDir` (renderer output directory), `mainFile` (bundled main process file path), and `preloadFiles` (array of bundled preload file paths)
+ * @throws Error if the configured Electron main entry file does not exist
+ */
 export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<ElectronBuildResult> {
   const config = await resolveConfig({ ...inlineConfig, target: 'electron' }, 'build')
   const startTime = performance.now()
@@ -107,6 +116,14 @@ interface BundleNodeOptions {
   label: string
 }
 
+/**
+ * Bundles a Node-targeted entry for Electron into a single output file using Rolldown and the OXC transform.
+ *
+ * @param config - Fully resolved build configuration used to drive transforms, defines, plugins, and output options
+ * @param entry - Absolute path to the entry file to bundle
+ * @param opts - Bundle options; expects `outFile` (destination path), `format` (`'cjs'` or `'esm'`), and `label` (human-readable name for logging)
+ * @returns The path to the written bundle file (`opts.outFile`)
+ */
 async function bundleNode(
   config: ResolvedConfig,
   entry: string,
@@ -165,16 +182,39 @@ async function bundleNode(
   return opts.outFile
 }
 
+/**
+ * Compute an output file path for a given base name and module format.
+ *
+ * @param outDir - Directory where the output file will be placed
+ * @param base - Base filename without extension
+ * @param format - Module format; `cjs` yields a `.cjs` extension, `esm` yields a `.mjs` extension
+ * @returns The resolved file path combining `outDir` and `base` with the appropriate extension
+ */
 function outFileName(outDir: string, base: string, format: 'cjs' | 'esm'): string {
   const ext = format === 'cjs' ? '.cjs' : '.mjs'
   return path.join(outDir, base + ext)
 }
 
+/**
+ * Normalize Electron preload entries into absolute file paths.
+ *
+ * @param preload - A single preload path or an array of preload paths; a falsy value produces an empty list
+ * @param root - Root directory used to resolve relative preload entries
+ * @returns An array of absolute file paths for each preload entry
+ */
 export function normalizePreload(preload: string | string[], root: string): string[] {
   const list = Array.isArray(preload) ? preload : preload ? [preload] : []
   return list.map((p) => path.resolve(root, p))
 }
 
+/**
+ * Warns when the detected Electron major version is lower than the configured minimum.
+ *
+ * Checks the project for an installed Electron package and, if its major version
+ * is less than `config.electron.minVersion`, logs a yellow warning describing the mismatch.
+ *
+ * @param config - Resolved build configuration that contains `electron.minVersion` and project `root`
+ */
 function assertElectronVersion(config: ResolvedConfig): void {
   const min = config.electron.minVersion
   const installed = detectInstalledElectron(config.root)
@@ -187,6 +227,12 @@ function assertElectronVersion(config: ResolvedConfig): void {
   }
 }
 
+/**
+ * Detects the installed Electron major version in the given project root.
+ *
+ * @param root - Project root directory used to locate `node_modules/electron/package.json`
+ * @returns The major Electron version as a number, or `null` if Electron is not installed or the version cannot be determined
+ */
 export function detectInstalledElectron(root: string): number | null {
   try {
     const pkgPath = path.resolve(root, 'node_modules/electron/package.json')

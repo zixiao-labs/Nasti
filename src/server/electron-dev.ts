@@ -27,6 +27,11 @@ export interface ElectronDevOptions extends NastiConfig {
   noSpawn?: boolean
 }
 
+/**
+ * Start an Electron-focused development workflow: run the renderer dev server, build the main and preload bundles into .nasti/, and optionally spawn Electron with automatic restarts.
+ *
+ * @param inlineConfig - Development options; when `inlineConfig.noSpawn` is `true`, only compiles main/preload into `.nasti/` and does not start the Electron process.
+ */
 export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): Promise<void> {
   const { noSpawn, ...rest } = inlineConfig
   const config = await resolveConfig({ ...rest, target: 'electron' }, 'serve')
@@ -131,6 +136,12 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
   }
 }
 
+/**
+ * Map a module format identifier to its corresponding output file extension.
+ *
+ * @param format - 'cjs' for CommonJS or 'esm' for ECMAScript modules
+ * @returns The file extension to use: '.cjs' for `cjs`, '.mjs' for `esm`
+ */
 function extFor(format: 'cjs' | 'esm'): string {
   return format === 'cjs' ? '.cjs' : '.mjs'
 }
@@ -141,6 +152,18 @@ interface CompileNodeOpts {
   devUrl: string
 }
 
+/**
+ * Compile a Node-target entry (Electron main or preload) into a single output file for development.
+ *
+ * Injects environment defines (including `__ELECTRON__`, `__NASTI_TARGET__`, and `__NASTI_DEV_SERVER_URL__`), applies source transforms, and writes a bundled file using rolldown.
+ *
+ * @param config - Resolved Nasti configuration used for transforms and plugin resolution
+ * @param entry - Path to the entry file to bundle
+ * @param opts - Compilation options
+ * @param opts.outFile - Destination path for the bundled output
+ * @param opts.format - Output module format, either `'cjs'` or `'esm'`
+ * @param opts.devUrl - Dev server URL injected into the bundle as `__NASTI_DEV_SERVER_URL__`
+ */
 async function compileNode(config: ResolvedConfig, entry: string, opts: CompileNodeOpts): Promise<void> {
   const env = loadEnv(config.mode, config.root, config.envPrefix)
   const envDefine = {
@@ -185,6 +208,14 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
   await bundle.close()
 }
 
+/**
+ * Locate the Electron executable for the given project configuration.
+ *
+ * Checks `config.electron.electronPath` first (returns it if the file exists), otherwise attempts to resolve the `electron` package export from the project's dependencies and returns that path if it exists.
+ *
+ * @param config - Resolved project configuration used to determine project root and configured Electron path
+ * @returns The file system path to the Electron executable if found, `null` otherwise
+ */
 function resolveElectronBinary(config: ResolvedConfig): string | null {
   if (config.electron.electronPath && fs.existsSync(config.electron.electronPath)) {
     return config.electron.electronPath
@@ -203,6 +234,11 @@ function resolveElectronBinary(config: ResolvedConfig): string | null {
   return null
 }
 
+/**
+ * Emit console warnings when Electron is missing or its installed version is lower than configured.
+ *
+ * @param config - Resolved configuration containing the project root and `electron.minVersion` to check against
+ */
 function warnElectronVersion(config: ResolvedConfig): void {
   const installed = detectInstalledElectron(config.root)
   if (installed === null) {

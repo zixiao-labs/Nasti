@@ -21,6 +21,12 @@ const ELECTRON_MODULES = new Set([
   'electron/renderer',
 ])
 
+/**
+ * Create a Vite/Rollup plugin that externalizes Electron and Node built-in imports according to the resolved config.
+ *
+ * @param config - Resolved build config; any entries in `config.electron.external` are added to the externalized modules set.
+ * @returns A plugin that marks `electron` and `electron/*` imports and Node built-in modules (including `node:`-prefixed names) as external.
+ */
 export function electronPlugin(config: ResolvedConfig): NastiPlugin {
   const external = new Set([
     ...ELECTRON_MODULES,
