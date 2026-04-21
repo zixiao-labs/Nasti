@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Electron 支持 - Nasti</title>
+  <meta name="description" content="使用 Nasti 构建 Electron 41+ 桌面应用：主进程、Preload、渲染进程统一打包。">
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+    <li><a href="/pages/electron.html" class="active">Electron</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">目标平台</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/electron.html" class="active">Electron</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>Electron 支持</h1>
+    <p>
+      Nasti 原生支持构建 Electron 桌面应用，最低要求 <strong>Electron 41</strong>
+      （对应 Node.js 22.x / Chromium 138，完整 ESM 主进程能力）。主进程、Preload、
+      渲染进程由同一个 Nasti 流水线统一打包。
+    </p>
+
+    <div class="tip">
+      <strong>兼容性：</strong> 支持 Electron 41 以及更新版本（42、43、…）。
+      开发时会检测已安装版本，低于 <code>minVersion</code> 将提示警告。
+    </div>
+
+    <h2>安装</h2>
+    <div class="code-block"><pre>npm install -D @nasti-toolchain/nasti electron@^41</pre></div>
+
+    <h2>项目结构</h2>
+    <div class="code-block"><pre>my-electron-app/
+├── index.html                 <span class="comment"># 渲染进程入口</span>
+├── src/
+│   ├── main.tsx               <span class="comment"># 渲染进程 JS</span>
+│   ├── App.tsx
+│   └── electron/
+│       ├── main.ts            <span class="comment"># 主进程入口</span>
+│       └── preload.ts         <span class="comment"># Preload 脚本</span>
+└── nasti.config.ts</pre></div>
+
+    <h2>配置</h2>
+    <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">target</span>: <span class="string">'electron'</span>,
+  <span class="type">framework</span>: <span class="string">'react'</span>,
+
+  <span class="type">electron</span>: {
+    <span class="type">main</span>: <span class="string">'src/electron/main.ts'</span>,
+    <span class="type">preload</span>: <span class="string">'src/electron/preload.ts'</span>,
+    <span class="type">mainFormat</span>: <span class="string">'cjs'</span>,       <span class="comment">// 'cjs' | 'esm'（Electron 41+ 支持 ESM）</span>
+    <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>,
+    <span class="type">nodeTarget</span>: <span class="string">'node22'</span>,
+    <span class="type">autoRestart</span>: <span class="orange">true</span>,
+    <span class="type">minVersion</span>: <span class="orange">41</span>,
+    <span class="type">external</span>: [<span class="string">'electron'</span>],
+  },
+})</pre></div>
+
+    <h2>主进程示例</h2>
+    <div class="code-block"><pre><span class="comment">// src/electron/main.ts</span>
+<span class="keyword">import</span> { app, <span class="type">BrowserWindow</span> } <span class="keyword">from</span> <span class="string">'electron'</span>
+<span class="keyword">import</span> path <span class="keyword">from</span> <span class="string">'node:path'</span>
+
+<span class="keyword">async function</span> <span class="func">createWindow</span>() {
+  <span class="keyword">const</span> win = <span class="keyword">new</span> <span class="func">BrowserWindow</span>({
+    <span class="type">width</span>: <span class="orange">1200</span>,
+    <span class="type">height</span>: <span class="orange">800</span>,
+    <span class="type">webPreferences</span>: {
+      <span class="type">preload</span>: path.<span class="func">resolve</span>(__dirname, <span class="string">'preload.cjs'</span>),
+      <span class="type">contextIsolation</span>: <span class="orange">true</span>,
+      <span class="type">sandbox</span>: <span class="orange">true</span>,
+    },
+  })
+
+  <span class="comment">// Nasti 在 dev 模式下会将渲染进程 URL 注入 NASTI_DEV_SERVER_URL</span>
+  <span class="keyword">if</span> (process.env.<span class="type">NASTI_DEV_SERVER_URL</span>) {
+    <span class="keyword">await</span> win.<span class="func">loadURL</span>(process.env.<span class="type">NASTI_DEV_SERVER_URL</span>)
+  } <span class="keyword">else</span> {
+    <span class="keyword">await</span> win.<span class="func">loadFile</span>(path.<span class="func">resolve</span>(__dirname, <span class="string">'renderer/index.html'</span>))
+  }
+}
+
+app.<span class="func">whenReady</span>().<span class="func">then</span>(createWindow)</pre></div>
+
+    <h2>Preload 示例</h2>
+    <div class="code-block"><pre><span class="comment">// src/electron/preload.ts</span>
+<span class="keyword">import</span> { contextBridge, ipcRenderer } <span class="keyword">from</span> <span class="string">'electron'</span>
+
+contextBridge.<span class="func">exposeInMainWorld</span>(<span class="string">'nasti'</span>, {
+  <span class="type">ping</span>: () =&gt; ipcRenderer.<span class="func">invoke</span>(<span class="string">'ping'</span>),
+})</pre></div>
+
+    <h2>开发</h2>
+    <div class="code-block"><pre><span class="comment"># 启动渲染进程 dev server 并 spawn Electron</span>
+npx nasti electron
+
+<span class="comment"># 仅编译主/preload，不启动 Electron（CI 场景）</span>
+npx nasti electron --no-spawn
+
+<span class="comment"># 禁用主/preload 变更自动重启</span>
+npx nasti electron --no-restart</pre></div>
+    <p>
+      Nasti 会：
+    </p>
+    <ol>
+      <li>启动 HTTP dev server 承载渲染进程（带 HMR）</li>
+      <li>将主进程 / preload 编译至 <code>.nasti/</code> 临时目录</li>
+      <li>通过 <code>node_modules/electron</code> 查找 Electron 可执行文件并 spawn</li>
+      <li>监听主 / preload 文件变更，重编译后自动重启 Electron 进程</li>
+    </ol>
+
+    <h2>生产构建</h2>
+    <div class="code-block"><pre>npx nasti electron-build
+<span class="comment"># 等价于：</span>
+npx nasti build --target electron</pre></div>
+
+    <p>产物布局：</p>
+    <div class="code-block"><pre>dist/
+├── renderer/            <span class="comment"># Web 渲染层（同 nasti build）</span>
+│   ├── index.html
+│   └── assets/
+├── main.cjs             <span class="comment"># 主进程（mainFormat=esm 时为 main.mjs）</span>
+└── preload.cjs          <span class="comment"># Preload（preloadFormat=esm 时为 preload.mjs）</span></pre></div>
+
+    <h2>ESM 主进程（Electron 41+）</h2>
+    <p>
+      Electron 41 开始完整支持 ESM 主进程，可通过 <code>mainFormat: 'esm'</code> 启用：
+    </p>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">target</span>: <span class="string">'electron'</span>,
+  <span class="type">electron</span>: {
+    <span class="type">mainFormat</span>: <span class="string">'esm'</span>,
+    <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>, <span class="comment">// preload 建议保持 cjs 以兼容 contextIsolation</span>
+  },
+})</pre></div>
+
+    <div class="tip">
+      <strong>注意：</strong> 低于 Electron 41 时若使用 <code>mainFormat: 'esm'</code>，
+      Electron 会拒绝加载 <code>.mjs</code> 主进程。Nasti 在检测到过低版本时会输出警告。
+    </div>
+
+    <h2>配置参考</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>main</code></td><td><code>string</code></td><td><code>'src/electron/main.ts'</code></td><td>主进程入口</td></tr>
+        <tr><td><code>preload</code></td><td><code>string | string[]</code></td><td><code>'src/electron/preload.ts'</code></td><td>Preload 脚本，可多入口</td></tr>
+        <tr><td><code>renderer</code></td><td><code>string</code></td><td><code>'index.html'</code></td><td>渲染进程入口 HTML</td></tr>
+        <tr><td><code>mainFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>主进程输出格式</td></tr>
+        <tr><td><code>preloadFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>Preload 输出格式</td></tr>
+        <tr><td><code>nodeTarget</code></td><td><code>string</code></td><td><code>'node22'</code></td><td>主/preload 的 Node 目标版本</td></tr>
+        <tr><td><code>autoRestart</code></td><td><code>boolean</code></td><td><code>true</code></td><td>dev 模式下主/preload 变更自动重启</td></tr>
+        <tr><td><code>minVersion</code></td><td><code>number</code></td><td><code>41</code></td><td>允许的最低 Electron 大版本</td></tr>
+        <tr><td><code>electronPath</code></td><td><code>string</code></td><td><code>''</code></td><td>自定义 Electron 可执行文件路径</td></tr>
+        <tr><td><code>electronArgs</code></td><td><code>string[]</code></td><td><code>[]</code></td><td>传递给 Electron 的 CLI 参数</td></tr>
+        <tr><td><code>external</code></td><td><code>string[]</code></td><td><code>['electron']</code></td><td>主/preload 外部化依赖</td></tr>
+      </tbody>
+    </table>
+
+    <h2>编程式 API</h2>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">buildElectron</span>, <span class="func">startElectronDev</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+
+<span class="comment">// 生产构建</span>
+<span class="keyword">await</span> <span class="func">buildElectron</span>({ <span class="type">root</span>: <span class="string">'.'</span> })
+
+<span class="comment">// 开发模式</span>
+<span class="keyword">await</span> <span class="func">startElectronDev</span>({ <span class="type">root</span>: <span class="string">'.'</span> })</pre></div>
+
+    <h2>与 Electron Builder 配合</h2>
+    <p>
+      Nasti 只负责编译代码产物；打包分发（<code>.dmg</code> / <code>.exe</code> / <code>AppImage</code>）
+      建议搭配 <a href="https://www.electron.build/" target="_blank">electron-builder</a>：
+    </p>
+    <div class="code-block"><pre><span class="comment">// package.json</span>
+{
+  <span class="string">"scripts"</span>: {
+    <span class="string">"build"</span>: <span class="string">"nasti electron-build && electron-builder"</span>
+  },
+  <span class="string">"build"</span>: {
+    <span class="string">"files"</span>: [<span class="string">"dist/**"</span>],
+    <span class="string">"directories"</span>: { <span class="string">"buildResources"</span>: <span class="string">"build"</span> }
+  }
+}</pre></div>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

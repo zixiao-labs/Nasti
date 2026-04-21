@@ -3,12 +3,16 @@
 
 export { defineConfig, resolveConfig } from './config/index.js'
 export { build } from './build/index.js'
+export { buildElectron } from './build/electron.js'
 export { createServer } from './server/index.js'
+export { startElectronDev } from './server/electron-dev.js'
+export { electronPlugin } from './plugins/electron.js'
 
 export type {
   NastiConfig,
   NastiPlugin,
   ResolvedConfig,
+  ElectronConfig,
   DevServer,
   ModuleNode,
   HmrPayload,

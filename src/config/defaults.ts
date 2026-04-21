@@ -1,4 +1,4 @@
-import type { NastiConfig, ResolvedConfig, BuildConfig, ServerConfig, ResolveConfig } from '../types.js'
+import type { NastiConfig, ResolvedConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig } from '../types.js'
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
@@ -27,14 +27,31 @@ const defaultBuild: Required<BuildConfig> = {
   emptyOutDir: true,
 }
 
+// Electron 41+ 捆绑 Node 22.x / Chromium 138，故主进程目标默认 node22
+const defaultElectron: Required<ElectronConfig> = {
+  main: 'src/electron/main.ts',
+  preload: 'src/electron/preload.ts',
+  renderer: 'index.html',
+  nodeTarget: 'node22',
+  mainFormat: 'cjs',
+  preloadFormat: 'cjs',
+  electronPath: '',
+  electronArgs: [],
+  autoRestart: true,
+  minVersion: 41,
+  external: ['electron'],
+}
+
 export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } = {
   root: '.',
   base: '/',
   mode: 'development',
+  target: 'web',
   framework: 'auto',
   resolve: defaultResolve,
   server: defaultServer,
   build: defaultBuild,
+  electron: defaultElectron,
   plugins: [],
   envPrefix: ['NASTI_', 'VITE_'],
   logLevel: 'info',
