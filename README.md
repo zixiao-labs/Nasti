@@ -168,4 +168,4 @@ export default defineConfig({
 
 > Nasti - 明日方舟莱茵生命工程科主任娜斯提
 
-快的太吓人
+快的超乎想象
