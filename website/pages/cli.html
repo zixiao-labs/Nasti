@@ -123,6 +123,15 @@ nasti build --outDir output</pre></div>
 <span class="comment"># dist/renderer/   Web 渲染层</span>
 <span class="comment"># dist/main.cjs    主进程</span>
 <span class="comment"># dist/preload.cjs Preload</span></pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
+        <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
+        <tr><td><code>--minify</code></td><td>压缩产物</td><td><code>true</code></td></tr>
+        <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
+      </tbody>
+    </table>
 
     <h2>nasti preview</h2>
     <p>本地预览生产构建产物。</p>

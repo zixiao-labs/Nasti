@@ -124,7 +124,15 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
         try {
           if (child && !child.killed) {
             ;(child as any).__nastiKilled = true
-            child.kill()
+            const dying = child
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(() => resolve(), 3000)
+              dying.once('exit', () => {
+                clearTimeout(timer)
+                resolve()
+              })
+              dying.kill()
+            })
           }
           await compileAll()
           spawnElectron()
@@ -180,7 +188,7 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
       const result = transformCode(id, code, {
         sourcemap: !!config.build.sourcemap,
         jsxRuntime: 'automatic',
-        jsxImportSource: 'react',
+        jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },
@@ -190,12 +198,7 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
     input: entry,
     define: envDefine,
     platform: 'node',
-    plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)].map((p) => ({
-      name: p.name,
-      resolveId: (p as any).resolveId,
-      load: (p as any).load,
-      transform: (p as any).transform,
-    })),
+    plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
   } as any)
   fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
   await bundle.write({

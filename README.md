@@ -205,7 +205,7 @@ nasti electron
 
 生产构建（产物结构）：
 
-```
+```text
 dist/
 ├── renderer/            # Web 渲染层
 ├── main.cjs             # 主进程（可配置为 .mjs）

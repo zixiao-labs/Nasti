@@ -42,17 +42,21 @@ cli
   .option('--target <target>', 'Build target: web | electron', { default: 'web' })
   .action(async (root: string | undefined, options: any) => {
     try {
+      const target = options.target
+      if (target !== 'web' && target !== 'electron') {
+        throw new Error(`Invalid --target "${target}". Expected "web" or "electron".`)
+      }
       const inline = {
         root: root ?? '.',
         mode: options.mode ?? 'production',
-        target: options.target,
+        target,
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
           minify: options.minify,
         },
       }
-      if (options.target === 'electron') {
+      if (target === 'electron') {
         const { buildElectron } = await import('./build/electron.js')
         await buildElectron(inline)
       } else {

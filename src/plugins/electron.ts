@@ -1,9 +1,7 @@
 // Electron 内置插件
 //
-// 负责：
-//   - 将 Electron 内置模块（electron、fs、path、...）标记为 external
-//   - 在主进程/preload 代码中注入 __ELECTRON__ / __NASTI_TARGET__ 常量
-//   - 检测当前模块是否属于主进程/Preload（非渲染进程）
+// 负责：将 Electron 模块（electron、electron/*）与 Node 内建模块（fs、path、...）
+// 标记为 external，避免被打包进主进程/Preload 产物。
 //
 // 仅在 config.target === 'electron' 时启用
 import { builtinModules } from 'node:module'
@@ -44,7 +42,7 @@ export function electronPlugin(config: ResolvedConfig): NastiPlugin {
         return { id: source, external: true }
       }
       // 形如 `electron/xxx` 的子路径一律标记外部
-      if (source === 'electron' || source.startsWith('electron/')) {
+      if (source.startsWith('electron/')) {
         return { id: source, external: true }
       }
       return null

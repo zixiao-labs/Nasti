@@ -153,16 +153,7 @@ async function bundleNode(
     input: entry,
     define: envDefine,
     platform: 'node',
-    plugins: [
-      oxcTransformPlugin,
-      electronPlugin(config),
-      resolvePlugin(config),
-    ].map((p) => ({
-      name: p.name,
-      resolveId: (p as any).resolveId,
-      load: (p as any).load,
-      transform: (p as any).transform,
-    })),
+    plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
     ...(config.build.rolldownOptions as any),
   } as any)
 
@@ -202,7 +193,7 @@ function outFileName(outDir: string, base: string, format: 'cjs' | 'esm'): strin
  * @param root - Root directory used to resolve relative preload entries
  * @returns An array of absolute file paths for each preload entry
  */
-export function normalizePreload(preload: string | string[], root: string): string[] {
+export function normalizePreload(preload: string | string[] | undefined, root: string): string[] {
   const list = Array.isArray(preload) ? preload : preload ? [preload] : []
   return list.map((p) => path.resolve(root, p))
 }
