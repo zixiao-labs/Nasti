@@ -102,6 +102,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
 
         const onListening = () => {
           const actualPort = (httpServer.address() as any)?.port ?? currentPort
+          config.server.port = actualPort
           const localUrl = `http://localhost:${actualPort}`
           const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}` : null
 
