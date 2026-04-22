@@ -7,7 +7,7 @@
 *兼容 Vite 插件生态，内置 React & Vue 支持*
 
 [![CI](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml/badge.svg)](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/nasti-build)](https://www.npmjs.com/package/nasti-build)
+[![npm](https://img.shields.io/npm/v/@nasti-toolchain%2Fnasti)](https://www.npmjs.com/package/@nasti-toolchain/nasti)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 [English](#features) | [文档](https://nasti.zixiaolabs.com) | [快速开始](#quick-start)
@@ -58,7 +58,7 @@ my-project/
 
 ```ts
 // nasti.config.ts
-import { defineConfig } from 'nasti-build'
+import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
   // 框架: 'react' | 'vue' | 'auto'（自动检测）
@@ -109,7 +109,7 @@ nasti electron-build [root] [--outDir dist]
 ## Programmatic API
 
 ```ts
-import { build, createServer, defineConfig } from 'nasti-build'
+import { build, createServer, defineConfig } from '@nasti-toolchain/nasti'
 
 // 开发服务器
 const server = await createServer({
@@ -130,7 +130,7 @@ await build({
 Nasti 的插件接口与 Vite 完全兼容：
 
 ```ts
-import type { NastiPlugin } from 'nasti-build'
+import type { NastiPlugin } from '@nasti-toolchain/nasti'
 
 function myPlugin(): NastiPlugin {
   return {
@@ -180,7 +180,7 @@ npm install -D electron@^41
 
 ```ts
 // nasti.config.ts
-import { defineConfig } from 'nasti-build'
+import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
   target: 'electron',

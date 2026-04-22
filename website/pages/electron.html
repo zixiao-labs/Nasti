@@ -82,7 +82,7 @@
 
     <h2>配置</h2>
     <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
-<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
 
 <span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">target</span>: <span class="string">'electron'</span>,
@@ -202,7 +202,7 @@ npx nasti build --target electron</pre></div>
     </table>
 
     <h2>编程式 API</h2>
-    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">buildElectron</span>, <span class="func">startElectronDev</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">buildElectron</span>, <span class="func">startElectronDev</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
 
 <span class="comment">// 生产构建</span>
 <span class="keyword">await</span> <span class="func">buildElectron</span>({ <span class="type">root</span>: <span class="string">'.'</span> })

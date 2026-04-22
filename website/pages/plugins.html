@@ -57,7 +57,7 @@
     <p>Nasti 的插件接口与 Vite 完全兼容。现有的 Vite / Rollup 插件可以直接使用。</p>
 
     <h2>基本结构</h2>
-    <div class="code-block"><pre><span class="keyword">import type</span> { <span class="type">NastiPlugin</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+    <div class="code-block"><pre><span class="keyword">import type</span> { <span class="type">NastiPlugin</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
 
 <span class="keyword">function</span> <span class="func">myPlugin</span>(<span class="type">options</span> = {}): <span class="type">NastiPlugin</span> {
   <span class="keyword">return</span> {
