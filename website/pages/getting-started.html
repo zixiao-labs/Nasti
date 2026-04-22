@@ -94,7 +94,7 @@ npx nasti preview</pre></div>
 
     <h2>添加配置（可选）</h2>
     <p>创建 <code>nasti.config.ts</code>：</p>
-    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
 
 <span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">framework</span>: <span class="string">'react'</span>,
@@ -117,9 +117,9 @@ npx nasti preview</pre></div>
     <h2>从 Vite 迁移</h2>
     <p>Nasti 兼容 Vite 插件，迁移非常简单：</p>
     <ol>
-      <li>将 <code>vite</code> 替换为 <code>nasti-build</code></li>
+      <li>将 <code>vite</code> 替换为 <code>@nasti-toolchain/nasti</code></li>
       <li>将 <code>vite.config.ts</code> 重命名为 <code>nasti.config.ts</code></li>
-      <li>将 <code>import { defineConfig } from 'vite'</code> 改为 <code>from 'nasti-build'</code></li>
+      <li>将 <code>import { defineConfig } from 'vite'</code> 改为 <code>from '@nasti-toolchain/nasti'</code></li>
       <li>现有的 Vite 插件可以直接使用，无需修改</li>
     </ol>
   </main>

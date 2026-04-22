@@ -147,7 +147,7 @@ nasti build --outDir output</pre></div>
 
     <h2>编程式调用</h2>
     <p>所有 CLI 功能也可通过编程 API 调用：</p>
-    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">build</span>, <span class="func">createServer</span> } <span class="keyword">from</span> <span class="string">'nasti-build'</span>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">build</span>, <span class="func">createServer</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
 
 <span class="comment">// 等价于 nasti dev</span>
 <span class="keyword">const</span> server = <span class="keyword">await</span> <span class="func">createServer</span>({ <span class="type">server</span>: { <span class="type">port</span>: <span class="orange">3000</span> } })
