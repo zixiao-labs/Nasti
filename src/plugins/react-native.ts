@@ -10,10 +10,9 @@ const RN_EXTERNAL_PREFIXES = [
   '@react-native/',
   '@react-native-community/',
   '@react-navigation/',
-  'expo',
   'expo-',
 ]
-const RN_ALWAYS_EXTERNAL = new Set(['react', 'react-native'])
+const RN_ALWAYS_EXTERNAL = new Set(['react', 'react-native', 'expo'])
 
 // JSX/TS 扩展名，平台变体查找顺序
 const CODE_EXTS = ['.tsx', '.ts', '.jsx', '.js']
@@ -56,6 +55,10 @@ export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
           if (fs.existsSync(platformFile)) return platformFile
           const nativeFile = `${stem}.native${ext}`
           if (fs.existsSync(nativeFile)) return nativeFile
+          const platformIndexFile = `${stem}/index.${platform}${ext}`
+          if (fs.existsSync(platformIndexFile)) return platformIndexFile
+          const nativeIndexFile = `${stem}/index.native${ext}`
+          if (fs.existsSync(nativeIndexFile)) return nativeIndexFile
         }
       }
 

@@ -137,7 +137,7 @@ cli
   .option('--entry <file>', 'Entry file (default: index.ts or index.js)')
   .option('--outDir <dir>', 'Output directory', { default: 'dist' })
   .option('--sourcemap', 'Generate source map')
-  .option('--minify', 'Minify output', { default: false })
+  .option('--minify', 'Minify output', { default: true })
   .option('--mode <mode>', 'Set env mode')
   .action(async (root: string | undefined, options: any) => {
     try {
