@@ -17,6 +17,7 @@
     <li><a href="/pages/plugins.html">插件</a></li>
     <li><a href="/pages/cli.html">CLI</a></li>
     <li><a href="/pages/electron.html">Electron</a></li>
+    <li><a href="/pages/react-native.html">React Native</a></li>
   </ul>
   <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
 </nav>
@@ -42,6 +43,7 @@
       <div class="sidebar-title">目标平台</div>
       <ul class="sidebar-links">
         <li><a href="/pages/electron.html">Electron</a></li>
+        <li><a href="/pages/react-native.html">React Native</a></li>
       </ul>
     </div>
     <div class="sidebar-section">
@@ -99,7 +101,7 @@
         <tr><td><code>root</code></td><td><code>string</code></td><td><code>'.'</code></td><td>项目根目录</td></tr>
         <tr><td><code>base</code></td><td><code>string</code></td><td><code>'/'</code></td><td>公共基础路径</td></tr>
         <tr><td><code>mode</code></td><td><code>string</code></td><td><code>'development'</code></td><td>运行模式</td></tr>
-        <tr><td><code>target</code></td><td><code>'web' | 'electron'</code></td><td><code>'web'</code></td><td>打包目标平台，详见 <a href="/pages/electron.html">Electron</a></td></tr>
+        <tr><td><code>target</code></td><td><code>'web' | 'electron' | 'react-native'</code></td><td><code>'web'</code></td><td>打包目标平台，详见 <a href="/pages/electron.html">Electron</a> / <a href="/pages/react-native.html">React Native</a></td></tr>
         <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型</td></tr>
         <tr><td><code>logLevel</code></td><td><code>'info' | 'warn' | 'error' | 'silent'</code></td><td><code>'info'</code></td><td>日志级别</td></tr>
         <tr><td><code>envPrefix</code></td><td><code>string | string[]</code></td><td><code>['NASTI_', 'VITE_']</code></td><td>暴露给客户端的环境变量前缀</td></tr>
@@ -142,6 +144,17 @@
         <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
         <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
         <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>传递给 Rolldown 的额外选项</td></tr>
+      </tbody>
+    </table>
+
+    <h2>reactNative 选项</h2>
+    <p>仅在 <code>target: 'react-native'</code> 时生效。完整示例见 <a href="/pages/react-native.html">React Native 指南</a>。</p>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>platform</code></td><td><code>'ios' | 'android'</code></td><td><code>'android'</code></td><td>目标平台，影响扩展名优先级与产物文件名</td></tr>
+        <tr><td><code>entry</code></td><td><code>string</code></td><td><code>'index.ts'</code></td><td>入口文件，相对根目录；不存在时自动检测</td></tr>
+        <tr><td><code>external</code></td><td><code>string[]</code></td><td><code>[]</code></td><td>追加外部化的包（react/react-native 始终外部化）</td></tr>
       </tbody>
     </table>
 

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>React Native 支持 - Nasti</title>
+  <meta name="description" content="使用 Nasti 打包 React Native / Expo 应用：平台扩展名解析、Hermes 兼容 CJS bundle、iOS / Android 双平台支持。">
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+    <li><a href="/pages/electron.html">Electron</a></li>
+    <li><a href="/pages/react-native.html" class="active">React Native</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">目标平台</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/electron.html">Electron</a></li>
+        <li><a href="/pages/react-native.html" class="active">React Native</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>React Native 支持</h1>
+    <p>
+      Nasti 可以将 React Native / Expo 项目打包为 Hermes / JavaScriptCore 兼容的
+      CJS bundle，替代 Metro bundler 的离线打包流程。内置
+      <code>nasti:react-native</code> 插件处理平台扩展名解析、静态资源 stub、
+      以及 <code>react</code>/<code>react-native</code> 生态的自动外部化。
+    </p>
+
+    <div class="tip">
+      <strong>适用场景：</strong> CI 离线打包、自定义构建流水线、或需要在
+      Rolldown 的极速 tree-shaking 下打出更小 bundle 的场景。日常开发仍推荐使用
+      Metro dev server（<code>npx expo start</code>）获得最佳 HMR 体验。
+    </div>
+
+    <h2>安装</h2>
+    <div class="code-block"><pre>npm install -D @nasti-toolchain/nasti</pre></div>
+    <p>React Native 和 Expo 本身作为项目运行时依赖安装：</p>
+    <div class="code-block"><pre><span class="comment"># 裸 React Native 项目</span>
+npm install react react-native
+
+<span class="comment"># 或使用 Expo</span>
+npx create-expo-app my-app</pre></div>
+
+    <h2>项目结构</h2>
+    <div class="code-block"><pre>my-rn-app/
+├── index.ts               <span class="comment"># AppRegistry 入口</span>
+├── App.tsx                <span class="comment"># 根组件</span>
+├── src/
+│   ├── screens/
+│   │   ├── Home.tsx
+│   │   ├── Home.ios.tsx   <span class="comment"># iOS 平台专属版本</span>
+│   │   └── Home.android.tsx <span class="comment"># Android 平台专属版本</span>
+│   └── components/
+│       ├── Button.native.tsx <span class="comment"># 通用 Native 版本</span>
+│       └── Button.tsx     <span class="comment"># Web 回退版本</span>
+└── nasti.config.ts</pre></div>
+
+    <h2>配置</h2>
+    <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">target</span>: <span class="string">'react-native'</span>,
+
+  <span class="type">reactNative</span>: {
+    <span class="type">platform</span>: <span class="string">'android'</span>,    <span class="comment">// 'ios' | 'android'</span>
+    <span class="type">entry</span>: <span class="string">'index.ts'</span>,       <span class="comment">// 相对项目根目录，默认自动检测</span>
+    <span class="type">external</span>: [],           <span class="comment">// 额外外部化的包（react/react-native 始终外部化）</span>
+  },
+
+  <span class="type">build</span>: {
+    <span class="type">outDir</span>: <span class="string">'dist'</span>,
+    <span class="type">minify</span>: <span class="orange">true</span>,
+    <span class="type">sourcemap</span>: <span class="orange">false</span>,
+  },
+})</pre></div>
+
+    <h2>入口文件</h2>
+    <div class="code-block"><pre><span class="comment">// index.ts</span>
+<span class="keyword">import</span> { <span class="type">AppRegistry</span> } <span class="keyword">from</span> <span class="string">'react-native'</span>
+<span class="keyword">import</span> <span class="type">App</span> <span class="keyword">from</span> <span class="string">'./App'</span>
+
+<span class="type">AppRegistry</span>.<span class="func">registerComponent</span>(<span class="string">'MyApp'</span>, () =&gt; <span class="type">App</span>)</pre></div>
+
+    <div class="code-block"><pre><span class="comment">// App.tsx</span>
+<span class="keyword">import</span> <span class="type">React</span> <span class="keyword">from</span> <span class="string">'react'</span>
+<span class="keyword">import</span> { <span class="type">View</span>, <span class="type">Text</span>, <span class="type">StyleSheet</span> } <span class="keyword">from</span> <span class="string">'react-native'</span>
+
+<span class="keyword">export default function</span> <span class="func">App</span>() {
+  <span class="keyword">return</span> (
+    &lt;<span class="type">View</span> style={styles.container}&gt;
+      &lt;<span class="type">Text</span> style={styles.title}&gt;Hello from Nasti!&lt;/<span class="type">Text</span>&gt;
+    &lt;/<span class="type">View</span>&gt;
+  )
+}
+
+<span class="keyword">const</span> styles = <span class="type">StyleSheet</span>.<span class="func">create</span>({
+  <span class="type">container</span>: { flex: <span class="orange">1</span>, alignItems: <span class="string">'center'</span>, justifyContent: <span class="string">'center'</span> },
+  <span class="type">title</span>: { fontSize: <span class="orange">24</span>, fontWeight: <span class="string">'bold'</span> },
+})</pre></div>
+
+    <h2>打包命令</h2>
+    <div class="code-block"><pre><span class="comment"># Android bundle（默认）</span>
+npx nasti react-native
+
+<span class="comment"># iOS bundle</span>
+npx nasti react-native --platform ios
+
+<span class="comment"># 简写别名</span>
+npx nasti rn --platform android
+
+<span class="comment"># 指定入口与输出目录</span>
+npx nasti rn --entry index.ts --outDir build
+
+<span class="comment"># 开发模式（保留 __DEV__ = true，不压缩）</span>
+npx nasti rn --mode development --no-minify</pre></div>
+
+    <p>产物布局：</p>
+    <div class="code-block"><pre>dist/
+└── android.bundle   <span class="comment"># CJS bundle，可直接加载到 Hermes / JSC</span>
+                     <span class="comment"># iOS 构建时文件名为 ios.bundle</span></pre></div>
+
+    <div class="tip">
+      <strong>与 Metro 的关系：</strong> Nasti 生成的 bundle 格式与
+      <code>npx react-native bundle</code> 产物等价（CJS），可直接替换用于
+      EAS Build 的 <code>jsBundleDir</code> 或 Android 的 <code>assets/</code> 目录。
+    </div>
+
+    <h2>平台扩展名解析</h2>
+    <p>
+      <code>nasti:react-native</code> 插件在解析相对路径时，按以下优先级查找文件：
+    </p>
+    <ol>
+      <li><code>Button.{platform}.tsx</code>（如 <code>Button.ios.tsx</code>）</li>
+      <li><code>Button.native.tsx</code></li>
+      <li><code>Button.tsx</code>（通用回退）</li>
+    </ol>
+    <p>所有 <code>.tsx / .ts / .jsx / .js</code> 扩展名均支持此逻辑。</p>
+
+    <div class="code-block"><pre><span class="comment">// 代码中正常引入，Nasti 自动选择对应平台文件</span>
+<span class="keyword">import</span> <span class="type">Button</span> <span class="keyword">from</span> <span class="string">'./components/Button'</span>
+<span class="comment">// platform=ios  → Button.ios.tsx（如存在）</span>
+<span class="comment">// platform=android → Button.android.tsx（如存在）</span>
+<span class="comment">// 均不存在      → Button.native.tsx → Button.tsx</span></pre></div>
+
+    <h2>静态资源</h2>
+    <p>
+      图片、字体等静态资源（<code>.png</code>、<code>.jpg</code>、<code>.ttf</code> 等）被替换为
+      轻量 stub 对象，避免打包时报错：
+    </p>
+    <div class="code-block"><pre><span class="comment">// 源码中正常 import</span>
+<span class="keyword">import</span> logo <span class="keyword">from</span> <span class="string">'./assets/logo.png'</span>
+<span class="comment">// 打包后等价于：</span>
+<span class="comment">// const logo = { uri: 'logo.png', width: 0, height: 0 }</span></pre></div>
+
+    <div class="tip">
+      <strong>注意：</strong> 生产场景下，图片资源通常由 Metro 的 asset 注册系统或
+      Expo 的 <code>Asset.loadAsync</code> 管理。Nasti bundle 中的 stub 保证代码不报错，
+      实际图片仍需通过原生端资源目录（<code>android/app/src/main/assets/</code>）提供。
+    </div>
+
+    <h2>外部化策略</h2>
+    <p>以下包始终被标记为 <code>external</code>，不打入 bundle：</p>
+    <ul>
+      <li><code>react</code></li>
+      <li><code>react-native</code> 及所有 <code>react-native/*</code> 子路径</li>
+      <li><code>@react-native/*</code></li>
+      <li><code>@react-native-community/*</code></li>
+      <li><code>@react-navigation/*</code></li>
+      <li><code>expo</code> 及所有 <code>expo-*</code> 包</li>
+    </ul>
+    <p>
+      通过 <code>reactNative.external</code> 可追加更多外部化包（如私有原生模块）：
+    </p>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">target</span>: <span class="string">'react-native'</span>,
+  <span class="type">reactNative</span>: {
+    <span class="type">external</span>: [<span class="string">'@my-company/native-camera'</span>, <span class="string">'react-native-reanimated'</span>],
+  },
+})</pre></div>
+
+    <h2>配置参考</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>platform</code></td><td><code>'ios' | 'android'</code></td><td><code>'android'</code></td><td>目标平台，决定扩展名优先级与产物文件名</td></tr>
+        <tr><td><code>entry</code></td><td><code>string</code></td><td><code>'index.ts'</code></td><td>入口文件，相对项目根目录；不存在时自动检测常见路径</td></tr>
+        <tr><td><code>external</code></td><td><code>string[]</code></td><td><code>[]</code></td><td>追加外部化的包（react/react-native 生态始终外部化）</td></tr>
+      </tbody>
+    </table>
+
+    <h2>编程式 API</h2>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">buildReactNative</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
+
+<span class="comment">// Android bundle</span>
+<span class="keyword">await</span> <span class="func">buildReactNative</span>({
+  <span class="type">root</span>: <span class="string">'.'</span>,
+  <span class="type">reactNative</span>: { <span class="type">platform</span>: <span class="string">'android'</span> },
+})
+
+<span class="comment">// iOS bundle</span>
+<span class="keyword">await</span> <span class="func">buildReactNative</span>({
+  <span class="type">root</span>: <span class="string">'.'</span>,
+  <span class="type">reactNative</span>: { <span class="type">platform</span>: <span class="string">'ios'</span> },
+  <span class="type">build</span>: { <span class="type">sourcemap</span>: <span class="orange">true</span> },
+})</pre></div>
+
+    <p>也可以直接在插件模式下使用 <code>reactNativePlugin</code>，集成进已有 Rolldown 流水线：</p>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">reactNativePlugin</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
+<span class="keyword">import</span> { <span class="func">rolldown</span> } <span class="keyword">from</span> <span class="string">'rolldown'</span>
+
+<span class="keyword">const</span> bundle = <span class="keyword">await</span> <span class="func">rolldown</span>({
+  <span class="type">input</span>: <span class="string">'index.ts'</span>,
+  <span class="type">plugins</span>: [
+    <span class="func">reactNativePlugin</span>(resolvedConfig),
+    <span class="comment">// 其他插件…</span>
+  ],
+})</pre></div>
+
+    <h2>与 EAS Build 配合</h2>
+    <p>
+      在 Expo 托管工作流中，可用 Nasti 替换默认的 Metro bundle 步骤，
+      生成的 <code>.bundle</code> 文件通过 EAS 的 <code>customBuildConfig</code> 注入：
+    </p>
+    <div class="code-block"><pre><span class="comment">// package.json</span>
+{
+  <span class="string">"scripts"</span>: {
+    <span class="string">"bundle:android"</span>: <span class="string">"nasti rn --platform android --outDir dist"</span>,
+    <span class="string">"bundle:ios"</span>:     <span class="string">"nasti rn --platform ios --outDir dist"</span>
+  }
+}</pre></div>
+
+    <div class="code-block"><pre><span class="comment">// eas.json（自定义构建步骤示例）</span>
+{
+  <span class="string">"build"</span>: {
+    <span class="string">"production"</span>: {
+      <span class="string">"android"</span>: {
+        <span class="string">"buildProfile"</span>: <span class="string">"production"</span>,
+        <span class="string">"prebuildCommand"</span>: <span class="string">"npm run bundle:android"</span>
+      }
+    }
+  }
+}</pre></div>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>

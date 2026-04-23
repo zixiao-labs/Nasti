@@ -17,6 +17,7 @@
     <li><a href="/pages/plugins.html">插件</a></li>
     <li><a href="/pages/cli.html" class="active">CLI</a></li>
     <li><a href="/pages/electron.html">Electron</a></li>
+    <li><a href="/pages/react-native.html">React Native</a></li>
   </ul>
   <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
 </nav>
@@ -42,6 +43,7 @@
       <div class="sidebar-title">目标平台</div>
       <ul class="sidebar-links">
         <li><a href="/pages/electron.html">Electron</a></li>
+        <li><a href="/pages/react-native.html">React Native</a></li>
       </ul>
     </div>
     <div class="sidebar-section">
@@ -54,7 +56,7 @@
 
   <main class="doc-content">
     <h1>CLI 命令</h1>
-    <p>Nasti 提供 Web 与 Electron 两套命令，共 5 个子命令。</p>
+    <p>Nasti 提供 Web、Electron 与 React Native 三套命令，共 6 个子命令。</p>
 
     <h2>nasti dev</h2>
     <p>启动开发服务器。</p>
@@ -132,6 +134,34 @@ nasti build --outDir output</pre></div>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
       </tbody>
     </table>
+
+    <h2>nasti react-native</h2>
+    <p>
+      将 React Native / Expo 项目打包为 Hermes / JSC 兼容的 CJS bundle。
+      别名：<code>nasti rn</code>。
+    </p>
+    <div class="code-block"><pre>nasti react-native [root] [options]
+nasti rn [root] [options]</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
+      <tbody>
+        <tr><td><code>--platform &lt;platform&gt;</code></td><td>目标平台：<code>ios</code> 或 <code>android</code></td><td><code>android</code></td></tr>
+        <tr><td><code>--entry &lt;file&gt;</code></td><td>入口文件（相对根目录）</td><td>自动检测</td></tr>
+        <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
+        <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
+        <tr><td><code>--no-minify</code></td><td>禁用压缩（默认开启）</td><td>—</td></tr>
+        <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="code-block"><pre><span class="comment"># Android bundle</span>
+nasti react-native
+
+<span class="comment"># iOS bundle</span>
+nasti rn --platform ios
+
+<span class="comment"># 开发模式（保留 __DEV__ = true）</span>
+nasti rn --mode development --no-minify</pre></div>
 
     <h2>nasti preview</h2>
     <p>本地预览生产构建产物。</p>
