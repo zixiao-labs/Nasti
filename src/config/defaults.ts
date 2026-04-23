@@ -1,4 +1,4 @@
-import type { NastiConfig, ResolvedConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig } from '../types.js'
+import type { NastiConfig, ResolvedConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig, ReactNativeConfig } from '../types.js'
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
@@ -42,6 +42,12 @@ const defaultElectron: Required<ElectronConfig> = {
   external: ['electron'],
 }
 
+const defaultReactNative: Required<ReactNativeConfig> = {
+  platform: 'android',
+  entry: 'index.ts',
+  external: [],
+}
+
 export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } = {
   root: '.',
   base: '/',
@@ -52,6 +58,7 @@ export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } 
   server: defaultServer,
   build: defaultBuild,
   electron: defaultElectron,
+  reactNative: defaultReactNative,
   plugins: [],
   envPrefix: ['NASTI_', 'VITE_'],
   logLevel: 'info',

@@ -128,6 +128,7 @@ export async function resolveConfig(
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
     build: { ...defaults.build, ...merged.build } as ResolvedConfig['build'],
     electron: { ...defaults.electron, ...merged.electron } as ResolvedConfig['electron'],
+    reactNative: { ...defaults.reactNative, ...merged.reactNative } as ResolvedConfig['reactNative'],
     envPrefix: (Array.isArray(merged.envPrefix)
       ? merged.envPrefix
       : merged.envPrefix

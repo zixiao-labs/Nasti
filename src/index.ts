@@ -7,12 +7,15 @@ export { buildElectron } from './build/electron.js'
 export { createServer } from './server/index.js'
 export { startElectronDev } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
+export { reactNativePlugin } from './plugins/react-native.js'
+export { buildReactNative } from './build/react-native.js'
 
 export type {
   NastiConfig,
   NastiPlugin,
   ResolvedConfig,
   ElectronConfig,
+  ReactNativeConfig,
   DevServer,
   ModuleNode,
   HmrPayload,

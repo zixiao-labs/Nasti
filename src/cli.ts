@@ -129,6 +129,44 @@ cli
     }
   })
 
+// nasti react-native - React Native / Expo 打包
+cli
+  .command('react-native [root]', 'Bundle for React Native / Expo')
+  .alias('rn')
+  .option('--platform <platform>', 'Target platform: ios | android', { default: 'android' })
+  .option('--entry <file>', 'Entry file (default: index.ts or index.js)')
+  .option('--outDir <dir>', 'Output directory', { default: 'dist' })
+  .option('--sourcemap', 'Generate source map')
+  .option('--minify', 'Minify output', { default: false })
+  .option('--mode <mode>', 'Set env mode')
+  .action(async (root: string | undefined, options: any) => {
+    try {
+      const platform = options.platform
+      if (platform !== 'ios' && platform !== 'android') {
+        throw new Error(`Invalid --platform "${platform}". Expected "ios" or "android".`)
+      }
+      const { buildReactNative } = await import('./build/react-native.js')
+      await buildReactNative({
+        root: root ?? '.',
+        mode: options.mode ?? 'production',
+        target: 'react-native',
+        reactNative: {
+          platform,
+          ...(options.entry ? { entry: options.entry } : {}),
+        },
+        build: {
+          outDir: options.outDir,
+          sourcemap: options.sourcemap,
+          minify: options.minify,
+        },
+      })
+    } catch (err: any) {
+      console.error(pc.red(`\n  React Native build failed:\n  ${err.message}\n`))
+      if (err.stack) console.error(pc.dim(err.stack))
+      process.exit(1)
+    }
+  })
+
 // nasti preview
 cli
   .command('preview [root]', 'Preview production build')

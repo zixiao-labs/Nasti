@@ -1,0 +1,74 @@
+import path from 'node:path'
+import fs from 'node:fs'
+import type { NastiPlugin, ResolvedConfig } from '../types.js'
+
+const RN_ASSET_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ttf|otf|woff|woff2|mp4|mp3|wav|aac)(\?.*)?$/
+
+// React Native 生态中始终需要外部化的包前缀
+const RN_EXTERNAL_PREFIXES = [
+  'react-native/',
+  '@react-native/',
+  '@react-native-community/',
+  '@react-navigation/',
+  'expo',
+  'expo-',
+]
+const RN_ALWAYS_EXTERNAL = new Set(['react', 'react-native'])
+
+// JSX/TS 扩展名，平台变体查找顺序
+const CODE_EXTS = ['.tsx', '.ts', '.jsx', '.js']
+
+export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
+  const platform = config.reactNative.platform
+  const userExternal = new Set(config.reactNative.external)
+
+  return {
+    name: 'nasti:react-native',
+    enforce: 'pre',
+
+    resolveId(source, importer) {
+      // 外部化 react、react-native 及其生态包
+      if (RN_ALWAYS_EXTERNAL.has(source) || userExternal.has(source)) {
+        return { id: source, external: true }
+      }
+      for (const prefix of RN_EXTERNAL_PREFIXES) {
+        if (source.startsWith(prefix)) {
+          return { id: source, external: true }
+        }
+      }
+
+      // 平台扩展名解析：.ios.tsx > .native.tsx > .tsx
+      if (importer && (source.startsWith('.') || path.isAbsolute(source))) {
+        const dir = path.isAbsolute(source) ? path.dirname(source) : path.dirname(importer)
+        const abs = path.isAbsolute(source) ? source : path.resolve(dir, source)
+
+        // 去掉已有扩展名，得到 stem
+        let stem = abs
+        for (const ext of CODE_EXTS) {
+          if (abs.endsWith(ext)) {
+            stem = abs.slice(0, -ext.length)
+            break
+          }
+        }
+
+        for (const ext of CODE_EXTS) {
+          const platformFile = `${stem}.${platform}${ext}`
+          if (fs.existsSync(platformFile)) return platformFile
+          const nativeFile = `${stem}.native${ext}`
+          if (fs.existsSync(nativeFile)) return nativeFile
+        }
+      }
+
+      return null
+    },
+
+    load(id) {
+      // 图片/字体等静态资源返回 stub，与 Metro 的 require() 数字 ID 行为兼容
+      if (RN_ASSET_RE.test(id)) {
+        const name = path.basename(id.split('?')[0])
+        return `export default { uri: ${JSON.stringify(name)}, width: 0, height: 0 };`
+      }
+      return null
+    },
+  }
+}

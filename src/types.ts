@@ -1,6 +1,15 @@
 // Nasti - 核心类型定义
 // 兼容 Vite Plugin 接口
 
+export interface ReactNativeConfig {
+  /** 目标平台 */
+  platform?: 'ios' | 'android'
+  /** 入口文件（相对项目根目录），默认自动检测 index.ts/index.js */
+  entry?: string
+  /** 额外标记为 external 的模块（react 与 react-native 始终为 external） */
+  external?: string[]
+}
+
 export interface NastiConfig {
   /** 项目根目录 */
   root?: string
@@ -8,8 +17,8 @@ export interface NastiConfig {
   base?: string
   /** 运行模式 */
   mode?: 'development' | 'production'
-  /** 打包目标平台：web（默认）或 electron */
-  target?: 'web' | 'electron'
+  /** 打包目标平台：web（默认）、electron 或 react-native */
+  target?: 'web' | 'electron' | 'react-native'
   /** 框架自动检测或手动指定 */
   framework?: 'react' | 'vue' | 'auto'
   /** 路径解析配置 */
@@ -22,6 +31,8 @@ export interface NastiConfig {
   build?: BuildConfig
   /** Electron 配置（当 target === 'electron' 时生效） */
   electron?: ElectronConfig
+  /** React Native 配置（当 target === 'react-native' 时生效） */
+  reactNative?: ReactNativeConfig
   /** 环境变量前缀 */
   envPrefix?: string | string[]
   /** 日志级别 */
@@ -175,7 +186,7 @@ export interface ResolvedConfig {
   root: string
   base: string
   mode: 'development' | 'production'
-  target: 'web' | 'electron'
+  target: 'web' | 'electron' | 'react-native'
   framework: 'react' | 'vue' | 'auto'
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
@@ -183,6 +194,7 @@ export interface ResolvedConfig {
   server: Required<ServerConfig>
   build: Required<BuildConfig>
   electron: Required<ElectronConfig>
+  reactNative: Required<ReactNativeConfig>
   envPrefix: string[]
   logLevel: 'info' | 'warn' | 'error' | 'silent'
 }
