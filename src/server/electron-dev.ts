@@ -116,12 +116,20 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
   if (config.electron.autoRestart) {
     const watchTargets = [mainEntry, ...preloadEntries].filter(fs.existsSync)
     const watcher = chokidar.watch(watchTargets, { ignoreInitial: true })
+    // 旧实现：重启进行中就 return，丢弃变更。场景：改主进程后立刻改 preload
+    //        会漏掉第二次。现在用 pending 标记 coalesce：等本轮完成后若 pending
+    //        为真再跑一次，保证最后一次编辑必被编进去。
     let restarting: Promise<void> | null = null
-    watcher.on('all', async () => {
-      if (restarting) return
+    let pending = false
+    const restart = async (): Promise<void> => {
+      if (restarting) {
+        pending = true
+        return
+      }
       restarting = (async () => {
-        console.log(pc.cyan('\n  ♻ 主/preload 变更，重启 Electron...'))
-        try {
+        do {
+          pending = false
+          console.log(pc.cyan('\n  ♻ 主/preload 变更，重启 Electron...'))
           if (child && !child.killed) {
             ;(child as any).__nastiKilled = true
             const dying = child
@@ -134,12 +142,26 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
               dying.kill()
             })
           }
-          await compileAll()
-          spawnElectron()
-        } finally {
-          restarting = null
-        }
+          try {
+            await compileAll()
+            spawnElectron()
+          } catch (e: any) {
+            console.warn(pc.yellow(`  ⚠ 重启编译失败，保留上一次进程: ${e.message}`))
+          }
+          // 若 pending 在本轮期间被再次置位，立即再跑一轮
+        } while (pending)
+        restarting = null
       })()
+      return restarting
+    }
+    // chokidar 会对一次保存触发多次事件；小窗口去抖避免过早发起重启
+    let debounceTimer: NodeJS.Timeout | null = null
+    watcher.on('all', () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        void restart()
+      }, 80)
     })
   }
 }
