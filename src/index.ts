@@ -9,6 +9,7 @@ export { startElectronDev } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
 export { reactNativePlugin } from './plugins/react-native.js'
 export { buildReactNative } from './build/react-native.js'
+export { monacoEditorPlugin } from './plugins/monaco-editor.js'
 
 export type {
   NastiConfig,
@@ -21,3 +22,8 @@ export type {
   HmrPayload,
   TransformResult,
 } from './types.js'
+export type {
+  MonacoEditorPluginOptions,
+  MonacoEditorLanguageWorker,
+  MonacoCustomWorker,
+} from './plugins/monaco-editor.js'
