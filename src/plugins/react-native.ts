@@ -46,9 +46,9 @@ export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
           return { id: source, external: true }
         }
       }
-      // Check userExternal for prefix matches
+      // Check userExternal for subpath matches
       for (const entry of userExternal) {
-        if (source === entry || source.startsWith(entry)) {
+        if (source.startsWith(entry + '/')) {
           return { id: source, external: true }
         }
       }
