@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 
 const RN_ASSET_RE = /\.(png|jpg|jpeg|gif|webp|svg|bmp|ttf|otf|woff|woff2|mp4|mp3|wav|aac)(\?.*)?$/
@@ -28,6 +29,8 @@ const CODE_EXTS = ['.tsx', '.ts', '.jsx', '.js']
 export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
   const platform = config.reactNative.platform
   const userExternal = new Set(config.reactNative.external)
+  const { alias } = config.resolve
+  const require = createRequire(path.resolve(config.root, 'package.json'))
 
   return {
     name: 'nasti:react-native',
@@ -43,30 +46,71 @@ export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
           return { id: source, external: true }
         }
       }
+      // Check userExternal for prefix matches
+      for (const entry of userExternal) {
+        if (source === entry || source.startsWith(entry)) {
+          return { id: source, external: true }
+        }
+      }
 
       // 平台扩展名解析：.ios.tsx > .native.tsx > .tsx
-      if (importer && (source.startsWith('.') || path.isAbsolute(source))) {
-        const dir = path.isAbsolute(source) ? path.dirname(source) : path.dirname(importer)
-        const abs = path.isAbsolute(source) ? source : path.resolve(dir, source)
+      if (importer) {
+        let abs: string | null = null
 
-        // 去掉已有扩展名，得到 stem
-        let stem = abs
-        for (const ext of CODE_EXTS) {
-          if (abs.endsWith(ext)) {
-            stem = abs.slice(0, -ext.length)
-            break
+        // Handle relative or absolute paths
+        if (source.startsWith('.') || path.isAbsolute(source)) {
+          const dir = path.isAbsolute(source) ? path.dirname(source) : path.dirname(importer)
+          abs = path.isAbsolute(source) ? source : path.resolve(dir, source)
+        } else {
+          // Handle aliased or bare imports - resolve to absolute path first
+          let resolvedSource = source
+
+          // Apply alias resolution
+          for (const [key, value] of Object.entries(alias)) {
+            if (resolvedSource === key || resolvedSource.startsWith(key + '/')) {
+              resolvedSource = resolvedSource.replace(key, value)
+              if (!path.isAbsolute(resolvedSource)) {
+                resolvedSource = path.resolve(config.root, resolvedSource)
+              }
+              break
+            }
+          }
+
+          // If still not absolute, try require.resolve
+          if (!path.isAbsolute(resolvedSource)) {
+            try {
+              abs = require.resolve(resolvedSource, {
+                paths: [path.dirname(importer)],
+              })
+            } catch {
+              // Resolution failed, skip platform probing
+              abs = null
+            }
+          } else {
+            abs = resolvedSource
           }
         }
 
-        for (const ext of CODE_EXTS) {
-          const platformFile = `${stem}.${platform}${ext}`
-          if (fs.existsSync(platformFile)) return platformFile
-          const nativeFile = `${stem}.native${ext}`
-          if (fs.existsSync(nativeFile)) return nativeFile
-          const platformIndexFile = `${stem}/index.${platform}${ext}`
-          if (fs.existsSync(platformIndexFile)) return platformIndexFile
-          const nativeIndexFile = `${stem}/index.native${ext}`
-          if (fs.existsSync(nativeIndexFile)) return nativeIndexFile
+        if (abs) {
+          // 去掉已有扩展名，得到 stem
+          let stem = abs
+          for (const ext of CODE_EXTS) {
+            if (abs.endsWith(ext)) {
+              stem = abs.slice(0, -ext.length)
+              break
+            }
+          }
+
+          for (const ext of CODE_EXTS) {
+            const platformFile = `${stem}.${platform}${ext}`
+            if (fs.existsSync(platformFile)) return platformFile
+            const nativeFile = `${stem}.native${ext}`
+            if (fs.existsSync(nativeFile)) return nativeFile
+            const platformIndexFile = `${stem}/index.${platform}${ext}`
+            if (fs.existsSync(platformIndexFile)) return platformIndexFile
+            const nativeIndexFile = `${stem}/index.native${ext}`
+            if (fs.existsSync(nativeIndexFile)) return nativeIndexFile
+          }
         }
       }
 

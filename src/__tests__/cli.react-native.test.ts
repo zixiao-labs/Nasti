@@ -44,7 +44,7 @@ async function cliReactNativeAction(
 }
 
 describe('CLI react-native command action logic', () => {
-  let mockBuildReactNative: ReturnType<typeof vi.fn>
+  let mockBuildReactNative: (config: any) => Promise<void>
 
   beforeEach(() => {
     mockBuildReactNative = vi.fn().mockResolvedValue(undefined)
