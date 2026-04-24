@@ -101,13 +101,22 @@ export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
             }
           }
 
+          // Priority 1: platform-specific files across all extensions
           for (const ext of CODE_EXTS) {
             const platformFile = `${stem}.${platform}${ext}`
             if (fs.existsSync(platformFile)) return platformFile
-            const nativeFile = `${stem}.native${ext}`
-            if (fs.existsSync(nativeFile)) return nativeFile
+          }
+          for (const ext of CODE_EXTS) {
             const platformIndexFile = `${stem}/index.${platform}${ext}`
             if (fs.existsSync(platformIndexFile)) return platformIndexFile
+          }
+
+          // Priority 2: native files across all extensions
+          for (const ext of CODE_EXTS) {
+            const nativeFile = `${stem}.native${ext}`
+            if (fs.existsSync(nativeFile)) return nativeFile
+          }
+          for (const ext of CODE_EXTS) {
             const nativeIndexFile = `${stem}/index.native${ext}`
             if (fs.existsSync(nativeIndexFile)) return nativeIndexFile
           }

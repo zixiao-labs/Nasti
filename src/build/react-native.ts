@@ -67,7 +67,7 @@ export async function buildReactNative(inlineConfig: NastiConfig = {}): Promise<
     transform(code: string, id: string) {
       if (!shouldTransform(id)) return null
       const result = transformCode(id, code, {
-        sourcemap: !!config.build.sourcemap,
+        sourcemap: config.build.sourcemap,
         jsxRuntime: 'automatic',
         jsxImportSource: 'react',
       })
@@ -103,8 +103,8 @@ export async function buildReactNative(inlineConfig: NastiConfig = {}): Promise<
   await bundle.write({
     dir: outDir,
     format: 'cjs',
-    sourcemap: !!config.build.sourcemap,
-    minify: !!config.build.minify,
+    sourcemap: config.build.sourcemap,
+    minify: config.build.minify,
     entryFileNames: bundleFileName,
   })
 

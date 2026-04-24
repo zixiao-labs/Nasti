@@ -233,6 +233,20 @@ describe('reactNativePlugin', () => {
       const result = plugin.resolveId!.call({} as any, './components/Button', '/project/src/App.tsx', {} as any)
       expect(result).toBe('/project/src/components/Button.android.tsx')
     })
+
+    it('prefers platform-specific file with different extension over .native file (cross-extension priority)', () => {
+      existsSyncSpy.mockImplementation((p: any) => {
+        const s = String(p)
+        // Button.ios.ts exists but Button.native.tsx also exists
+        // Platform-specific .ts should win over .native.tsx
+        return s === '/project/src/components/Button.ios.ts' ||
+               s === '/project/src/components/Button.native.tsx'
+      })
+
+      const plugin = reactNativePlugin(makeConfig({ platform: 'ios' }))
+      const result = plugin.resolveId!.call({} as any, './components/Button', '/project/src/App.tsx', {} as any)
+      expect(result).toBe('/project/src/components/Button.ios.ts')
+    })
   })
 
   describe('load - static asset stub', () => {
