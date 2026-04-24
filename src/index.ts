@@ -7,6 +7,7 @@ export { buildElectron } from './build/electron.js'
 export { createServer } from './server/index.js'
 export { startElectronDev } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
+export { monacoEditorPlugin } from './plugins/monaco-editor.js'
 
 export type {
   NastiConfig,
@@ -18,3 +19,8 @@ export type {
   HmrPayload,
   TransformResult,
 } from './types.js'
+export type {
+  MonacoEditorPluginOptions,
+  MonacoEditorLanguageWorker,
+  MonacoCustomWorker,
+} from './plugins/monaco-editor.js'

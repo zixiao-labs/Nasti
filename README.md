@@ -24,6 +24,7 @@
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR（可选依赖 `@vue/compiler-sfc`）
 - **Electron 41+ 支持** - 一键构建主进程 / Preload / 渲染进程，支持 ESM 主进程
+- **Monaco Editor 集成** - 内置 `monacoEditorPlugin`，预打包 Web Worker，修复 HMR 期间的 EMFILE
 - **Dev Server + HMR** - 开发服务器 + WebSocket 热模块替换
 - **TypeScript 优先** - 原生 TS 支持，零配置
 
@@ -242,6 +243,57 @@ app.whenReady().then(createWindow)
 ```
 
 > 详细说明见 [Electron 指南](https://nasti.zixiaolabs.com/pages/electron.html)。
+
+## Monaco Editor 支持
+
+内置 `monacoEditorPlugin`（对标 `vite-plugin-monaco-editor`），解决两个老大难问题：
+
+1. Monaco 的 Web Worker 是独立入口，必须单独打包
+2. `monaco-editor` 包含 2000+ 源文件，按 ESM 逐文件服务会在 HMR 时触发 **EMFILE（too many open files）** — 本插件将 Worker 预打包到磁盘缓存，并把 `monaco-editor` 目录显式从 watcher 中剔除
+
+```bash
+npm install monaco-editor
+```
+
+```ts
+// nasti.config.ts
+import { defineConfig, monacoEditorPlugin } from '@nasti-toolchain/nasti'
+
+export default defineConfig({
+  plugins: [
+    monacoEditorPlugin({
+      // 默认全部启用：editorWorkerService / css / html / json / typescript
+      languageWorkers: ['editorWorkerService', 'json', 'typescript'],
+
+      // 自定义 Worker（如 monaco-graphql）
+      customWorkers: [
+        { label: 'graphql', entry: 'monaco-graphql/esm/graphql.worker' },
+      ],
+
+      // Worker URL 前缀，可指向 CDN 绝对 URL
+      publicPath: 'monacoeditorwork',
+
+      // 兼容旧 API：将 monaco 暴露到 window.monaco
+      globalAPI: false,
+    }),
+  ],
+})
+```
+
+应用代码无需任何胶水：
+
+```ts
+import * as monaco from 'monaco-editor'
+
+monaco.editor.create(document.getElementById('editor')!, {
+  value: 'function hi() { console.log("hello monaco") }',
+  language: 'typescript',
+  theme: 'vs-dark',
+  automaticLayout: true,
+})
+```
+
+> 详细说明见 [Monaco Editor 指南](https://nasti.zixiaolabs.com/pages/monaco.html)。
 
 ## License
 

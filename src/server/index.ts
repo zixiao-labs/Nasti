@@ -73,17 +73,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     handleFileChange(file, server)
   })
 
-  // 执行插件的 configureServer 钩子
-  const postMiddlewares: Array<() => void> = []
-  for (const plugin of allPlugins) {
-    if (plugin.configureServer) {
-      const result = await plugin.configureServer(server! as any)
-      if (typeof result === 'function') {
-        postMiddlewares.push(result)
-      }
-    }
-  }
-
   server = {
     config: configWithPlugins,
     middlewares: app,
@@ -145,6 +134,20 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       httpServer.close()
     },
   }
+
+  // 执行插件的 configureServer 钩子（此时 server 已完全初始化，
+  // 插件可安全访问 server.middlewares / server.watcher 等）
+  const postMiddlewares: Array<() => void> = []
+  for (const plugin of allPlugins) {
+    if (plugin.configureServer) {
+      const result = await plugin.configureServer(server)
+      if (typeof result === 'function') {
+        postMiddlewares.push(result)
+      }
+    }
+  }
+  // 插件返回的函数会在内置中间件之后执行
+  for (const run of postMiddlewares) run()
 
   return server
 }
