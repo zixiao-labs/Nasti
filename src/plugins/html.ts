@@ -3,6 +3,15 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { NastiPlugin, ResolvedConfig, HtmlTagDescriptor } from '../types.js'
 
+/** 运行在用户脚本之前、安装 React Fast Refresh 全局钩子的 preamble。 */
+const REACT_REFRESH_HTML_PREAMBLE = `
+import RefreshRuntime from "/@react-refresh";
+RefreshRuntime.injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;
+window.__vite_plugin_react_preamble_installed__ = true;
+`.trim()
+
 export function htmlPlugin(config: ResolvedConfig): NastiPlugin {
   return {
     name: 'nasti:html',
@@ -12,7 +21,20 @@ export function htmlPlugin(config: ResolvedConfig): NastiPlugin {
       const tags: HtmlTagDescriptor[] = []
 
       if (config.command === 'serve') {
-        // Dev 模式: 注入 HMR 客户端
+        const isReactLike = config.framework === 'react' || config.framework === 'auto'
+
+        // 先装 Fast Refresh 钩子（必须在任何用户模块之前，因为 JSX 模块 wrapper
+        // 会校验 window.__vite_plugin_react_preamble_installed__）
+        if (isReactLike) {
+          tags.push({
+            tag: 'script',
+            attrs: { type: 'module' },
+            children: REACT_REFRESH_HTML_PREAMBLE,
+            injectTo: 'head-prepend',
+          })
+        }
+
+        // HMR 客户端（内置 createHotContext 命名导出，供模块 wrapper 调用）
         tags.push({
           tag: 'script',
           attrs: { type: 'module', src: '/@nasti/client' },

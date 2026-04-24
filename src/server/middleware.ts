@@ -1,6 +1,8 @@
 // HTTP 中间件 - 请求拦截与按需转译
 import path from 'node:path'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
@@ -9,27 +11,116 @@ import { transformCode, shouldTransform, getModuleType } from '../core/transform
 import { readHtmlFile, processHtml } from '../plugins/html.js'
 import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
 
-const REACT_REFRESH_RUNTIME = `
-export function createSignatureFunctionForTransform() {
-  return function(type, key, forceReset, getCustomHooks) { return type; };
-}
-export function register(type, id) {}
-export default { createSignatureFunctionForTransform, register };
-`
+const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
+const __require = createRequire(import.meta.url)
 
-const REACT_REFRESH_PREAMBLE = `
-import RefreshRuntime from '/@react-refresh';
-if (!window.$RefreshReg$) {
-  window.$RefreshReg$ = (type, id) => RefreshRuntime.register(type, import.meta.url + ' ' + id);
-  window.$RefreshSig$ = RefreshRuntime.createSignatureFunctionForTransform;
-}
+/**
+ * 将 react-refresh 的 CJS 运行时包装成浏览器可用的 ESM。
+ * 原 CJS 通过 `exports.xxx = fn` 写入导出；我们用假的 module/exports/process
+ * 对象跑一遍，再显式 re-export 出来。
+ *
+ * 读一次缓存一次：dev server 生命周期内不会变。
+ */
+let __refreshRuntimeCache: string | null = null
+function getReactRefreshRuntimeEsm(): string {
+  if (__refreshRuntimeCache) return __refreshRuntimeCache
+  let cjsPath: string
+  try {
+    // 先在 Nasti 自己安装目录下找
+    cjsPath = __require.resolve('react-refresh/cjs/react-refresh-runtime.development.js')
+  } catch {
+    // 兜底：从 dist 向上找
+    cjsPath = path.resolve(__dirname_esm, '../../node_modules/react-refresh/cjs/react-refresh-runtime.development.js')
+  }
+  const cjsSource = fs.readFileSync(cjsPath, 'utf-8')
+  // 这些命名对应 react-refresh-runtime 的公共导出，与
+  // node -e "Object.keys(require('react-refresh/runtime'))" 对齐。
+  __refreshRuntimeCache = `// Wrapped react-refresh runtime -> ESM
+const exports = {};
+const module = { exports };
+const process = { env: { NODE_ENV: 'development' } };
+${cjsSource}
+const __rt = module.exports;
+export const injectIntoGlobalHook = __rt.injectIntoGlobalHook;
+export const register = __rt.register;
+export const createSignatureFunctionForTransform = __rt.createSignatureFunctionForTransform;
+export const performReactRefresh = __rt.performReactRefresh;
+export const isLikelyComponentType = __rt.isLikelyComponentType;
+export const hasUnrecoverableErrors = __rt.hasUnrecoverableErrors;
+export const setSignature = __rt.setSignature;
+export const getFamilyByID = __rt.getFamilyByID;
+export const getFamilyByType = __rt.getFamilyByType;
+export const findAffectedHostInstances = __rt.findAffectedHostInstances;
+export const collectCustomHooksForSignature = __rt.collectCustomHooksForSignature;
+export default __rt;
 `
+  return __refreshRuntimeCache
+}
 
-const REACT_REFRESH_FOOTER = `
-if (import.meta.hot) {
-  import.meta.hot.accept();
+/**
+ * React Fast Refresh 全局钩子安装脚本。
+ * 必须在用户代码之前执行，由 html.ts 以 head-prepend 的方式注入到 index.html。
+ */
+export const REACT_REFRESH_GLOBAL_PREAMBLE = `
+import RefreshRuntime from "/@react-refresh";
+RefreshRuntime.injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;
+window.__vite_plugin_react_preamble_installed__ = true;
+`.trim()
+
+/**
+ * 单模块的 Fast Refresh 包装。
+ *
+ * 包装前先把 transformed 代码里的 `import.meta.hot` 替换为本地 `__nasti_hot__`
+ * 变量 —— 规避 `import.meta` 属性赋值在某些引擎下不可写的问题，并统一 JSX/非 JSX
+ * 路径的 hot 来源。
+ */
+function buildReactRefreshWrapper(moduleUrl: string, transformedCode: string): string {
+  const urlLit = JSON.stringify(moduleUrl)
+  const userCode = transformedCode.replace(/\bimport\.meta\.hot\b/g, '__nasti_hot__')
+  return `import * as RefreshRuntime from "/@react-refresh";
+import { createHotContext as __nasti_createHotContext__ } from "/@nasti/client";
+const __nasti_hot__ = __nasti_createHotContext__(${urlLit});
+
+if (!window.__vite_plugin_react_preamble_installed__) {
+  throw new Error("[nasti] React Fast Refresh preamble missing. Make sure nasti:html is wired with framework: 'react'.");
+}
+
+const prevRefreshReg = window.$RefreshReg$;
+const prevRefreshSig = window.$RefreshSig$;
+window.$RefreshReg$ = (type, id) => {
+  RefreshRuntime.register(type, ${urlLit} + " " + id);
+};
+window.$RefreshSig$ = RefreshRuntime.createSignatureFunctionForTransform;
+
+${userCode}
+
+window.$RefreshReg$ = prevRefreshReg;
+window.$RefreshSig$ = prevRefreshSig;
+
+if (__nasti_hot__) {
+  __nasti_hot__.accept(() => {
+    clearTimeout(window.__nasti_refresh_timer__);
+    window.__nasti_refresh_timer__ = setTimeout(() => {
+      RefreshRuntime.performReactRefresh();
+    }, 30);
+  });
 }
 `
+}
+
+/**
+ * 非 JSX 模块里用户显式写了 import.meta.hot —— 注入一段 hot context 头部并替换属性访问为本地变量。
+ */
+function injectImportMetaHot(code: string, moduleUrl: string): string {
+  if (!/\bimport\.meta\.hot\b/.test(code)) return code
+  const urlLit = JSON.stringify(moduleUrl)
+  const header = `import { createHotContext as __nasti_createHotContext__ } from "/@nasti/client";
+const __nasti_hot__ = __nasti_createHotContext__(${urlLit});
+`
+  return header + code.replace(/\bimport\.meta\.hot\b/g, '__nasti_hot__')
+}
 
 export interface TransformMiddlewareContext {
   config: ResolvedConfig
@@ -137,9 +228,9 @@ export async function transformRequest(
     return cached.transformResult as { code: string; map?: unknown }
   }
 
-  // React Refresh 运行时 shim（虚拟模块）
+  // React Refresh 真实运行时（来自 react-refresh/cjs 包装为 ESM）
   if (cleanReqUrl === '/@react-refresh') {
-    return { code: REACT_REFRESH_RUNTIME }
+    return { code: getReactRefreshRuntimeEsm() }
   }
 
   // 解析文件路径
@@ -168,7 +259,11 @@ export async function transformRequest(
     code = typeof pluginResult === 'string' ? pluginResult : pluginResult.code
   }
 
+  // Fast Refresh / HMR 键必须在同一文件的多次 import（?t=xxx 变化）间稳定
+  const stableUrl = cleanReqUrl
+
   // OXC 转译 (TS/JSX/TSX)
+  let wrappedWithRefresh = false
   if (shouldTransform(filePath)) {
     const isJsx = /\.[jt]sx$/.test(filePath)
     const useRefresh = isJsx && config.framework !== 'vue'
@@ -180,8 +275,17 @@ export async function transformRequest(
     })
     code = result.code
     if (useRefresh) {
-      code = REACT_REFRESH_PREAMBLE + code + REACT_REFRESH_FOOTER
+      // 把模块包装起来：安装 $RefreshReg$/$RefreshSig$、建 hot context、尾部触发 performReactRefresh
+      code = buildReactRefreshWrapper(stableUrl, code)
+      wrappedWithRefresh = true
+      // 标记为自接受，HMR 传播到此为止，不再 full-reload
+      mod.isSelfAccepting = true
     }
+  }
+
+  // 非 Fast-Refresh 模块里用户自己写了 import.meta.hot 的，注入 hot context
+  if (!wrappedWithRefresh) {
+    code = injectImportMetaHot(code, stableUrl)
   }
 
   // 替换 import.meta.env.* 为实际值
@@ -538,12 +642,15 @@ function getHmrClientCode(): string {
 // Nasti HMR Client
 const socket = new WebSocket(\`ws://\${location.host}\`, 'nasti-hmr');
 const hotModulesMap = new Map();
+const disposeMap = new Map();
+const pruneMap = new Map();
 
 socket.addEventListener('message', ({ data }) => {
   const payload = JSON.parse(data);
   switch (payload.type) {
     case 'connected':
       console.log('[nasti] connected.');
+      clearErrorOverlay();
       break;
     case 'update':
       payload.updates.forEach((update) => {
@@ -553,10 +660,17 @@ socket.addEventListener('message', ({ data }) => {
           updateCss(update.path);
         }
       });
+      clearErrorOverlay();
       break;
     case 'full-reload':
       console.log('[nasti] full reload');
       location.reload();
+      break;
+    case 'prune':
+      payload.paths.forEach((p) => {
+        const cb = pruneMap.get(p);
+        if (cb) cb();
+      });
       break;
     case 'error':
       console.error('[nasti] error:', payload.err.message);
@@ -565,14 +679,23 @@ socket.addEventListener('message', ({ data }) => {
   }
 });
 
+// 自动重连（断线时指数退避）
+let reconnectTimer = 0;
+socket.addEventListener('close', () => {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => location.reload(), 1000);
+});
+
 async function fetchUpdate(update) {
   const mod = hotModulesMap.get(update.path);
+  // 先跑 dispose（给模块机会清理副作用）
+  const dispose = disposeMap.get(update.path);
+  if (dispose) dispose();
+
+  const newMod = await import(update.acceptedPath + '?t=' + update.timestamp);
   if (mod) {
-    const newMod = await import(update.acceptedPath + '?t=' + update.timestamp);
-    mod.callbacks.forEach((cb) => cb(newMod));
-  } else {
-    // 没有注册 hot 回调，尝试重新 import
-    await import(update.path + '?t=' + update.timestamp);
+    // 复制回调数组避免回调内部又修改 hotModulesMap 造成迭代异常
+    [...mod.callbacks].forEach((cb) => cb(newMod));
   }
 }
 
@@ -585,7 +708,13 @@ function updateCss(path) {
   }
 }
 
+function clearErrorOverlay() {
+  const el = document.getElementById('nasti-error-overlay');
+  if (el) el.remove();
+}
+
 function showErrorOverlay(err) {
+  clearErrorOverlay();
   const overlay = document.createElement('div');
   overlay.id = 'nasti-error-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.85);color:#fff;font-family:monospace;padding:2rem;overflow:auto;';
@@ -604,30 +733,35 @@ function showErrorOverlay(err) {
   document.body.appendChild(overlay);
 }
 
-// import.meta.hot API
-const createHotContext = (ownerPath) => ({
-  accept(deps, callback) {
-    if (typeof deps === 'function' || !deps) {
-      // self-accepting
-      const callbacks = hotModulesMap.get(ownerPath)?.callbacks || [];
-      callbacks.push(deps || (() => {}));
-      hotModulesMap.set(ownerPath, { callbacks });
-    }
-  },
-  prune(callback) {
-    // 模块被移除时执行
-  },
-  dispose(callback) {
-    // 模块更新前执行清理
-  },
-  invalidate() {
-    location.reload();
-  },
-  data: {},
-});
-
-// 暴露给模块使用
-if (!window.__nasti_hot_map) window.__nasti_hot_map = new Map();
-window.__NASTI_HMR__ = { createHotContext };
+/**
+ * 生成 import.meta.hot 的 hot context。
+ * 关键约束：同一 ownerPath 的 accept 回调必须替换（不是 append）。
+ * 每次模块重新 import 都会调用 createHotContext，旧回调会被 fetchUpdate 调用后立即被新 import
+ * 里的 accept 替换。不替换的话每编辑一次就多一个回调，越跑越慢。
+ */
+export function createHotContext(ownerPath) {
+  return {
+    accept(deps, callback) {
+      // 自接受: hot.accept() 或 hot.accept(callback)
+      if (typeof deps === 'function' || deps === undefined) {
+        hotModulesMap.set(ownerPath, { callbacks: [deps || (() => {})] });
+        return;
+      }
+      // 依赖接受: hot.accept(deps, callback)，多次调用追加
+      const existing = hotModulesMap.get(ownerPath)?.callbacks ?? [];
+      hotModulesMap.set(ownerPath, { callbacks: [...existing, callback] });
+    },
+    prune(callback) {
+      pruneMap.set(ownerPath, callback);
+    },
+    dispose(callback) {
+      disposeMap.set(ownerPath, callback);
+    },
+    invalidate() {
+      location.reload();
+    },
+    data: {},
+  };
+}
 `
 }

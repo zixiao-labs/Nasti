@@ -144,6 +144,18 @@ export async function resolveConfig(
   })
   resolved.plugins = filteredPlugins
 
+  // Electron 目标：扫描 dependencies 自动外部化 native 模块
+  // （带 binding.gyp、gypfile:true，或 node_modules 内存在 *.node 的包）。
+  // rolldown 尝试把 .node 打进 main 会直接爆，提前标为 external 才能正常 require。
+  if (resolved.target === 'electron') {
+    const autoExternal = detectNativeDeps(root)
+    if (autoExternal.length > 0) {
+      const current = new Set(resolved.electron.external ?? [])
+      for (const dep of autoExternal) current.add(dep)
+      resolved.electron.external = [...current]
+    }
+  }
+
   // 执行插件 configResolved 钩子
   for (const plugin of resolved.plugins) {
     if (plugin.configResolved) {
@@ -152,6 +164,90 @@ export async function resolveConfig(
   }
 
   return resolved
+}
+
+/**
+ * 扫描项目 dependencies，返回需要从 Electron 主进程 bundle 中外部化的 native 模块列表。
+ *
+ * 判定依据（任一满足即视为 native）：
+ *   - 包根目录存在 binding.gyp
+ *   - package.json 有 gypfile: true
+ *   - 包内存在 *.node 预编译产物
+ *   - 常见已知 native 包白名单（对付有些包不走 node-gyp 但运行时仍需原生 addon 的场景）
+ */
+export function detectNativeDeps(root: string): string[] {
+  const result = new Set<string>()
+  const pkgJsonPath = path.resolve(root, 'package.json')
+  if (!fs.existsSync(pkgJsonPath)) return []
+  let pkg: Record<string, any>
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
+  } catch {
+    return []
+  }
+  const deps = {
+    ...(pkg.dependencies ?? {}),
+    ...(pkg.optionalDependencies ?? {}),
+  }
+  // 已知需要外部化的 Electron 生态 native 模块
+  const KNOWN_NATIVE = new Set([
+    'node-pty',
+    'better-sqlite3',
+    'sharp',
+    'serialport',
+    '@vscode/tree-sitter-wasm',
+    'keytar',
+    'nodegit',
+    'sqlite3',
+    'fsevents',
+  ])
+  for (const dep of Object.keys(deps)) {
+    if (KNOWN_NATIVE.has(dep)) {
+      result.add(dep)
+      continue
+    }
+    const depDir = path.resolve(root, 'node_modules', dep)
+    if (!fs.existsSync(depDir)) continue
+    // binding.gyp
+    if (fs.existsSync(path.join(depDir, 'binding.gyp'))) {
+      result.add(dep)
+      continue
+    }
+    // package.json: gypfile
+    const subPkg = path.join(depDir, 'package.json')
+    if (fs.existsSync(subPkg)) {
+      try {
+        const sub = JSON.parse(fs.readFileSync(subPkg, 'utf-8'))
+        if (sub.gypfile === true || sub.binary?.module_name) {
+          result.add(dep)
+          continue
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    // 浅层扫 *.node 文件（build/Release 或 prebuilds 目录）
+    if (hasDotNodeFile(depDir)) {
+      result.add(dep)
+    }
+  }
+  return [...result]
+}
+
+function hasDotNodeFile(dir: string, depth = 0): boolean {
+  if (depth > 3) return false
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+    for (const e of entries) {
+      if (e.isFile() && e.name.endsWith('.node')) return true
+      if (e.isDirectory() && (e.name === 'build' || e.name === 'prebuilds' || e.name === 'Release')) {
+        if (hasDotNodeFile(path.join(dir, e.name), depth + 1)) return true
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
 }
 
 function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
