@@ -137,9 +137,17 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
   }
 
   function runtimeInitScript(): string {
+    // Normalize local worker URL prefix: join base + publicPath, avoid double slashes
+    let normalizedPrefix = publicPath
+    if (!isCDN(publicPath)) {
+      const base = resolvedConfig.base.replace(/\/+$/, '') || ''
+      const pub = publicPath.replace(/^\/+/, '')
+      normalizedPrefix = base ? `${base}/${pub}` : `/${pub}`
+    }
+
     const map: Record<string, string> = {}
     for (const w of workers) {
-      map[w.label] = `${publicPath}/${w.label}.worker.js`
+      map[w.label] = `${normalizedPrefix}/${w.label}.worker.js`
     }
     return `;(function () {
   var map = ${JSON.stringify(map)};
@@ -201,7 +209,10 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
         ),
       )
 
-      const prefix = publicPath + '/'
+      // Normalize dev middleware prefix to match runtime injection
+      const base = resolvedConfig.base.replace(/\/+$/, '') || ''
+      const pub = publicPath.replace(/^\/+/, '')
+      const prefix = (base ? `${base}/${pub}` : `/${pub}`) + '/'
       server.middlewares.use(
         async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
           if (req.method !== 'GET') return next()
@@ -259,11 +270,13 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
             resolvedConfig.build.outDir,
             resolvedConfig.base,
           )
-        : path.resolve(
-            resolvedConfig.root,
-            resolvedConfig.build.outDir,
-            publicPath.replace(/^\//, ''),
-          )
+        : isCDN(publicPath)
+          ? path.resolve(resolvedConfig.root, resolvedConfig.build.outDir, 'monaco')
+          : path.resolve(
+              resolvedConfig.root,
+              resolvedConfig.build.outDir,
+              publicPath.replace(/^\//, ''),
+            )
       fs.mkdirSync(outDir, { recursive: true })
 
       for (const worker of workers) {
@@ -271,8 +284,8 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
           const cacheFile = await buildWorker(worker)
           fs.copyFileSync(cacheFile, path.join(outDir, `${worker.label}.worker.js`))
         } catch (e: any) {
-          console.warn(
-            `[nasti:monaco-editor] worker build failed for "${worker.label}": ${e.message}`,
+          throw new Error(
+            `[nasti:monaco-editor] worker build failed for "${worker.label}": ${e.message}\n${e.stack || ''}`,
           )
         }
       }

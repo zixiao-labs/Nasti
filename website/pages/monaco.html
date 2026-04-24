@@ -115,7 +115,7 @@ monaco.editor.<span class="func">create</span>(document.<span class="func">getEl
       <tbody>
         <tr>
           <td><code>languageWorkers</code></td>
-          <td><code>EditorLanguageWorks[]</code></td>
+          <td><code>MonacoEditorLanguageWorker[]</code></td>
           <td><code>['editorWorkerService','css','html','json','typescript']</code></td>
           <td>启用的内置语言 Worker 列表</td>
         </tr>
@@ -145,7 +145,7 @@ monaco.editor.<span class="func">create</span>(document.<span class="func">getEl
         </tr>
         <tr>
           <td><code>customDistPath</code></td>
-          <td><code>(root, outDir, base) => string</code></td>
+          <td><code>(root, outDir, base) =&gt; string</code></td>
           <td>—</td>
           <td>自定义生产构建 Worker 产物目录（返回绝对路径）</td>
         </tr>
