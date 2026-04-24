@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monaco Editor 支持 - Nasti</title>
+  <meta name="description" content="Nasti 内置 Monaco Editor 插件：预打包 Web Worker，修复 HMR 期间的 EMFILE 问题，一行代码集成 VS Code 编辑器。">
+  <link rel="stylesheet" href="../css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="/" class="navbar-brand"><span>Nasti</span></a>
+  <ul class="navbar-links">
+    <li><a href="/pages/getting-started.html">快速开始</a></li>
+    <li><a href="/pages/config.html">配置</a></li>
+    <li><a href="/pages/plugins.html">插件</a></li>
+    <li><a href="/pages/cli.html">CLI</a></li>
+    <li><a href="/pages/electron.html">Electron</a></li>
+  </ul>
+  <a href="https://github.com/zixiao-labs/Nasti" class="navbar-github" target="_blank">GitHub</a>
+</nav>
+
+<div class="doc-layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">指南</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/getting-started.html">快速开始</a></li>
+        <li><a href="/pages/config.html">配置参考</a></li>
+        <li><a href="/pages/cli.html">CLI 命令</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">框架</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/react.html">React</a></li>
+        <li><a href="/pages/vue.html">Vue</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">目标平台</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/electron.html">Electron</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">集成</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/monaco.html" class="active">Monaco Editor</a></li>
+      </ul>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">进阶</div>
+      <ul class="sidebar-links">
+        <li><a href="/pages/plugins.html">插件 API</a></li>
+      </ul>
+    </div>
+  </aside>
+
+  <main class="doc-content">
+    <h1>Monaco Editor 支持</h1>
+    <p>
+      Nasti 内置 <code>monacoEditorPlugin</code>，为
+      <a href="https://microsoft.github.io/monaco-editor/" target="_blank">Monaco Editor</a>
+      （VS Code 使用的代码编辑器）提供一站式集成：预打包 Web Worker、注入
+      <code>MonacoEnvironment</code>、生产构建自动产出 Worker 资源。接口与
+      <code>vite-plugin-monaco-editor</code> 基本对齐，可无痛迁移。
+    </p>
+
+    <div class="tip">
+      <strong>它解决了什么？</strong>
+      <ol style="margin-top:0.5rem;">
+        <li>Monaco 的 Worker 是独立入口，必须单独打包。手动配置极易出错；</li>
+        <li>monaco-editor 包含 2000+ 源文件。按 ESM 逐文件交给 dev server
+        会触发大量并发文件读取，在 macOS 等低 <code>ulimit</code> 环境下
+        <strong>HMR 时抛出 EMFILE（too many open files）</strong>。本插件把 Worker 预打包成单文件缓存，
+        并显式把 <code>monaco-editor</code> 目录从 watcher 中剔除作为双保险。</li>
+      </ol>
+    </div>
+
+    <h2>安装</h2>
+    <div class="code-block"><pre>npm install monaco-editor
+npm install -D @nasti-toolchain/nasti</pre></div>
+
+    <h2>最小配置</h2>
+    <div class="code-block"><pre><span class="comment">// nasti.config.ts</span>
+<span class="keyword">import</span> { <span class="func">defineConfig</span>, <span class="func">monacoEditorPlugin</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">plugins</span>: [<span class="func">monacoEditorPlugin</span>()],
+})</pre></div>
+
+    <p>
+      在代码里直接 <code>import * as monaco from 'monaco-editor'</code>，Worker 会自动从
+      <code>/monacoeditorwork/&lt;label&gt;.worker.js</code> 加载，不需要任何手工
+      <code>new Worker(new URL(...))</code> 胶水代码。
+    </p>
+
+    <h2>使用示例</h2>
+    <div class="code-block"><pre><span class="comment">// src/main.ts</span>
+<span class="keyword">import</span> * <span class="keyword">as</span> monaco <span class="keyword">from</span> <span class="string">'monaco-editor'</span>
+
+monaco.editor.<span class="func">create</span>(document.<span class="func">getElementById</span>(<span class="string">'editor'</span>)!, {
+  <span class="type">value</span>: <span class="string">'function hi() {\n  console.log("hello monaco")\n}'</span>,
+  <span class="type">language</span>: <span class="string">'typescript'</span>,
+  <span class="type">theme</span>: <span class="string">'vs-dark'</span>,
+  <span class="type">automaticLayout</span>: <span class="orange">true</span>,
+})</pre></div>
+
+    <h2>选项</h2>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>默认值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>languageWorkers</code></td>
+          <td><code>EditorLanguageWorks[]</code></td>
+          <td><code>['editorWorkerService','css','html','json','typescript']</code></td>
+          <td>启用的内置语言 Worker 列表</td>
+        </tr>
+        <tr>
+          <td><code>customWorkers</code></td>
+          <td><code>{ label, entry }[]</code></td>
+          <td><code>[]</code></td>
+          <td>自定义 Worker，例如 <code>monaco-graphql</code></td>
+        </tr>
+        <tr>
+          <td><code>publicPath</code></td>
+          <td><code>string</code></td>
+          <td><code>'monacoeditorwork'</code></td>
+          <td>Worker 在 URL 上的公共前缀；可填 CDN 绝对 URL</td>
+        </tr>
+        <tr>
+          <td><code>globalAPI</code></td>
+          <td><code>boolean</code></td>
+          <td><code>false</code></td>
+          <td>是否将 Monaco API 暴露到 <code>window.monaco</code></td>
+        </tr>
+        <tr>
+          <td><code>forceBuildCDN</code></td>
+          <td><code>boolean</code></td>
+          <td><code>false</code></td>
+          <td><code>publicPath</code> 是 CDN 时仍强制本地产出 Worker 文件</td>
+        </tr>
+        <tr>
+          <td><code>customDistPath</code></td>
+          <td><code>(root, outDir, base) => string</code></td>
+          <td>—</td>
+          <td>自定义生产构建 Worker 产物目录（返回绝对路径）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>裁剪语言 Worker</h2>
+    <p>只用到 JSON 和 TypeScript？只打包这两个，减小产物体积：</p>
+    <div class="code-block"><pre><span class="func">monacoEditorPlugin</span>({
+  <span class="type">languageWorkers</span>: [<span class="string">'editorWorkerService'</span>, <span class="string">'json'</span>, <span class="string">'typescript'</span>],
+})</pre></div>
+    <div class="tip">
+      <strong>注意：</strong> <code>editorWorkerService</code> 是 Monaco 的基础 Worker，
+      任何情况下都应保留。SCSS / Less 共用 <code>css</code>，Handlebars 共用
+      <code>html</code>，无需单独声明。
+    </div>
+
+    <h2>自定义 Worker</h2>
+    <p>集成 GraphQL、YAML 等第三方 Worker：</p>
+    <div class="code-block"><pre><span class="func">monacoEditorPlugin</span>({
+  <span class="type">customWorkers</span>: [
+    { <span class="type">label</span>: <span class="string">'graphql'</span>, <span class="type">entry</span>: <span class="string">'monaco-graphql/esm/graphql.worker'</span> },
+    { <span class="type">label</span>: <span class="string">'yaml'</span>,    <span class="type">entry</span>: <span class="string">'monaco-yaml/yaml.worker'</span> },
+  ],
+})</pre></div>
+
+    <h2>CDN 部署</h2>
+    <p>将 Worker 放到 CDN 上，<code>publicPath</code> 传入绝对 URL：</p>
+    <div class="code-block"><pre><span class="func">monacoEditorPlugin</span>({
+  <span class="type">publicPath</span>: <span class="string">'https://cdn.example.com/monacoeditorwork'</span>,
+  <span class="type">forceBuildCDN</span>: <span class="orange">true</span>, <span class="comment">// 仍然生成本地产物，便于自行上传 CDN</span>
+})</pre></div>
+    <p>
+      跨域 Worker 会被浏览器拒绝直接加载，插件注入的运行时会自动用
+      <code>Blob + importScripts</code> 包一层规避同源策略。
+    </p>
+
+    <h2>globalAPI</h2>
+    <p>
+      兼容旧 API 的 <code>window.monaco</code> 访问方式：
+    </p>
+    <div class="code-block"><pre><span class="func">monacoEditorPlugin</span>({ <span class="type">globalAPI</span>: <span class="orange">true</span> })
+
+<span class="comment">// 然后在任意地方：</span>
+<span class="type">window</span>.monaco.editor.<span class="func">getModels</span>()</pre></div>
+
+    <h2>工作原理</h2>
+    <ol>
+      <li>
+        <strong>插件启动</strong>：以
+        <code>monaco-editor/esm/vs/.../xxx.worker</code> 为入口，用 Rolldown 预打包为
+        <strong>单个 IIFE 文件</strong>，缓存到
+        <code>node_modules/.nasti/monaco/&lt;版本hash&gt;/&lt;label&gt;.worker.js</code>，
+        并发请求做去重。
+      </li>
+      <li>
+        <strong>Dev 中间件</strong>：拦截
+        <code>GET /&lt;publicPath&gt;/&lt;label&gt;.worker.js</code>，直接从缓存磁盘流式返回，
+        不走 transform 管线 ⇒ 没有并发 fd 风暴。
+      </li>
+      <li>
+        <strong>HTML 注入</strong>：在 <code>&lt;head&gt;</code> 头部注入一段内联脚本，
+        设置 <code>self.MonacoEnvironment.getWorkerUrl</code> 指向缓存 URL。
+      </li>
+      <li>
+        <strong>生产构建</strong>：<code>buildStart</code> 阶段把缓存产物拷到
+        <code>outDir/&lt;publicPath&gt;/</code> 下，随主包一起部署。
+      </li>
+      <li>
+        <strong>EMFILE 防御</strong>：<code>configureServer</code> 阶段显式
+        <code>watcher.unwatch(node_modules/monaco-editor)</code>，防止符号链接、嵌套
+        <code>node_modules</code> 等路径绕过默认忽略规则。
+      </li>
+    </ol>
+
+    <h2>与 Vite 插件迁移差异</h2>
+    <table>
+      <thead><tr><th>vite-plugin-monaco-editor</th><th>@nasti-toolchain/nasti</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>import monacoEditorPlugin from 'vite-plugin-monaco-editor'</code></td>
+          <td><code>import { monacoEditorPlugin } from '@nasti-toolchain/nasti'</code></td>
+        </tr>
+        <tr>
+          <td>默认命名导出</td><td>具名导出</td>
+        </tr>
+        <tr>
+          <td>Worker 打包使用 esbuild</td><td>Worker 打包使用 Rolldown</td>
+        </tr>
+        <tr>
+          <td>缓存目录 <code>node_modules/.monaco</code></td>
+          <td>缓存目录 <code>node_modules/.nasti/monaco/&lt;版本hash&gt;</code>（版本切换自动失效）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>排障</h2>
+    <h3>HMR 时仍然报 EMFILE</h3>
+    <p>
+      确认插件已注册并查看启动日志是否有
+      <code>[nasti:monaco-editor] worker build failed</code>。如果是 macOS，临时
+      <code>ulimit -n 10240</code> 可缓解；若依赖链中还有其它大包（如
+      <code>ionicons</code>、<code>@mui/icons-material</code>），也建议类似地预打包。
+    </p>
+
+    <h3>Worker 404</h3>
+    <p>
+      访问 <code>/monacoeditorwork/editorWorkerService.worker.js</code> 看是否能返回。
+      若 404：<code>monaco-editor</code> 未安装；若 500：看服务器日志里的打包错误。
+    </p>
+
+    <h3>跨框架集成</h3>
+    <p>
+      React（<code>@monaco-editor/react</code>）、Vue（<code>@guolao/vue-monaco-editor</code>）
+      等封装库底层仍使用 <code>monaco-editor</code>，无需额外配置。
+    </p>
+  </main>
+</div>
+
+<script src="../js/main.js"></script>
+</body>
+</html>
