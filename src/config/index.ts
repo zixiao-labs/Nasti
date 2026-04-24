@@ -76,13 +76,13 @@ async function loadTsConfig(filePath: string): Promise<NastiConfig> {
 }
 
 /**
- * Resolve the final configuration by loading file-based config, merging with inline config, and applying plugin hooks.
+ * Produce the final resolved configuration by combining defaults, file-based config, inline config, and plugin hooks.
  *
- * Loads configuration from the project root (derived from `inlineConfig.root` or defaults), deep-merges file config with `inlineConfig` (inline takes precedence), runs each plugin's `config` hook and incorporates any returned partial config, constructs the complete `ResolvedConfig` (filling defaults for missing values and resolving tsconfig paths), filters plugins according to their `apply` field, and then invokes each included plugin's `configResolved` hook.
+ * Merges configuration sources with precedence: defaults < file config < inline config; loads tsconfig path aliases; invokes each plugin's `config` hook (merging any returned partial config); filters plugins by their `apply` field; and invokes each included plugin's `configResolved` hook.
  *
- * @param inlineConfig - User-provided configuration that overrides file config and defaults
- * @param command - The current command, either `"build"` or `"serve"`, which influences mode and plugin filtering
- * @returns The fully resolved configuration with defaults applied, plugins filtered, and plugin hooks executed
+ * @param inlineConfig - Configuration provided programmatically that overrides file config and defaults
+ * @param command - Current command, either `"build"` or `"serve"`, which determines mode and plugin filtering
+ * @returns The fully resolved `ResolvedConfig` with defaults applied, tsconfig aliases resolved, plugins filtered, and plugin hooks executed
  */
 export async function resolveConfig(
   inlineConfig: NastiConfig = {},

@@ -17,6 +17,14 @@ const RN_ALWAYS_EXTERNAL = new Set(['react', 'react-native', 'expo'])
 // JSX/TS 扩展名，平台变体查找顺序
 const CODE_EXTS = ['.tsx', '.ts', '.jsx', '.js']
 
+/**
+ * Provides a plugin that adapts module resolution and asset handling for React Native projects.
+ *
+ * @param config - Resolved configuration whose `reactNative` field supplies:
+ *   - `platform`: platform name used when probing platform-specific file variants (e.g., "ios", "android")
+ *   - `external`: an array of package ids/prefixes the user requests to be treated as external
+ * @returns A NastiPlugin that externalizes React Native/Expo core and prefixed ecosystem packages, resolves relative and absolute code imports by preferring `.<platform>` then `.native` variants (including index files) across common JS/TS extensions, and returns lightweight stub modules for static assets (images/fonts/media) exporting `{ uri, width: 0, height: 0 }`.
+ */
 export function reactNativePlugin(config: ResolvedConfig): NastiPlugin {
   const platform = config.reactNative.platform
   const userExternal = new Set(config.reactNative.external)

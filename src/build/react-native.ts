@@ -9,6 +9,12 @@ import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
 import pc from 'picocolors'
 
+/**
+ * Builds a React Native bundle for the project using the resolved Nasti configuration.
+ *
+ * @param inlineConfig - Partial Nasti configuration to merge with the resolved config for the `react-native` build
+ * @throws Error - If no entry file is found (suggest creating `index.ts` or setting `reactNative.entry` in nasti.config.ts)
+ */
 export async function buildReactNative(inlineConfig: NastiConfig = {}): Promise<void> {
   const config = await resolveConfig({ ...inlineConfig, target: 'react-native' }, 'build')
   const startTime = performance.now()
