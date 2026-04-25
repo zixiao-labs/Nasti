@@ -439,41 +439,49 @@ async function injectCjsNamedExports(code: string, entryFile: string): Promise<s
 function rewriteImports(code: string, config: ResolvedConfig, filePath: string): string {
   const root = config.root
   const fileDir = path.dirname(filePath)
-  const aliasEntries = Object.entries(config.resolve.alias)
+  // 按 key 长度降序：避免短 alias（如 `@`）抢在更具体的（如 `@/utils`）之前命中
+  const aliasEntries = Object.entries(config.resolve.alias).sort(
+    ([a], [b]) => b.length - a.length,
+  )
 
   const toRootUrl = (abs: string): string =>
     '/' + path.relative(root, abs).replace(/\\/g, '/')
 
   const transformSpec = (spec: string): string => {
+    // 解析时剥离 ?query / #hash（如 svg?url、json?import），回写时再附加到结果 URL
+    const suffixMatch = spec.match(/[?#].*$/)
+    const suffix = suffixMatch ? suffixMatch[0] : ''
+    const baseSpec = suffix ? spec.slice(0, -suffix.length) : spec
+
     // 1) alias —— 必须排在 bare 分支前，否则 `@/x` 会被当成 npm 包发到 /@modules/
     for (const [key, value] of aliasEntries) {
-      if (spec === key || spec.startsWith(key + '/')) {
+      if (baseSpec === key || baseSpec.startsWith(key + '/')) {
         const aliasBase = resolveAliasTarget(value, root)
-        const sub = spec.slice(key.length).replace(/^\//, '')
+        const sub = baseSpec.slice(key.length).replace(/^\//, '')
         const target = sub ? path.join(aliasBase, sub) : aliasBase
         const resolved = tryResolveDiskPath(target)
         // 解析失败时保留原 spec：让浏览器照旧请求，由后续中间件返回 404，
         // 而不是把 `@/x` 错误地转成 `/@modules/@/x`。
-        return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+        return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
       }
     }
 
     // 2) 相对路径
-    if (spec.startsWith('./') || spec.startsWith('../')) {
-      const target = path.resolve(fileDir, spec)
+    if (baseSpec.startsWith('./') || baseSpec.startsWith('../')) {
+      const target = path.resolve(fileDir, baseSpec)
       const resolved = tryResolveDiskPath(target)
-      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
     }
 
     // 3) 项目内绝对路径
-    if (spec.startsWith('/') && !spec.startsWith('/@')) {
-      const target = path.join(root, spec.replace(/^\//, ''))
+    if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
+      const target = path.join(root, baseSpec.replace(/^\//, ''))
       const resolved = tryResolveDiskPath(target)
-      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
     }
 
     // 4) 已经被前面步骤改写过的内部 URL（/@modules/、/@react-refresh 等）原样保留
-    if (spec.startsWith('/')) return spec
+    if (baseSpec.startsWith('/')) return spec
 
     // 5) bare specifier
     return `/@modules/${spec}`
