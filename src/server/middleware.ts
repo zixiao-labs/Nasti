@@ -24,12 +24,15 @@ const __require = createRequire(import.meta.url)
 let __refreshRuntimeCache: string | null = null
 function getReactRefreshRuntimeEsm(): string {
   if (__refreshRuntimeCache) return __refreshRuntimeCache
+  // react-refresh 的 package.json `exports` 没有暴露 ./cjs/*，Node 24 严格执行
+  // exports 后 `require.resolve('react-refresh/cjs/...')` 会抛 ERR_PACKAGE_PATH_NOT_EXPORTED。
+  // 改为先 resolve 受支持的 ./package.json，再手动拼 cjs 子路径，绕开 exports 校验。
   let cjsPath: string
   try {
-    // 先在 Nasti 自己安装目录下找
-    cjsPath = __require.resolve('react-refresh/cjs/react-refresh-runtime.development.js')
+    const pkgPath = __require.resolve('react-refresh/package.json')
+    cjsPath = path.join(path.dirname(pkgPath), 'cjs', 'react-refresh-runtime.development.js')
   } catch {
-    // 兜底：从 dist 向上找
+    // 兜底：dev 模式下从源码向上找；安装态下走不到这里
     cjsPath = path.resolve(__dirname_esm, '../../node_modules/react-refresh/cjs/react-refresh-runtime.development.js')
   }
   const cjsSource = fs.readFileSync(cjsPath, 'utf-8')
