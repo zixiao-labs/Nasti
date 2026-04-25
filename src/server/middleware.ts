@@ -28,9 +28,15 @@ function getReactRefreshRuntimeEsm(): string {
   try {
     // 先在 Nasti 自己安装目录下找
     cjsPath = __require.resolve('react-refresh/cjs/react-refresh-runtime.development.js')
-  } catch {
+  } catch (err) {
     // 兜底：从 dist 向上找
     cjsPath = path.resolve(__dirname_esm, '../../node_modules/react-refresh/cjs/react-refresh-runtime.development.js')
+    if (!fs.existsSync(cjsPath)) {
+      const origMsg = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `[nasti] Missing dependency "react-refresh". Install it with: npm install react-refresh\nOriginal resolve error: ${origMsg}`,
+      )
+    }
   }
   const cjsSource = fs.readFileSync(cjsPath, 'utf-8')
   // 这些命名对应 react-refresh-runtime 的公共导出，与
