@@ -164,7 +164,7 @@ async function bundleNode(
     format: opts.format === 'cjs' ? 'cjs' : 'esm',
     sourcemap: !!config.build.sourcemap,
     minify: !!config.build.minify,
-    inlineDynamicImports: true,
+    codeSplitting: false,
   })
 
   await bundle.close()
