@@ -304,8 +304,8 @@ export async function transformRequest(
   )
   code = replaceEnvInCode(code, envDefine)
 
-  // 重写 bare imports 为浏览器可用路径
-  code = rewriteImports(code, config)
+  // 重写 import 规范：alias / 相对路径 → 解析后的绝对 URL（带扩展名），bare → /@modules/
+  code = rewriteImports(code, config, filePath)
 
   const transformResult = { code }
   mod.transformResult = transformResult
@@ -425,27 +425,110 @@ async function injectCjsNamedExports(code: string, entryFile: string): Promise<s
   }
 }
 
-/** 重写 import/export 语句中的 bare specifier */
-function rewriteImports(code: string, _config: ResolvedConfig): string {
-  // 处理所有 from '...' 形式（import ... from、export ... from、export * from）
-  return code.replace(
-    /\bfrom\s+(['"])([^'"./][^'"]*)\1/g,
-    (match, quote: string, specifier: string) => {
-      return `from ${quote}/@modules/${specifier}${quote}`
-    },
-  ).replace(
-    // 处理纯副作用导入: import 'bare-specifier'
-    /\bimport\s+(['"])([^'"./][^'"]*)\1/g,
-    (match, quote: string, specifier: string) => {
-      return `import ${quote}/@modules/${specifier}${quote}`
-    },
-  ).replace(
-    // 处理动态导入: import('bare-specifier')
-    /\bimport\s*\(\s*(['"])([^'"./][^'"]*)\1\s*\)/g,
-    (match, quote: string, specifier: string) => {
-      return `import(${quote}/@modules/${specifier}${quote})`
-    },
-  )
+/**
+ * 重写 import/export 语句的模块规范：
+ *   - alias（如 `@/lib/api`）→ 解析后的项目内绝对 URL（带扩展名）
+ *   - 相对路径（`./x`、`../x`）→ 同样解析后回写为绝对 URL
+ *   - 项目内绝对路径（`/src/x`）→ 补扩展名
+ *   - 其余 bare specifier → `/@modules/<spec>`
+ *
+ * 浏览器加载无扩展名 URL（如 `/src/i18n`）时，里面的相对路径 `./locales/en`
+ * 会按字面拼接得到 `/src/locales/en`，不会自动补 `.ts` 也不知道导入文件原先在
+ * `/src/i18n/`。直接按 alias / fs 解析、回写绝对 URL，浏览器就能命中正确文件。
+ */
+function rewriteImports(code: string, config: ResolvedConfig, filePath: string): string {
+  const root = config.root
+  const fileDir = path.dirname(filePath)
+  const aliasEntries = Object.entries(config.resolve.alias)
+
+  const toRootUrl = (abs: string): string =>
+    '/' + path.relative(root, abs).replace(/\\/g, '/')
+
+  const transformSpec = (spec: string): string => {
+    // 1) alias —— 必须排在 bare 分支前，否则 `@/x` 会被当成 npm 包发到 /@modules/
+    for (const [key, value] of aliasEntries) {
+      if (spec === key || spec.startsWith(key + '/')) {
+        const aliasBase = resolveAliasTarget(value, root)
+        const sub = spec.slice(key.length).replace(/^\//, '')
+        const target = sub ? path.join(aliasBase, sub) : aliasBase
+        const resolved = tryResolveDiskPath(target)
+        // 解析失败时保留原 spec：让浏览器照旧请求，由后续中间件返回 404，
+        // 而不是把 `@/x` 错误地转成 `/@modules/@/x`。
+        return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+      }
+    }
+
+    // 2) 相对路径
+    if (spec.startsWith('./') || spec.startsWith('../')) {
+      const target = path.resolve(fileDir, spec)
+      const resolved = tryResolveDiskPath(target)
+      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+    }
+
+    // 3) 项目内绝对路径
+    if (spec.startsWith('/') && !spec.startsWith('/@')) {
+      const target = path.join(root, spec.replace(/^\//, ''))
+      const resolved = tryResolveDiskPath(target)
+      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) : spec
+    }
+
+    // 4) 已经被前面步骤改写过的内部 URL（/@modules/、/@react-refresh 等）原样保留
+    if (spec.startsWith('/')) return spec
+
+    // 5) bare specifier
+    return `/@modules/${spec}`
+  }
+
+  return code
+    // import ... from '...' / export ... from '...'
+    .replace(
+      /\bfrom\s+(['"])([^'"]+)\1/g,
+      (_m, q: string, s: string) => `from ${q}${transformSpec(s)}${q}`,
+    )
+    // 副作用 import: import '...'
+    .replace(
+      /\bimport\s+(['"])([^'"]+)\1/g,
+      (_m, q: string, s: string) => `import ${q}${transformSpec(s)}${q}`,
+    )
+    // 动态 import('...')
+    .replace(
+      /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
+      (_m, q: string, s: string) => `import(${q}${transformSpec(s)}${q})`,
+    )
+}
+
+/**
+ * 把 alias 值统一成磁盘绝对路径。
+ *   - `/Users/.../src` 这类绝对路径直接用
+ *   - `/src` 这类用户写的「项目根相对」路径按 `<root>/src` 处理
+ *   - 其余字符串相对 root 解析
+ */
+function resolveAliasTarget(value: string, root: string): string {
+  if (path.isAbsolute(value) && fs.existsSync(value)) return value
+  if (value.startsWith('/')) return path.join(root, value.slice(1))
+  return path.resolve(root, value)
+}
+
+/** 把磁盘上的目标路径补全为存在的文件（扩展名 / index 兜底）。 */
+function tryResolveDiskPath(target: string): string | null {
+  if (fs.existsSync(target) && fs.statSync(target).isFile()) return target
+  for (const ext of RESOLVE_EXTENSIONS) {
+    const withExt = target + ext
+    if (fs.existsSync(withExt) && fs.statSync(withExt).isFile()) return withExt
+  }
+  if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
+    for (const ext of RESOLVE_EXTENSIONS) {
+      const idx = path.join(target, 'index' + ext)
+      if (fs.existsSync(idx) && fs.statSync(idx).isFile()) return idx
+    }
+  }
+  return null
+}
+
+/** alias 目标可能在 root 之外（symlink、monorepo），那种情况无法生成项目内 URL。 */
+function isUnderRoot(abs: string, root: string): boolean {
+  const rel = path.relative(root, abs)
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
 }
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
