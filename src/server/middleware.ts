@@ -31,13 +31,8 @@ function getReactRefreshRuntimeEsm(): string {
   try {
     const pkgPath = __require.resolve('react-refresh/package.json')
     cjsPath = path.join(path.dirname(pkgPath), 'cjs', 'react-refresh-runtime.development.js')
-  } catch {
-    // 兜底：dev 模式下从源码向上找；安装态下走不到这里
-    // 先在 Nasti 自己安装目录下找
-    cjsPath = __require.resolve('react-refresh/cjs/react-refresh-runtime.development.js')
   } catch (err) {
     // 兜底：从 dist 向上找
-
     cjsPath = path.resolve(__dirname_esm, '../../node_modules/react-refresh/cjs/react-refresh-runtime.development.js')
     if (!fs.existsSync(cjsPath)) {
       const origMsg = err instanceof Error ? err.message : String(err)
