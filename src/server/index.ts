@@ -53,12 +53,24 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const ws = createWebSocketServer(httpServer)
 
   // 文件监听
+  // chokidar v4 不再把 `ignored` 字符串当作 glob 处理，而是按字面值精确匹配
+  // （见 chokidar/esm/index.js 的 createPattern），原先的 `**/node_modules/**`
+  // 等模式根本不会命中任何路径，导致 watcher 递归进入 node_modules 并对每个
+  // 子目录调用 fs.watch，在 macOS 上很快耗尽 fd 触发 EMFILE。改用函数 matcher
+  // 显式判定相对段。
+  const ignoredSegments = new Set(['node_modules', '.git', '.nasti'])
+  const outDirAbs = path.resolve(config.root, config.build.outDir)
   const watcher = watch(config.root, {
-    ignored: [
-      '**/node_modules/**',
-      '**/.git/**',
-      `**/${config.build.outDir}/**`,
-    ],
+    ignored: (filePath: string) => {
+      if (filePath === config.root) return false
+      if (filePath === outDirAbs || filePath.startsWith(outDirAbs + path.sep)) return true
+      const rel = path.relative(config.root, filePath)
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false
+      for (const seg of rel.split(path.sep)) {
+        if (ignoredSegments.has(seg)) return true
+      }
+      return false
+    },
     ignoreInitial: true,
   })
 

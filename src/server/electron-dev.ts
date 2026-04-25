@@ -228,7 +228,9 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
     format: opts.format === 'cjs' ? 'cjs' : 'esm',
     sourcemap: false,
     minify: false,
-    inlineDynamicImports: true,
+    // rolldown 已弃用 inlineDynamicImports，改用 codeSplitting:false 表达
+    // 同样语义（单 chunk、内联 dynamic import）
+    codeSplitting: false,
   })
   await bundle.close()
 }

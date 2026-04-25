@@ -121,7 +121,7 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
         format: 'iife',
         sourcemap: false,
         minify: true,
-        inlineDynamicImports: true,
+        codeSplitting: false,
       } as any)
       await bundle.close()
 
