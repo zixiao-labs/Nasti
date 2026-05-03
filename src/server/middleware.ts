@@ -2,7 +2,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
@@ -324,6 +324,15 @@ async function bundlePackageAsEsm(entryFile: string): Promise<string> {
 }
 
 async function doBundlePackage(entryFile: string): Promise<string> {
+  // 子路径入口（如 `react-aria-components/Select`）尝试生成 re-export shim，
+  // 指向同包主入口。否则每个子路径会被 rolldown 各自打成独立 bundle，
+  // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
+  // React Aria 之类对 context identity 敏感的库会出现「provider 与 consumer
+  // 看到的不是同一个 context」、`useContext` 返回 null 的运行期崩溃。
+  // 详见: https://github.com/zixiao-labs/Nasti/pull/16
+  const shim = await tryGenerateSubpathShim(entryFile)
+  if (shim != null) return shim
+
   const { rolldown } = await import('rolldown')
 
   const bundle = await rolldown({
@@ -369,6 +378,157 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   }
 
   return code
+}
+
+/**
+ * 当入口是 npm 包的「子路径」（即 `pkg/sub` 形式，对应 `node_modules/pkg/`
+ * 内部的某个非主入口文件）时，尝试改用一个薄薄的 re-export shim 替代独立 bundle，
+ * shim 通过 `/@modules/<pkgName>` 复用主入口 bundle 的导出。
+ *
+ * 这样做是为了避免「同一份代码被打到多个 bundle 里」造成的运行时 bug：
+ * 例如 `react-aria-components/Select` 与 `react-aria-components` 主入口都内部
+ * 依赖 `private/Select.*`，而 rolldown 会把这份相对依赖内联到各自的 bundle 中。
+ * 结果是浏览器侧出现两个独立的 `SelectContext = createContext(null)` 实例 ——
+ * `<Select>` 写入的 Provider 与下方 `<SelectValue>` 读到的 Consumer 不再指向
+ * 同一个 context，`useContext` 返回 null 直接崩。React Aria 的 Tabs / Collection
+ * / DialogTrigger 等都属于这一类对 context identity 敏感的设计。
+ *
+ * 安全前提：shim 仅在主入口 **完整覆盖** 子路径所有具名导出、且各导出值
+ * 与主入口下的对应值是 **同一引用**（identity 相等）时生成；否则回退到普通
+ * bundling，避免错误改写有副作用的子路径（如真正分裂的入口、wrapped exports）。
+ *
+ * 仅 dev server 使用：build 模式走单一 rolldown 整图打包，本身不会重复内联。
+ */
+async function tryGenerateSubpathShim(entryFile: string): Promise<string | null> {
+  // 1. 必须位于 node_modules 内
+  const NM = `${path.sep}node_modules${path.sep}`
+  if (!entryFile.includes(NM)) return null
+
+  // 2. 自下而上找第一份带 `name` 的 package.json，确认所属包根目录
+  let pkgDir: string | null = null
+  let pkgName: string | null = null
+  let dir = path.dirname(entryFile)
+  while (true) {
+    const pkgJsonPath = path.join(dir, 'package.json')
+    if (fs.existsSync(pkgJsonPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
+        if (typeof pkg?.name === 'string' && pkg.name) {
+          pkgDir = dir
+          pkgName = pkg.name
+          break
+        }
+      } catch {
+        // 解析失败：继续向上找，但通常意味着这不是合法包
+      }
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+    // 一旦走出 node_modules 就放弃（用户源码不应进入此分支）
+    if (!dir.includes(NM)) return null
+  }
+  if (!pkgDir || !pkgName) return null
+
+  // 3. 选择与入口 **同扩展名** 的主入口路径。这一步至关重要：
+  //    主入口的 `.cjs` 与子路径的 `.js`（ESM）在 Node 中会走不同的加载器，
+  //    各自独立产生模块实例 —— 在 step 5 的 identity 校验里永远不等。
+  //    而 dev server 上游 (`resolveUrlToFile`) 优先选取 `.js`/`.mjs` 而非 `.cjs`，
+  //    因此我们必须按入口实际格式去拿匹配的主入口，避免跨格式比较。
+  const entryExt = path.extname(entryFile)
+  const mainEntry = pickMainEntryByExtension(pkgDir, entryExt)
+  if (!mainEntry) return null
+  if (path.resolve(mainEntry) === path.resolve(entryFile)) return null
+
+  // 4. 用 `import()` 加载两侧（兼容 CJS / ESM；Node 会按文件扩展名自动选用
+  //    正确的加载器，并以 file URL 共享模块缓存 —— 内部对相对依赖的 `require`
+  //    会命中同一份 module instance）
+  let mainNs: Record<string, unknown>
+  let subNs: Record<string, unknown>
+  try {
+    mainNs = await import(pathToFileURL(mainEntry).href)
+    subNs = await import(pathToFileURL(entryFile).href)
+  } catch {
+    return null
+  }
+  if (!mainNs || typeof mainNs !== 'object') return null
+  if (!subNs || typeof subNs !== 'object') return null
+
+  const subKeys = Object.keys(subNs).filter(
+    (k) => k !== '__esModule' && k !== 'default' && VALID_IDENT.test(k),
+  )
+  if (subKeys.length === 0) return null
+
+  // 5. 所有具名导出都必须存在于主入口、且引用相等
+  for (const k of subKeys) {
+    if (!(k in mainNs)) return null
+    if (mainNs[k] !== subNs[k]) return null
+  }
+
+  // 子路径的 default 也必须由主入口承载且引用相等，否则下方的
+  // `export default __pkg["default"]` 会暴露错误（甚至 undefined）的 default。
+  if ('default' in subNs) {
+    if (!('default' in mainNs)) return null
+    if (mainNs['default'] !== subNs['default']) return null
+  }
+
+  // 6. 生成 ESM shim：浏览器从 `/@modules/<pkgName>` 取到主 bundle 的命名空间，
+  //    再按子路径所声明的导出名重新对外暴露
+  const lines: string[] = [
+    `// Nasti subpath shim → ${pkgName} (avoid duplicate bundling)`,
+    `import * as __pkg from "/@modules/${pkgName}";`,
+  ]
+  for (const k of subKeys) {
+    lines.push(`export const ${k} = __pkg[${JSON.stringify(k)}];`)
+  }
+  if ('default' in subNs) {
+    lines.push(`export default ("default" in __pkg ? __pkg["default"] : __pkg);`)
+  }
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * 解析包主入口绝对路径，**优先匹配指定扩展名**，再回退到任意可用主入口。
+ * 主入口候选来自 `exports[\".\"]`（按 import / module / default / require / node 顺序展开嵌套条件）
+ * 以及顶层 `module` / `main` 字段。
+ */
+function pickMainEntryByExtension(pkgDir: string, preferredExt: string): string | null {
+  const pkgJsonPath = path.join(pkgDir, 'package.json')
+  let pkg: Record<string, any>
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'))
+  } catch {
+    return null
+  }
+
+  const candidates: string[] = []
+  const collectFromExportObject = (obj: any) => {
+    if (!obj || typeof obj !== 'object') return
+    for (const cond of ['import', 'module', 'default', 'require', 'node']) {
+      const v = obj[cond]
+      if (typeof v === 'string') candidates.push(v)
+      else if (v && typeof v === 'object') collectFromExportObject(v)
+    }
+  }
+  const dot = pkg?.exports?.['.']
+  if (typeof dot === 'string') candidates.push(dot)
+  else if (dot && typeof dot === 'object') collectFromExportObject(dot)
+  if (typeof pkg.module === 'string') candidates.push(pkg.module)
+  if (typeof pkg.main === 'string') candidates.push(pkg.main)
+
+  // 同扩展名优先
+  for (const cand of candidates) {
+    if (path.extname(cand) === preferredExt) {
+      const full = path.resolve(pkgDir, cand)
+      if (fs.existsSync(full)) return full
+    }
+  }
+  // 任意可用候选
+  for (const cand of candidates) {
+    const full = path.resolve(pkgDir, cand)
+    if (fs.existsSync(full)) return full
+  }
+  return null
 }
 
 /** 将 rolldown 生成的 __require("pkg") 调用转换为顶层 ESM import
