@@ -2,7 +2,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
@@ -329,7 +329,7 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
   // React Aria 之类对 context identity 敏感的库会出现「provider 与 consumer
   // 看到的不是同一个 context」、`useContext` 返回 null 的运行期崩溃。
-  // 详见: https://github.com/zixiao-labs/Nasti/pull/<this PR>
+  // 详见: https://github.com/zixiao-labs/Nasti/pull/16
   const shim = await tryGenerateSubpathShim(entryFile)
   if (shim != null) return shim
 
@@ -446,7 +446,6 @@ async function tryGenerateSubpathShim(entryFile: string): Promise<string | null>
   let mainNs: Record<string, unknown>
   let subNs: Record<string, unknown>
   try {
-    const { pathToFileURL } = await import('node:url')
     mainNs = await import(pathToFileURL(mainEntry).href)
     subNs = await import(pathToFileURL(entryFile).href)
   } catch {
@@ -464,6 +463,13 @@ async function tryGenerateSubpathShim(entryFile: string): Promise<string | null>
   for (const k of subKeys) {
     if (!(k in mainNs)) return null
     if (mainNs[k] !== subNs[k]) return null
+  }
+
+  // 子路径的 default 也必须由主入口承载且引用相等，否则下方的
+  // `export default __pkg["default"]` 会暴露错误（甚至 undefined）的 default。
+  if ('default' in subNs) {
+    if (!('default' in mainNs)) return null
+    if (mainNs['default'] !== subNs['default']) return null
   }
 
   // 6. 生成 ESM shim：浏览器从 `/@modules/<pkgName>` 取到主 bundle 的命名空间，
