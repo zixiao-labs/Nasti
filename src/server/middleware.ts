@@ -242,6 +242,28 @@ export async function transformRequest(
     return { code: getReactRefreshRuntimeEsm() }
   }
 
+  // 插件提供的虚拟模块。
+  //
+  // Vite 风格的插件（如 chen-the-dawnstreak 的 file-based routing、virtual SVG sprite 等）
+  // 用 `resolveId` 声称某个 bare specifier（例如 `virtual:chen-routes`），再用 `load` 提供模块源码。
+  // `rewriteImports` 已经把 bare specifier 改写成 `/@modules/<spec>`，所以这里是它们落到 dev server 上的入口。
+  //
+  // 之前 dev server 仅做 `resolveUrlToFile` 的磁盘查找 → 直接 404。这里在落盘查找之前先问插件，
+  // 如果有人接管这个 spec **并且** 解析后的 id 不是真实文件（`\0`-前缀或不存在），就走插件
+  // 的 load → transform 管道；real file 路径则交给原来的 `bundlePackageAsEsm` 分支处理。
+  //
+  // 没有任何插件认领的 spec 仍然回落到 `resolveNodeModule`，npm 包加载行为不变。
+  if (cleanReqUrl.startsWith('/@modules/')) {
+    const spec = cleanReqUrl.slice('/@modules/'.length)
+    const virtual = await loadVirtualModule(spec, ctx)
+    if (virtual) {
+      const mod = await moduleGraph.ensureEntryFromUrl(url)
+      moduleGraph.setModuleId(mod, virtual.id)
+      mod.transformResult = virtual.result
+      return virtual.result
+    }
+  }
+
   // 解析文件路径
   const filePath = resolveUrlToFile(url, config.root)
   if (!filePath || !fs.existsSync(filePath)) return null
@@ -310,6 +332,52 @@ export async function transformRequest(
   const transformResult = { code }
   mod.transformResult = transformResult
   return transformResult
+}
+
+/**
+ * Run the plugin `resolveId` → `load` → `transform` pipeline for a bare specifier
+ * that arrived as `/@modules/<spec>`, and return the prepared JS module if (and
+ * only if) the result is a virtual module — i.e. its resolved id either uses the
+ * Vite-convention `\0` null-byte prefix or does not exist on disk.
+ *
+ * Real-file resolutions (e.g. an alias plugin remapping a bare specifier onto a
+ * source file under the project) are intentionally skipped here so they fall
+ * through to the normal `resolveUrlToFile` / `bundlePackageAsEsm` paths; this
+ * keeps the npm-package loader and the React Refresh wrapper in charge of those.
+ */
+async function loadVirtualModule(
+  spec: string,
+  ctx: TransformMiddlewareContext,
+): Promise<{ id: string; result: { code: string } } | null> {
+  const { config, pluginContainer } = ctx
+  const resolved = await pluginContainer.resolveId(spec)
+  if (resolved == null) return null
+  const resolvedId = typeof resolved === 'string' ? resolved : resolved.id
+  const looksVirtual = resolvedId.startsWith('\0') || !fs.existsSync(resolvedId)
+  if (!looksVirtual) return null
+
+  const loadResult = await pluginContainer.load(resolvedId)
+  if (loadResult == null) return null
+  let code = typeof loadResult === 'string' ? loadResult : loadResult.code
+
+  // Let other plugins transform the virtual source (e.g. macros, define-replace).
+  const transformed = await pluginContainer.transform(code, resolvedId)
+  if (transformed != null) {
+    code = typeof transformed === 'string' ? transformed : transformed.code
+  }
+
+  // Replace `import.meta.env.*` and rewrite the inner import specifiers so the
+  // browser can fetch them. Anchor at a synthetic file under the project root
+  // so `./x` style imports inside generated code resolve from root (the same
+  // contract Vite offers virtual modules whose ids don't map to a real dir).
+  code = replaceEnvInCode(code, ctx.envDefine ?? buildEnvDefine(
+    loadEnv(config.mode, config.root, config.envPrefix),
+    config.mode,
+  ))
+  const anchor = path.join(config.root, '__nasti_virtual__.ts')
+  code = rewriteImports(code, config, anchor)
+
+  return { id: resolvedId, result: { code } }
 }
 
 /** 用 rolldown 将 node_modules 包打包为浏览器可用的 ESM（含 CJS→ESM 转换） */
