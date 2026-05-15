@@ -56,6 +56,20 @@ export class ModuleGraph {
     mods.add(mod)
   }
 
+  /**
+   * Reindex a module under a plugin-provided canonical id (e.g. a `\0virtual:foo`
+   * id returned from `resolveId`). Plugins look up their own virtual modules via
+   * `getModuleById(RESOLVED_ID)` to invalidate them on watcher events; without
+   * this remap they'd never find the node because `ensureEntryFromUrl` keys by
+   * the public URL only.
+   */
+  setModuleId(mod: ModuleNode, id: string): void {
+    if (mod.id === id) return
+    this.idToModuleMap.delete(mod.id)
+    mod.id = id
+    this.idToModuleMap.set(id, mod)
+  }
+
   /** 更新模块依赖关系 */
   updateModuleImports(mod: ModuleNode, importedIds: Set<string>): void {
     // 清除旧的导入关系

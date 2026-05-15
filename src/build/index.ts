@@ -107,6 +107,10 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
         transform: p.transform as any,
         buildStart: p.buildStart as any,
         buildEnd: p.buildEnd as any,
+        // Forward `closeBundle` to Rolldown — it invokes the hook during
+        // `bundle.close()` below. This is the hook Vite plugins (e.g. PWA
+        // manifest/SW writers) rely on for final-stage artifact emission.
+        closeBundle: p.closeBundle as any,
       })),
     ],
     ...(config.build.rolldownOptions as any),

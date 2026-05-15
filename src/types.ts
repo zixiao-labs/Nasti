@@ -109,6 +109,12 @@ export interface NastiPlugin {
   // 通用钩子
   buildStart?: (this: PluginContext) => void | Promise<void>
   buildEnd?: (this: PluginContext, error?: Error) => void | Promise<void>
+  /**
+   * Called once after `bundle.close()` in production builds, mirroring Rollup/Vite semantics.
+   * Plugins use this to emit final-stage artifacts that depend on the bundle being fully written
+   * (PWA manifests, service workers, sitemaps, etc.). Not invoked in dev.
+   */
+  closeBundle?: (this: PluginContext, error?: Error) => void | Promise<void>
   resolveId?: (this: PluginContext, source: string, importer: string | undefined, options: ResolveIdOptions) => ResolveIdResult | Promise<ResolveIdResult>
   load?: (this: PluginContext, id: string) => LoadResult | Promise<LoadResult>
   transform?: (this: PluginContext, code: string, id: string) => TransformResult | Promise<TransformResult>
