@@ -140,7 +140,7 @@ export interface ResolveIdOptions {
 
 export type ResolveIdResult = string | null | undefined | { id: string; external?: boolean }
 export type LoadResult = string | null | undefined | { code: string; map?: unknown }
-export type TransformResult = string | null | undefined | { code: string; map?: unknown }
+export type TransformResult = string | null | undefined | { code: string; map?: unknown; moduleType?: string }
 
 export interface EmittedFile {
   type: 'asset' | 'chunk'

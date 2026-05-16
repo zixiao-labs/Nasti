@@ -94,9 +94,12 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   const envDefine = buildEnvDefine(env, config.mode)
 
   // 调用 Rolldown
+  // Rolldown 1.x 把 `define` 从顶层 InputOptions 移到了 `transform.define`，
+  // 顶层传入会触发 "Invalid key: Expected never but received 'define'" 警告并
+  // 静默丢弃 —— 导致 `import.meta.env.*` 不被替换。
   const bundle = await rolldown({
     input: entryPoints,
-    define: envDefine,
+    transform: { define: envDefine },
     plugins: [
       oxcTransformPlugin,
       // 转换 Nasti 插件为 Rolldown 插件格式
