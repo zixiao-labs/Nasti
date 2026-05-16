@@ -18,12 +18,27 @@ const TAILWIND_DIRECTIVE_RE =
   /@(?:import\s+["']tailwindcss(?:\b|\/)|tailwind\b|theme\b|apply\b|plugin\b|source\b|utility\b|variant\b|custom-variant\b|reference\b)/
 
 export function hasTailwindDirectives(css: string): boolean {
-  return TAILWIND_DIRECTIVE_RE.test(css)
+  // Strip comments to avoid false positives from commented-out directives
+  const withoutBlockComments = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  const withoutLineComments = withoutBlockComments.replace(/\/\/.*$/gm, '')
+  return TAILWIND_DIRECTIVE_RE.test(withoutLineComments)
 }
 
+type SourceEntry = { base: string; pattern: string; negated: boolean }
+
 type TailwindModules = {
-  node: typeof import('@tailwindcss/node')
-  oxide: typeof import('@tailwindcss/oxide')
+  node: {
+    compile(
+      css: string,
+      options: { base: string; from: string; onDependency: (p: string) => void },
+    ): Promise<{ sources: SourceEntry[]; build(candidates: string[]): string }>
+  }
+  oxide: {
+    Scanner: new (options: { sources?: SourceEntry[] }) => {
+      scan(): string[]
+      files: string[]
+    }
+  }
 }
 
 let cached: TailwindModules | null = null
@@ -47,8 +62,8 @@ async function loadTailwind(projectRoot: string): Promise<TailwindModules> {
         'Install them with:  npm i -D tailwindcss @tailwindcss/node @tailwindcss/oxide',
     )
   }
-  const node = (await import(pathToFileURL(nodePath).href)) as typeof import('@tailwindcss/node')
-  const oxide = (await import(pathToFileURL(oxidePath).href)) as typeof import('@tailwindcss/oxide')
+  const node = (await import(pathToFileURL(nodePath).href)) as TailwindModules['node']
+  const oxide = (await import(pathToFileURL(oxidePath).href)) as TailwindModules['oxide']
   cached = { node, oxide }
   cachedRoot = projectRoot
   return cached
