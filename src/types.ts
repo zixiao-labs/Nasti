@@ -98,6 +98,14 @@ export interface BuildConfig {
   target?: string | string[]
   rolldownOptions?: Record<string, unknown>
   emptyOutDir?: boolean
+  css?: CssConfig
+}
+
+export interface CssConfig {
+  /** CSP nonce to add to inline <style> tags */
+  nonce?: string
+  /** Emit CSS as separate files instead of inline injection (CSP-friendly) */
+  emitCssFile?: boolean
 }
 
 // Vite 兼容的插件接口

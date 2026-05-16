@@ -149,9 +149,12 @@ async function bundleNode(
     },
   }
 
+  // 合并用户的 transform.define 和 envDefine，确保 envDefine 优先级更高
+  const existingTransform = config.build.rolldownOptions?.transform as { define?: Record<string, any> } | undefined
+  const mergedDefine = { ...(existingTransform?.define ?? {}), ...envDefine }
   const bundle = await rolldown({
     input: entry,
-    define: envDefine,
+    transform: { ...existingTransform, define: mergedDefine },
     platform: 'node',
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
     ...(config.build.rolldownOptions as any),

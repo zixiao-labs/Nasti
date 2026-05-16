@@ -62,11 +62,41 @@ export default css;
       // 上 —— 同 dev 一致，省掉 HMR 头部即可。还要把 `moduleType` 显式声明为
       // `js`，否则 rolldown 仍按 `.css` 扩展名走 CSS 流水线、再次抛错。
       // 参考: https://github.com/rolldown/rolldown/issues/4271
+
+      const cssConfig = config.build.css || {}
+      const nonce = cssConfig.nonce
+      const emitCssFile = cssConfig.emitCssFile
+
+      if (emitCssFile) {
+        // Emit CSS as a separate asset file and return JS that injects a <link> tag
+        const fileName = `assets/${path.basename(id, '.css')}.css`
+        this.emitFile({
+          type: 'asset',
+          fileName,
+          source: rewritten,
+        })
+
+        return {
+          code: `
+const link = document.createElement('link');
+link.rel = 'stylesheet';
+link.href = ${JSON.stringify('/' + fileName)};
+document.head.appendChild(link);
+
+export default ${escaped};
+`,
+          moduleType: 'js',
+        }
+      }
+
+      // Default: inline <style> injection
+      const nonceAttr = nonce ? `style.setAttribute('nonce', ${JSON.stringify(nonce)});` : ''
       return {
         code: `
 const css = ${escaped};
 const style = document.createElement('style');
 style.setAttribute('data-nasti-css', ${JSON.stringify(id)});
+${nonceAttr}
 style.textContent = css;
 document.head.appendChild(style);
 
