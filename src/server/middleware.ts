@@ -436,11 +436,16 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   // 收集所有 __require("pkg")，替换为顶层 ESM import 的变量引用。
   code = rewriteExternalRequires(code)
 
-  // CJS 包的具名导出补全：
-  // rolldown 将 CJS 包包装为 __commonJSMin，只输出 export default，
-  // 导致 import { parse } from '/@modules/cookie' 等具名导入失败。
-  // 通过 createRequire 在 Node.js 侧加载 CJS 模块，取出 exports 的 key，
-  // 在 ESM bundle 末尾补上静态具名 export。
+  // CJS 包的具名导出补全 + ESM-interop default 解包：
+  // rolldown 将 CJS 包包装为 __commonJSMin，只输出 `export default require_xxx()`，
+  // 该调用返回的是整个 CJS exports 对象。这会引发两类问题：
+  //   1. 具名导入失败：`import { parse } from '/@modules/cookie'` 没有静态命名导出。
+  //   2. default 错误：当 CJS 模块自标 `__esModule: true` 且有 `default`
+  //      (tsc/babel 编译 ESM→CJS 的典型产物，如 `@gravity-ui/icons/Sun`)，
+  //      `import X from '...'` 会拿到整个 namespace 对象而不是真正的 default 值，
+  //      在 React 中表现为 "Element type is invalid... got: object"。
+  // 通过 createRequire 在 Node.js 侧加载 CJS 模块、读取 exports，在 bundle
+  // 末尾补具名 export，并按 Node import() interop 语义解包 default。
   if (code.includes('__commonJSMin')) {
     code = await injectCjsNamedExports(code, entryFile)
   }
@@ -637,14 +642,24 @@ async function injectCjsNamedExports(code: string, entryFile: string): Promise<s
     const namedKeys = Object.keys(cjsExports).filter(
       (k) => k !== '__esModule' && k !== 'default' && VALID_IDENT.test(k),
     )
-    if (namedKeys.length === 0) return code
+
+    // ESM-interop unwrap: when the CJS module marks itself as `__esModule` and
+    // exposes a `default` (typical for tsc/babel-compiled ESM emitted as CJS),
+    // rolldown's `export default require_xxx()` would expose the entire CJS
+    // namespace object instead of the inner `.default` — so `import X from "pkg/sub"`
+    // hands the consumer `{ __esModule: true, default: X }` rather than `X`,
+    // which breaks `<X />` in React with "Element type is invalid ... got: object".
+    // Mirror Node's `import()` interop and unwrap to `__cjsMod.default`.
+    const hasEsmInterop = cjsExports.__esModule === true && 'default' in cjsExports
+
+    if (!hasEsmInterop && namedKeys.length === 0) return code
 
     // 把末尾的 "export default require_xxx();" 改写为带具名 export 的形式
     return code.replace(
       /^export default (\w+\(\));?\s*$/m,
       (_, call) => [
         `const __cjsMod = ${call};`,
-        `export default __cjsMod;`,
+        hasEsmInterop ? `export default __cjsMod.default;` : `export default __cjsMod;`,
         ...namedKeys.map((k) => `export const ${k} = __cjsMod[${JSON.stringify(k)}];`),
       ].join('\n'),
     )
