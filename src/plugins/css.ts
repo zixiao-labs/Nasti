@@ -1,6 +1,7 @@
 // CSS 处理插件 - 处理 .css 导入
 import path from 'node:path'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
+import { compileTailwind, hasTailwindDirectives } from './tailwind.js'
 
 export function cssPlugin(config: ResolvedConfig): NastiPlugin {
   return {
@@ -11,11 +12,23 @@ export function cssPlugin(config: ResolvedConfig): NastiPlugin {
       return null
     },
 
-    transform(code, id) {
+    async transform(code, id) {
       if (!id.endsWith('.css')) return null
 
+      // Tailwind v4: when the stylesheet uses any v4 directive, hand the
+      // entire source to Tailwind. Tailwind's own compiler resolves all
+      // `@import`s (including bare specifiers like `@heroui/styles`), runs
+      // the oxide scanner to discover utility candidates, and emits a
+      // fully-flattened stylesheet — which is exactly what the browser
+      // needs when we inline the result into a `<style>` tag below.
+      let cssSource = code
+      if (hasTailwindDirectives(code)) {
+        const compiled = await compileTailwind(code, id, config.root)
+        cssSource = compiled.css
+      }
+
       // 将 CSS 中的相对 url() 路径重写为绝对路径，确保打包后资源路径正确
-      const rewritten = rewriteCssUrls(code, id, config.root)
+      const rewritten = rewriteCssUrls(cssSource, id, config.root)
 
       if (config.command === 'serve') {
         // Dev 模式: 将 CSS 转为 JS 模块，通过 style 标签注入
