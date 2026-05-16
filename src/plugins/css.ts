@@ -69,18 +69,19 @@ export default css;
 
       if (emitCssFile) {
         // Emit CSS as a separate asset file and return JS that injects a <link> tag
-        const fileName = `assets/${path.basename(id, '.css')}.css`
-        this.emitFile({
+        const ref = this.emitFile({
           type: 'asset',
-          fileName,
           source: rewritten,
         })
+        const fileName = this.getFileName(ref)
+        const base = config.base || '/'
+        const href = path.posix.join(base, fileName)
 
         return {
           code: `
 const link = document.createElement('link');
 link.rel = 'stylesheet';
-link.href = ${JSON.stringify('/' + fileName)};
+link.href = ${JSON.stringify(href)};
 document.head.appendChild(link);
 
 export default ${escaped};
