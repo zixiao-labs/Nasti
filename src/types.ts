@@ -98,6 +98,14 @@ export interface BuildConfig {
   target?: string | string[]
   rolldownOptions?: Record<string, unknown>
   emptyOutDir?: boolean
+  css?: CssConfig
+}
+
+export interface CssConfig {
+  /** CSP nonce to add to inline <style> tags */
+  nonce?: string
+  /** Emit CSS as separate files instead of inline injection (CSP-friendly) */
+  emitCssFile?: boolean
 }
 
 // Vite 兼容的插件接口
@@ -140,7 +148,7 @@ export interface ResolveIdOptions {
 
 export type ResolveIdResult = string | null | undefined | { id: string; external?: boolean }
 export type LoadResult = string | null | undefined | { code: string; map?: unknown }
-export type TransformResult = string | null | undefined | { code: string; map?: unknown }
+export type TransformResult = string | null | undefined | { code: string; map?: unknown; moduleType?: string }
 
 export interface EmittedFile {
   type: 'asset' | 'chunk'

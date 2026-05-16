@@ -25,6 +25,7 @@ const defaultBuild: Required<BuildConfig> = {
   target: 'es2022',
   rolldownOptions: {},
   emptyOutDir: true,
+  css: {},
 }
 
 // Electron 41+ 捆绑 Node 22.x / Chromium 138，故主进程目标默认 node22
