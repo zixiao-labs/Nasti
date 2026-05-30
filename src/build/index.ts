@@ -2,7 +2,7 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { rolldown } from 'rolldown'
-import type { NastiConfig, ResolvedConfig } from '../types.js'
+import type { NastiConfig } from '../types.js'
 import { resolveConfig } from '../config/index.js'
 import { resolvePlugin } from '../plugins/resolve.js'
 import { cssPlugin } from '../plugins/css.js'
@@ -97,12 +97,19 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   // Rolldown 1.x 把 `define` 从顶层 InputOptions 移到了 `transform.define`，
   // 顶层传入会触发 "Invalid key: Expected never but received 'define'" 警告并
   // 静默丢弃 —— 导致 `import.meta.env.*` 不被替换。
+  //
+  // 从 build.rolldownOptions 拆出 output（合并进 bundle.write()）与 transform
+  // （需与 envDefine 合并），其余 input 选项（treeshake / resolve / external / platform 等）
+  // 随 restInputOptions 透传给 rolldown()。Nasti 自管的 input / transform / plugins
+  // 显式放在 spread 之后，确保始终覆盖用户传入的同名键。
+  const { output: userOutput, transform: userTransform, ...restInputOptions } =
+    config.build.rolldownOptions
   // 合并用户的 transform.define 和 envDefine，确保 envDefine 优先级更高
-  const existingTransform = config.build.rolldownOptions?.transform as { define?: Record<string, any> } | undefined
-  const mergedDefine = { ...(existingTransform?.define ?? {}), ...envDefine }
+  const mergedDefine = { ...(userTransform?.define ?? {}), ...envDefine }
   const bundle = await rolldown({
+    ...restInputOptions,
     input: entryPoints,
-    transform: { ...existingTransform, define: mergedDefine },
+    transform: { ...userTransform, define: mergedDefine },
     plugins: [
       oxcTransformPlugin,
       // 转换 Nasti 插件为 Rolldown 插件格式
@@ -119,17 +126,19 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
         closeBundle: p.closeBundle as any,
       })),
     ],
-    ...(config.build.rolldownOptions as any),
   })
 
   const { output } = await bundle.write({
-    dir: outDir,
     format: 'esm',
     sourcemap: !!config.build.sourcemap,
     minify: !!config.build.minify,
     entryFileNames: 'assets/[name].[hash].js',
     chunkFileNames: 'assets/[name].[hash].js',
     assetFileNames: 'assets/[name].[hash][extname]',
+    // 用户可覆盖默认输出：代码拆分（advancedChunks / codeSplitting）、chunk 命名等
+    ...userOutput,
+    // dir 始终由 Nasti 掌管 —— 下方 HTML 改写依赖固定的产物目录，故放在最后强制生效
+    dir: outDir,
   })
 
   await bundle.close()

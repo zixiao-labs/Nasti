@@ -14,6 +14,8 @@ export type {
   NastiPlugin,
   ResolvedConfig,
   ElectronConfig,
+  BuildConfig,
+  NastiRolldownOptions,
   DevServer,
   ModuleNode,
   HmrPayload,

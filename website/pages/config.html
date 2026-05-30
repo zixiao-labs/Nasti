@@ -147,9 +147,32 @@
         <tr><td><code>sourcemap</code></td><td><code>boolean | 'inline' | 'hidden'</code></td><td><code>false</code></td><td>Source map</td></tr>
         <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
         <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
-        <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>传递给 Rolldown 的额外选项</td></tr>
+        <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>透传给 Rolldown 的底层选项，用于手动控制 <strong>Tree-shaking</strong>（<code>treeshake</code>）与<strong>代码拆分</strong>（<code>output.advancedChunks</code> / <code>output.codeSplitting</code>）。详见下方示例</td></tr>
       </tbody>
     </table>
+
+    <h3>rolldownOptions：手动控制代码拆分与 Tree-shaking</h3>
+    <p>生产应用常需手动分包（vendor / 按路由拆分）并精细化 Tree-shaking。<code>rolldownOptions</code> 的 input 侧选项（如 <code>treeshake</code>、<code>resolve</code>、<code>external</code>）会合并进 Rolldown，<code>output</code> 则合并进产物写出阶段（<code>bundle.write()</code>）。注：<code>input</code> / <code>plugins</code> 由 Nasti 接管，<code>output.dir</code> 始终由 <code>build.outDir</code> 决定。</p>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">build</span>: {
+    <span class="type">rolldownOptions</span>: {
+      <span class="comment">// Tree-shaking（input 选项）</span>
+      <span class="type">treeshake</span>: {
+        <span class="type">moduleSideEffects</span>: [{ <span class="type">test</span>: /\/barrel\//, <span class="type">sideEffects</span>: <span class="orange">false</span> }],
+      },
+      <span class="comment">// 代码拆分（output 选项）</span>
+      <span class="type">output</span>: {
+        <span class="type">advancedChunks</span>: {
+          <span class="type">groups</span>: [
+            { <span class="type">name</span>: <span class="string">'react-vendor'</span>, <span class="type">test</span>: /node_modules[\\/]react/, <span class="type">priority</span>: <span class="orange">20</span> },
+            { <span class="type">name</span>: <span class="string">'vendor'</span>, <span class="type">test</span>: /node_modules/, <span class="type">priority</span>: <span class="orange">10</span> },
+          ],
+        },
+        <span class="type">chunkFileNames</span>: <span class="string">'assets/chunks/[name].[hash].js'</span>,
+      },
+    },
+  },
+})</pre></div>
 
     <h2>electron 选项</h2>
     <p>仅在 <code>target: 'electron'</code> 时生效，要求 Electron 41+。完整示例见 <a href="/pages/electron.html">Electron 指南</a>。</p>

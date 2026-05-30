@@ -1,6 +1,8 @@
 // Nasti - 核心类型定义
 // 兼容 Vite Plugin 接口
 
+import type { InputOptions, OutputOptions } from 'rolldown'
+
 export interface NastiConfig {
   /** 项目根目录 */
   root?: string
@@ -96,9 +98,28 @@ export interface BuildConfig {
   minify?: boolean | 'oxc'
   sourcemap?: boolean | 'inline' | 'hidden'
   target?: string | string[]
-  rolldownOptions?: Record<string, unknown>
+  /**
+   * 透传给 Rolldown 的底层选项，供生产应用手动控制代码拆分与 Tree-shaking。
+   *
+   * - input 侧（`treeshake`、`resolve`、`external`、`platform` 等）会合并进 `rolldown()`；
+   * - `output` 会合并进 `bundle.write()`，用于控制代码拆分
+   *   （`output.advancedChunks` / `output.codeSplitting`）、chunk 命名等。
+   *
+   * 注：`input` 与 `plugins` 由 Nasti 管理，故不在此暴露；`output.dir` 始终由
+   * `build.outDir` 决定（HTML 改写依赖产物路径），传入会被忽略。
+   */
+  rolldownOptions?: NastiRolldownOptions
   emptyOutDir?: boolean
   css?: CssConfig
+}
+
+/**
+ * Nasti 暴露的 Rolldown 选项：在 Rolldown {@link InputOptions} 基础上去掉由 Nasti
+ * 接管的 `input` / `plugins`，并补充一个 `output` 出口用于 `bundle.write()`。
+ */
+export type NastiRolldownOptions = Omit<InputOptions, 'input' | 'plugins'> & {
+  /** 传给 `bundle.write()` 的输出选项：代码拆分（`advancedChunks` / `codeSplitting`）、chunk 命名等 */
+  output?: OutputOptions
 }
 
 export interface CssConfig {

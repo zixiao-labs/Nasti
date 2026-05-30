@@ -88,6 +88,31 @@ export default defineConfig({
 })
 ```
 
+### 生产构建：手动代码拆分 & Tree-shaking
+
+`build.rolldownOptions` 透传 Rolldown 底层选项：input 侧（如 `treeshake`、`resolve`、`external`）合并进打包，`output` 合并进产物写出阶段，用于手动控制 vendor 分包与 Tree-shaking。`input` / `plugins` 由 Nasti 接管，`output.dir` 始终由 `build.outDir` 决定。
+
+```ts
+export default defineConfig({
+  build: {
+    rolldownOptions: {
+      // Tree-shaking（input 选项）
+      treeshake: { moduleSideEffects: [{ test: /\/barrel\//, sideEffects: false }] },
+      // 代码拆分（output 选项）
+      output: {
+        advancedChunks: {
+          groups: [
+            { name: 'react-vendor', test: /node_modules[\\/]react/, priority: 20 },
+            { name: 'vendor', test: /node_modules/, priority: 10 },
+          ],
+        },
+        chunkFileNames: 'assets/chunks/[name].[hash].js',
+      },
+    },
+  },
+})
+```
+
 ## CLI
 
 ```bash
