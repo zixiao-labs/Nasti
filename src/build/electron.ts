@@ -149,24 +149,30 @@ async function bundleNode(
     },
   }
 
+  // 从 build.rolldownOptions 拆出 output（合并进 bundle.write()）与 transform
+  // （需与 envDefine 合并），其余 input 选项（treeshake 等）随 restInputOptions 透传。
+  // Nasti 自管的 input / platform / transform / plugins 放在 spread 之后确保覆盖。
+  const { output: userOutput, transform: userTransform, ...restInputOptions } =
+    config.build.rolldownOptions
   // 合并用户的 transform.define 和 envDefine，确保 envDefine 优先级更高
-  const existingTransform = config.build.rolldownOptions?.transform as { define?: Record<string, any> } | undefined
-  const mergedDefine = { ...(existingTransform?.define ?? {}), ...envDefine }
+  const mergedDefine = { ...(userTransform?.define ?? {}), ...envDefine }
   const bundle = await rolldown({
+    ...restInputOptions,
     input: entry,
-    transform: { ...existingTransform, define: mergedDefine },
     platform: 'node',
+    transform: { ...userTransform, define: mergedDefine },
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
-    ...(config.build.rolldownOptions as any),
   })
 
   fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
 
   await bundle.write({
-    file: opts.outFile,
-    format: opts.format === 'cjs' ? 'cjs' : 'esm',
     sourcemap: !!config.build.sourcemap,
     minify: !!config.build.minify,
+    // 允许用户微调 output；但主进程 / preload 的单文件约束由下方键强制保证
+    ...userOutput,
+    file: opts.outFile,
+    format: opts.format === 'cjs' ? 'cjs' : 'esm',
     codeSplitting: false,
   })
 
