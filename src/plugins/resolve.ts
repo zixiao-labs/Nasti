@@ -13,6 +13,23 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
     ([a], [b]) => b.length - a.length,
   )
 
+  // Vue：require.resolve('vue') 走 CJS 解析，命中 `main` 指向的「含编译器全量构建」。
+  // 预编译 SFC 的应用只需 runtime，应指向 `module` 字段的 runtime-only esm-bundler 构建，
+  // 否则整套模板编译器（~500kB）会被打进生产包。仅在 framework==='vue' 时启用，且只对
+  // **精确** 的 `vue` specifier 生效（不影响 `vue/xxx` 子路径）。启动时解析一次并缓存。
+  let vueRuntimeEntry: string | null = null
+  if (config.framework === 'vue') {
+    try {
+      const vuePkgJson = require.resolve('vue/package.json', { paths: [config.root] })
+      const vueDir = path.dirname(vuePkgJson)
+      const mod = JSON.parse(fs.readFileSync(vuePkgJson, 'utf-8')).module as string | undefined
+      const entry = path.join(vueDir, mod ?? 'dist/vue.runtime.esm-bundler.js')
+      if (fs.existsSync(entry)) vueRuntimeEntry = entry
+    } catch {
+      /* vue 尚未安装（如 configResolved 阶段）：忽略，回落到默认解析 */
+    }
+  }
+
   return {
     name: 'nasti:resolve',
     enforce: 'pre',
@@ -56,6 +73,8 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
 
       // 5. bare import (node_modules)
       if (!source.startsWith('/') && !source.startsWith('.')) {
+        // Vue runtime-only 重定向（见上方说明）
+        if (vueRuntimeEntry && source === 'vue') return vueRuntimeEntry
         try {
           const resolved = require.resolve(source, {
             paths: [importer ? path.dirname(importer) : config.root],

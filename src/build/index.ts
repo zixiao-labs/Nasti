@@ -7,6 +7,7 @@ import { resolveConfig } from '../config/index.js'
 import { resolvePlugin } from '../plugins/resolve.js'
 import { cssPlugin } from '../plugins/css.js'
 import { assetsPlugin } from '../plugins/assets.js'
+import { vuePlugin } from '../plugins/vue.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
@@ -64,7 +65,9 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   }
 
   // 构建内置插件 + 用户插件作为 Rolldown 插件
+  // vuePlugin 需排在最前（enforce: 'pre' 语义）：先把 .vue 编译成 JS，再交给后续插件。
   const builtinPlugins = [
+    ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
     resolvePlugin(config),
     cssPlugin(config),
     assetsPlugin(config),
@@ -105,7 +108,16 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   const { output: userOutput, transform: userTransform, ...restInputOptions } =
     config.build.rolldownOptions
   // 合并用户的 transform.define 和 envDefine，确保 envDefine 优先级更高
-  const mergedDefine = { ...(userTransform?.define ?? {}), ...envDefine }
+  // Vue（esm-bundler 构建）需要在打包期定义这些编译期常量，否则运行时会告警，
+  // 且无法对 options API / devtools 分支做 tree-shaking。放在最低优先级，允许用户覆盖。
+  const vueDefine: Record<string, string> = config.framework === 'vue'
+    ? {
+        __VUE_OPTIONS_API__: 'true',
+        __VUE_PROD_DEVTOOLS__: 'false',
+        __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'false',
+      }
+    : {}
+  const mergedDefine = { ...vueDefine, ...(userTransform?.define ?? {}), ...envDefine }
   const bundle = await rolldown({
     ...restInputOptions,
     input: entryPoints,

@@ -1,6 +1,7 @@
 // 内置 Vue 插件 - SFC 编译 + Vue HMR
 import crypto from 'node:crypto'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
+import { transformCode } from '../core/transformer.js'
 
 const VUE_FILE_RE = /\.vue$/
 const VUE_QUERY_RE = /\.vue\?vue&type=(script|template|style)(&index=\d+)?(&lang=\w+)?/
@@ -72,6 +73,10 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
           id: scopeId,
           isProd: !isDev,
           inlineTemplate: true,
+          // 让 compileScript 产出 `const __sfc__ = ...`（而非默认的 `export default {...}`）。
+          // 否则下方追加的 `__sfc__.render` / `__sfc__.__scopeId` / HMR 记录会引用一个
+          // 不存在的 `__sfc__`，并与 compileScript 自带的 `export default` 形成双重默认导出。
+          genDefaultAs: '__sfc__',
         })
         scriptCode = compiled.content
       }
@@ -88,8 +93,9 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
         templateCode = compiled.code
       }
 
-      // 组装输出
-      let output = scriptCode
+      // 组装输出。若 SFC 只有 <template> 而无任何 <script>，scriptCode 为空，
+      // 兜底一个空组件对象，保证后续 `__sfc__.render` / `__scopeId` 赋值成立。
+      let output = scriptCode || 'const __sfc__ = {}'
 
       if (templateCode) {
         output += `\n${templateCode}\n`
@@ -128,6 +134,17 @@ if (import.meta.hot) {
       }
 
       output += `\nexport default __sfc__\n`
+
+      // compileScript 对 lang="ts" 的 SFC 会在产物里保留 TS 注解 —— 不仅是用户脚本，
+      // 连内联 render 也带（如 `(_ctx: any, _cache: any) =>`、`($event: any) => ...`）。
+      // Nasti 的 oxc 转译按扩展名只处理 .ts/.tsx，不碰 .vue，所以这里显式把组装后的
+      // 产物按 TS 走一遍 oxc 剥离类型，产出纯 JS —— dev（浏览器原生 ESM）与 build
+      // （Rolldown 解析）都需要这一步，否则裸 TS 会直接触发解析错误。
+      const lang = descriptor.scriptSetup?.lang ?? descriptor.script?.lang
+      if (lang === 'ts') {
+        const transpiled = transformCode(`${id}.ts`, output, { sourcemap: false })
+        return { code: transpiled.code }
+      }
 
       return { code: output }
     },

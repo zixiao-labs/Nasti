@@ -16,13 +16,16 @@ import { handleFileChange } from './hmr.js'
 import { resolvePlugin } from '../plugins/resolve.js'
 import { cssPlugin } from '../plugins/css.js'
 import { assetsPlugin } from '../plugins/assets.js'
+import { vuePlugin } from '../plugins/vue.js'
 import { htmlPlugin } from '../plugins/html.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const config = await resolveConfig(inlineConfig, 'serve')
 
   // 组装内置插件 + 用户插件
+  // vuePlugin 排在最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道。
   const allPlugins = [
+    ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
     resolvePlugin(config),
     cssPlugin(config),
     assetsPlugin(config),
