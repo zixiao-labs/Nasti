@@ -1,6 +1,6 @@
 # Nasti 2.0 实施计划
 
-> 目标：在保持 1.x 行为不破坏的前提下，引入 **Environment API（多端）**、**SSR**、**完整打包模式（Full Bundle Mode）**、**Verbose 终端输出**，并把 **CSS** 管线做成 Rolldown 安全、可代码分割的产物。并为未来的Nuxt.js移植，Nuxt Labs合作，以及LightningTest测试框架，武陵Devops和Logos的后续开发奠定坚实的基础。
+> 目标：在保持 1.x 行为不破坏的前提下，引入 **Environment API（多端）**、**SSR**、**完整打包模式（Full Bundle Mode）**、**Verbose 终端输出**，并把 **CSS** 管线做成 Rolldown 安全、可代码分割的产物。并为未来的Nuxt.js移植，Nuxt Labs合作，以及LightningTest测试框架，NastiPress静态生成，武陵Devops和Logos的后续开发奠定坚实的基础。
 
 > 本计划基于对 **Vite v8.0.16** 源码的逐文件核对，以及对 Nasti 本地安装的 **rolldown@1.0.0-rc.13** 的运行时探测（见附录 A/B）。研究经过对抗式核验（10 个 agent / 5 路并行），下文凡标注 `✓核实` 的均已亲自验证。
 
