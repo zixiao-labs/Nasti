@@ -268,6 +268,35 @@ export async function transformRequest(
     }
   }
 
+  // 带「语义 query」的模块请求（如 Vue style 子块
+  // `/abs/App.vue?vue&type=style&index=0&lang.css`）：先问插件的 load → transform
+  // 管道，**不要求磁盘上存在对应文件**（虚拟子模块）。默认的"读盘 + 剥 query"
+  // 路径会把子模块错当成父模块整体重新编译（1.x 的 Vue dev 样式因此从未生效）。
+  // `?t=`（HMR 时间戳）除外。
+  const rawQuery = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+  if (rawQuery && !/^t=\d+$/.test(rawQuery)) {
+    const loaded = await pluginContainer.load(url)
+    if (loaded != null) {
+      let code = typeof loaded === 'string' ? loaded : loaded.code
+      const transformed = await pluginContainer.transform(code, url)
+      if (transformed != null) {
+        code = typeof transformed === 'string' ? transformed : transformed.code
+      }
+      const mod = await moduleGraph.ensureEntryFromUrl(url)
+      // file 关联磁盘上的父文件：父文件变更时子模块一并失效
+      moduleGraph.registerModule(mod, cleanReqUrl)
+      code = injectImportMetaHot(code, url)
+      code = replaceEnvInCode(code, ctx.envDefine ?? buildEnvDefine(
+        loadEnv(config.mode, config.root, config.envPrefix),
+        config.mode,
+      ))
+      code = rewriteImports(code, config, cleanReqUrl)
+      const transformResult = { code }
+      mod.transformResult = transformResult
+      return transformResult
+    }
+  }
+
   // 解析文件路径
   const filePath = resolveUrlToFile(url, config.root)
   if (!filePath || !fs.existsSync(filePath)) return null

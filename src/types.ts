@@ -33,6 +33,34 @@ export interface NastiConfig {
   clearScreen?: boolean
   /** 自定义 Logger（替换内置实现，logLevel 等选项由自定义实现自行处理） */
   customLogger?: Logger
+  /**
+   * 环境配置 map（Environment API，2.0）。默认注入 `{ client, ssr }`。
+   *
+   * `client` 环境与 top-level `resolve`/`build` **精确镜像**：对
+   * `environments.client` 的覆盖会写回 top-level（反之亦然），保证读 flat
+   * config 的既有插件与新 API 看到同一份配置。
+   */
+  environments?: Record<string, EnvironmentOptions>
+}
+
+/** 单个环境的可配置面（Environment API） */
+export interface EnvironmentOptions {
+  /**
+   * 产物消费者：决定 per-env 的 resolve 行为与 `import.meta.env.SSR` 取值。
+   * 默认：环境名为 'client' → 'client'，其余 → 'server'。
+   */
+  consumer?: 'client' | 'server'
+  /** per-env 路径解析（client 默认含 'browser' condition；server 走 node conditions） */
+  resolve?: ResolveConfig
+  /** per-env 构建覆盖（未设置的字段回退 top-level build） */
+  build?: BuildConfig
+}
+
+/** 解析后的环境配置 */
+export interface ResolvedEnvironmentOptions {
+  consumer: 'client' | 'server'
+  resolve: Required<ResolveConfig>
+  build: Required<BuildConfig>
 }
 
 /** Electron 目标专用配置，支持 Electron 41+ */
@@ -194,6 +222,20 @@ export interface NastiPlugin {
   // Vite 特有钩子
   config?: (config: NastiConfig, env: { mode: string; command: string }) => NastiConfig | null | void | Promise<NastiConfig | null | void>
   configResolved?: (config: ResolvedConfig) => void | Promise<void>
+  /**
+   * Environment API：在环境配置最终解析前调整单个环境的选项。
+   * 对每个环境名调用一次（含默认注入的 client/ssr）。
+   */
+  configEnvironment?: (
+    name: string,
+    options: EnvironmentOptions,
+    env: { mode: string; command: string },
+  ) => EnvironmentOptions | null | void | Promise<EnvironmentOptions | null | void>
+  /**
+   * Environment API：按环境过滤插件。返回 false 则该插件不进入此环境的
+   * 插件管线。未声明时插件应用于所有环境（与 Vite 默认一致）。
+   */
+  applyToEnvironment?: (environment: EnvironmentInstance) => boolean
   configureServer?: (server: DevServer) => void | (() => void) | Promise<void | (() => void)>
   transformIndexHtml?: (html: string) => string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] } | Promise<string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }>
   handleHotUpdate?: (ctx: HmrContext) => void | ModuleNode[] | Promise<void | ModuleNode[]>
@@ -203,6 +245,24 @@ export interface PluginContext {
   resolve: (source: string, importer?: string) => Promise<ResolveIdResult>
   emitFile: (file: EmittedFile) => string
   getModuleInfo: (id: string) => ModuleInfo | null
+  /**
+   * Environment API：当前钩子运行所在的环境（dev 管线中可用；
+   * 生产构建的 Rolldown 钩子注入在 Phase 2 接线）。
+   */
+  environment?: EnvironmentInstance
+}
+
+/**
+ * 环境实例的公共面（核心实现见 core/environment.ts 的 NastiEnvironment）。
+ * 插件经 `this.environment` / `applyToEnvironment(env)` 感知环境。
+ */
+export interface EnvironmentInstance {
+  name: string
+  consumer: 'client' | 'server'
+  mode: 'dev' | 'build'
+  config: ResolvedConfig
+  options: ResolvedEnvironmentOptions
+  hot: HotChannel
 }
 
 /**
@@ -266,6 +326,8 @@ export interface ModuleNode {
   transformResult: TransformResult | null
   lastHMRTimestamp: number
   isSelfAccepting: boolean
+  /** Environment API：节点所属环境名（per-env 模块图，默认 'client'） */
+  environment?: string
 }
 
 // 解析后的完整配置
@@ -286,15 +348,27 @@ export interface ResolvedConfig {
   clearScreen: boolean
   /** 已接线 logLevel 的 Logger 实例，所有 Nasti 输出统一经此通道 */
   logger: Logger
+  /**
+   * 解析后的环境 map（默认 client + ssr）。`environments.client` 的
+   * resolve/build 与 top-level **同引用**（精确镜像，运行时有断言校验）。
+   */
+  environments: Record<string, ResolvedEnvironmentOptions>
 }
 
 // Dev Server 接口
 export interface DevServer {
   config: ResolvedConfig
   middlewares: any // connect instance
+  /**
+   * client 环境模块图的别名（back-compat）。
+   * @deprecated 跟随 Vite 退役 flat `server.*` 的方向，2.x 移除；
+   * 新代码请用 `server.environments.client.moduleGraph`。
+   */
   moduleGraph: ModuleGraph
   watcher: any // chokidar FSWatcher
   ws: WebSocketServer
+  /** Environment API：per-env 环境实例（Phase 1 仅 client 有完整运行时） */
+  environments: Record<string, EnvironmentInstance>
   listen: (port?: number) => Promise<DevServer>
   close: () => Promise<void>
   transformRequest: (url: string) => Promise<TransformResult>
@@ -312,6 +386,40 @@ export interface ModuleGraph {
 export interface WebSocketServer {
   send: (payload: HmrPayload) => void
   close: () => void
+}
+
+// ─── HotChannel（Environment API 的 per-env 热更通道）─────────────────────
+//
+// 接口一次性定全（含 invoke 契约：fetchModule / getBuiltins / _skipFsCheck，
+// 供 Phase 2 的 SSR module runner 与未来 edge transport 使用，避免重构）。
+// Phase 1 的实现面：client = ws 包装；非 client = noop。
+
+export type HotChannelListener = (data: unknown, client: HotChannelClient) => void
+
+export interface HotChannelClient {
+  send: (payload: HmrPayload) => void
+}
+
+/** module runner 经 invoke 调用的 RPC 方法集（Vite DevEnvironment.hot.setInvokeHandler 同构） */
+export interface HotChannelInvokeHandlers {
+  /** runner 回调 fetchModule → transformRequest → 求值 */
+  fetchModule: (id: string, importer?: string, options?: { cached?: boolean }) => Promise<unknown>
+  /** server 环境的内建模块清单（string/RegExp，序列化需对齐 runner 期望） */
+  getBuiltins?: () => Promise<Array<string | RegExp>> | Array<string | RegExp>
+  /** 网络暴露的 transport 跳过文件系统存在性检查（安全相关，显式带上） */
+  _skipFsCheck?: boolean
+}
+
+export interface HotChannel {
+  /** 向该环境的所有客户端广播 */
+  send: (payload: HmrPayload) => void
+  /** 监听客户端自定义事件（custom events / invoke transport） */
+  on?: (event: string, listener: HotChannelListener) => void
+  off?: (event: string, listener: HotChannelListener) => void
+  listen?: () => void
+  close?: () => void | Promise<void>
+  /** 注册 invoke 处理器（SSR runner 的 RPC 桥；Phase 1 仅定义契约） */
+  setInvokeHandler?: (handlers: HotChannelInvokeHandlers | undefined) => void
 }
 
 export interface HmrContext {

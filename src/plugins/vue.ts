@@ -4,7 +4,9 @@ import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { transformCode } from '../core/transformer.js'
 
 const VUE_FILE_RE = /\.vue$/
-const VUE_QUERY_RE = /\.vue\?vue&type=(script|template|style)(&index=\d+)?(&lang=\w+)?/
+// 同时接受 2.0 的 `&lang.css`（Vite 约定，id 以 .css 结尾可被 css 插件接管）
+// 与 1.x 的 `&lang=css`（向后兼容已缓存的 URL）
+const VUE_QUERY_RE = /\.vue\?vue&type=(script|template|style)(&index=\d+)?(&lang[.=]\w+)?/
 
 interface VueCompilerSfc {
   parse: (source: string, options?: any) => any
@@ -41,6 +43,47 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
       return null
     },
 
+    // 虚拟子模块必须有 load 钩子：build 下 Rolldown 否则会按字面路径读盘，
+    // 抛 UNLOADABLE_DEPENDENCY（1.x Vue 生产构建因此直接失败）。
+    // style 子块在这里编译成 CSS 字符串，交给 css 插件统一处理
+    // （dev = <style> 注入 + HMR；build = CssEngine 抽取成 hashed .css）。
+    async load(id) {
+      const match = id.match(/(.+\.vue)\?vue&type=style(?:&index=(\d+))?/)
+      if (!match) return null
+
+      const sfc = await loadVueCompiler()
+      if (!sfc) return null
+
+      const [, filePath, indexStr] = match
+      let descriptor = descriptorCache.get(filePath)
+      if (!descriptor) {
+        // 直接请求子模块（如 dev 冷启动 / 缓存失效）时按需重新解析父 SFC
+        try {
+          const fs = await import('node:fs')
+          const source = fs.readFileSync(filePath, 'utf-8')
+          const parsed = sfc.parse(source, { filename: filePath })
+          if (parsed.errors.length) return null
+          descriptor = parsed.descriptor
+          descriptorCache.set(filePath, descriptor)
+        } catch {
+          return null
+        }
+      }
+
+      const index = parseInt(indexStr ?? '0', 10)
+      const style = descriptor.styles[index]
+      if (!style) return null
+
+      const scopeId = hashId(filePath)
+      const result = await sfc.compileStyleAsync({
+        source: style.content,
+        filename: filePath,
+        id: `data-v-${scopeId}`,
+        scoped: style.scoped ?? false,
+      })
+      return result.code as string
+    },
+
     async transform(code, id) {
       // 处理 .vue 文件
       if (!VUE_FILE_RE.test(id) && !VUE_QUERY_RE.test(id)) return null
@@ -51,9 +94,10 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
         return null
       }
 
-      // 处理虚拟模块请求（子块）
+      // 处理虚拟模块请求（子块）。style 子块的内容由上方 load 钩子产出 CSS，
+      // 后续交给 css 插件（dev 注入 / build 抽取），这里不再拦截。
       if (VUE_QUERY_RE.test(id)) {
-        return handleVueSubBlock(id, sfc, descriptorCache, config)
+        return null
       }
 
       // 解析 SFC
@@ -102,12 +146,10 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
         output += `\n__sfc__.render = render\n`
       }
 
-      // style 导入
+      // style 导入（&lang.css 结尾 —— css 插件按 .css 后缀接管该虚拟模块）
       if (descriptor.styles.length > 0) {
         for (let i = 0; i < descriptor.styles.length; i++) {
-          const style = descriptor.styles[i]
-          const lang = style.lang ?? 'css'
-          output += `\nimport "${id}?vue&type=style&index=${i}&lang=${lang}"\n`
+          output += `\nimport "${id}?vue&type=style&index=${i}&lang.css"\n`
         }
       }
 
@@ -164,52 +206,6 @@ if (import.meta.hot) {
   }
 }
 
-async function handleVueSubBlock(
-  id: string,
-  sfc: VueCompilerSfc,
-  cache: Map<string, any>,
-  config: ResolvedConfig,
-): Promise<{ code: string } | null> {
-  const match = id.match(/(.+\.vue)\?vue&type=(\w+)(?:&index=(\d+))?(?:&lang=(\w+))?/)
-  if (!match) return null
-
-  const [, filePath, type, indexStr, lang] = match
-  const descriptor = cache.get(filePath)
-  if (!descriptor) return null
-
-  if (type === 'style') {
-    const index = parseInt(indexStr ?? '0', 10)
-    const style = descriptor.styles[index]
-    if (!style) return null
-
-    const scopeId = hashId(filePath)
-    const result = await sfc.compileStyleAsync({
-      source: style.content,
-      filename: filePath,
-      id: `data-v-${scopeId}`,
-      scoped: style.scoped ?? false,
-    })
-
-    // 将 CSS 转为 JS 模块注入
-    const cssCode = JSON.stringify(result.code)
-    return {
-      code: `
-const css = ${cssCode};
-const style = document.createElement('style');
-style.setAttribute('data-v-${scopeId}', '');
-style.textContent = css;
-document.head.appendChild(style);
-
-if (import.meta.hot) {
-  import.meta.hot.accept();
-  import.meta.hot.prune(() => style.remove());
-}
-`,
-    }
-  }
-
-  return null
-}
 
 function hashId(filename: string): string {
   return crypto.createHash('sha256').update(filename).digest('hex').slice(0, 8)

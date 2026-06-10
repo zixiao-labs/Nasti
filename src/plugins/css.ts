@@ -22,9 +22,11 @@ export function cssPlugin(config: ResolvedConfig, engine?: CssEngine): NastiPlug
     },
 
     async transform(code, id) {
-      // 带 ?raw / ?url 的请求交给 assets 插件；?inline 在下方单独处理
+      // 匹配 .css 文件与 .css 结尾的虚拟模块（如 Vue style 子块
+      // `App.vue?vue&type=style&index=0&lang.css`）；?raw / ?url 交给 assets 插件
       const [file, query = ''] = id.split('?', 2)
-      if (!file.endsWith('.css')) return null
+      const isCssRequest = file.endsWith('.css') || /\.css$/.test(id)
+      if (!isCssRequest) return null
       if (query === 'raw' || query === 'url') return null
 
       // Tailwind v4: when the stylesheet uses any v4 directive, hand the

@@ -8,40 +8,45 @@ import { watch } from 'chokidar'
 import pc from 'picocolors'
 import type { NastiConfig, ResolvedConfig, DevServer } from '../types.js'
 import { resolveConfig } from '../config/index.js'
-import { PluginContainer } from '../core/plugin-container.js'
-import { ModuleGraph } from '../core/module-graph.js'
+import { NastiEnvironment } from '../core/environment.js'
+import { createWsHotChannel } from '../core/hot-channel.js'
 import { printServerUrls } from '../core/logger.js'
 import { createWebSocketServer } from './ws.js'
 import { transformMiddleware } from './middleware.js'
 import { handleFileChange } from './hmr.js'
-import { resolvePlugin } from '../plugins/resolve.js'
-import { cssPlugin } from '../plugins/css.js'
-import { assetsPlugin } from '../plugins/assets.js'
-import { vuePlugin } from '../plugins/vue.js'
-import { htmlPlugin } from '../plugins/html.js'
+import { resolvePluginList } from '../plugins/builtins.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
   const config = await resolveConfig(inlineConfig, 'serve')
   const logger = config.logger
 
-  // 组装内置插件 + 用户插件
-  // vuePlugin 排在最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道。
-  const allPlugins = [
-    ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
-    resolvePlugin(config),
-    cssPlugin(config),
-    assetsPlugin(config),
-    htmlPlugin(config),
-    ...config.plugins,
-  ]
+  // 组装内置插件 + 用户插件（per-env 统一拼装函数）
+  const allPlugins = resolvePluginList(config, config.plugins)
   const configWithPlugins: ResolvedConfig = { ...config, plugins: allPlugins }
-
-  const moduleGraph = new ModuleGraph()
-  const pluginContainer = new PluginContainer(configWithPlugins)
 
   // HTTP 服务
   const app = connect()
+  const httpServer = http.createServer(app)
+  const ws = createWebSocketServer(httpServer)
+
+  // ── Environment API：client 环境承载 dev 运行时（per-env 容器/图/热通道）──
+  // ssr 等其余环境 Phase 1 只有配置形态（consumer/resolve），不建容器 ——
+  // 生命周期钩子默认 client 单次触发，避免插件副作用重复。
+  const clientEnv = new NastiEnvironment('client', configWithPlugins, {
+    hot: createWsHotChannel(ws),
+    mode: 'dev',
+    plugins: allPlugins,
+  })
+  await clientEnv.init()
+  const environments: Record<string, NastiEnvironment> = { client: clientEnv }
+  for (const name of Object.keys(config.environments)) {
+    if (name === 'client') continue
+    environments[name] = new NastiEnvironment(name, configWithPlugins, { mode: 'dev' })
+  }
+
+  const moduleGraph = clientEnv.moduleGraph
+  const pluginContainer = clientEnv.pluginContainer!
 
   // 转译中间件（处理 .ts, .tsx, .jsx, .css, .vue 等）
   app.use(transformMiddleware({
@@ -54,9 +59,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const publicDir = path.resolve(config.root, 'public')
   app.use(sirv(publicDir, { dev: true, etag: true }))
   app.use(sirv(config.root, { dev: true, etag: true }))
-
-  const httpServer = http.createServer(app)
-  const ws = createWebSocketServer(httpServer)
 
   // 文件监听
   // chokidar v4 不再把 `ignored` 字符串当作 glob 处理，而是按字面值精确匹配
@@ -97,6 +99,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     moduleGraph: moduleGraph as any,
     watcher,
     ws,
+    environments,
 
     async listen(port?: number) {
       const finalPort = port ?? config.server.port

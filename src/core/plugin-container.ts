@@ -9,6 +9,7 @@ import type {
   LoadResult,
   TransformResult,
   ModuleInfo,
+  EnvironmentInstance,
 } from '../types.js'
 
 export class PluginContainer {
@@ -16,9 +17,12 @@ export class PluginContainer {
   private config: ResolvedConfig
   private ctx: PluginContext
   private emittedFiles: Map<string, { fileName: string; source: string | Uint8Array }> = new Map()
+  /** Environment API：容器所属环境（未传时为 undefined，行为同 1.x client） */
+  readonly environment?: EnvironmentInstance
 
-  constructor(config: ResolvedConfig) {
+  constructor(config: ResolvedConfig, environment?: EnvironmentInstance) {
     this.config = config
+    this.environment = environment
     // 按 enforce 排序: pre → normal → post
     this.plugins = sortPlugins(config.plugins)
     this.ctx = this.createContext()
@@ -42,6 +46,7 @@ export class PluginContainer {
       getModuleInfo(_id): ModuleInfo | null {
         return null
       },
+      environment: container.environment,
     }
   }
 
@@ -71,13 +76,15 @@ export class PluginContainer {
     importer?: string,
     options: { isEntry?: boolean } = {},
   ): Promise<ResolveIdResult> {
+    // ssr 标志由环境 consumer 派生（1.x 写死 false；client 环境行为不变）
+    const ssr = this.environment?.consumer === 'server'
     for (const plugin of this.plugins) {
       if (!plugin.resolveId) continue
       const result = await plugin.resolveId.call(
         this.ctx,
         source,
         importer ?? undefined,
-        { isEntry: options.isEntry ?? false, ssr: false },
+        { isEntry: options.isEntry ?? false, ssr },
       )
       if (result != null) return result
     }

@@ -54,9 +54,17 @@ export function loadEnv(mode: string, root: string, prefixes: string[]): EnvReco
 /**
  * 将过滤后的 env 转为 Rolldown define 对象
  * 例: { VITE_FOO: 'bar' } → { 'import.meta.env.VITE_FOO': '"bar"' }
- * 同时注入 import.meta.env.MODE / DEV / PROD
+ * 同时注入 import.meta.env.MODE / DEV / PROD / SSR
+ *
+ * per-env define 钩子（Phase1→Phase2 接口契约）：`overrides` 允许调用方按
+ * 环境覆盖任意 define —— server 环境传 `ssrDefineOverrides('server')` 注入
+ * `import.meta.env.SSR='true'`，不再写死 'false'。
  */
-export function buildEnvDefine(env: EnvRecord, mode: string): Record<string, string> {
+export function buildEnvDefine(
+  env: EnvRecord,
+  mode: string,
+  overrides: Record<string, string> = {},
+): Record<string, string> {
   const define: Record<string, string> = {}
 
   for (const [key, value] of Object.entries(env)) {
@@ -68,7 +76,12 @@ export function buildEnvDefine(env: EnvRecord, mode: string): Record<string, str
   define['import.meta.env.PROD'] = mode === 'production' ? 'true' : 'false'
   define['import.meta.env.SSR'] = 'false'
 
-  return define
+  return { ...define, ...overrides }
+}
+
+/** 按环境 consumer 派生 import.meta.env.SSR 的 define 覆盖 */
+export function ssrDefineOverrides(consumer: 'client' | 'server'): Record<string, string> {
+  return { 'import.meta.env.SSR': consumer === 'server' ? 'true' : 'false' }
 }
 
 /**

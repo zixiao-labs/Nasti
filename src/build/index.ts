@@ -4,15 +4,12 @@ import fs from 'node:fs'
 import { rolldown } from 'rolldown'
 import type { NastiConfig, HtmlTagDescriptor } from '../types.js'
 import { resolveConfig } from '../config/index.js'
-import { resolvePlugin } from '../plugins/resolve.js'
-import { cssPlugin } from '../plugins/css.js'
-import { cssPostPlugin } from '../plugins/css-post.js'
+import { resolvePluginList } from '../plugins/builtins.js'
+import { NastiEnvironment } from '../core/environment.js'
 import { createCssEngine } from '../core/css-engine.js'
-import { assetsPlugin } from '../plugins/assets.js'
-import { vuePlugin } from '../plugins/vue.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
-import { loadEnv, buildEnvDefine } from '../core/env.js'
+import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
@@ -72,17 +69,16 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
     throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
   }
 
-  // 构建内置插件 + 用户插件作为 Rolldown 插件
-  // vuePlugin 需排在最前（enforce: 'pre' 语义）：先把 .vue 编译成 JS，再交给后续插件。
-  // cssPostPlugin 在最后（enforce: 'post' 语义）：renderChunk 聚合 CSS 抽取产物。
+  // 构建插件列表（per-env 统一拼装：[vue?]→resolve→css→assets→用户→css-post），
+  // 再经 client 构建环境的 applyToEnvironment 过滤（Environment API）。
   const cssEngine = createCssEngine()
-  const builtinPlugins = [
-    ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
-    resolvePlugin(config),
-    cssPlugin(config, cssEngine),
-    assetsPlugin(config),
-  ]
-  const allPlugins = [...builtinPlugins, ...config.plugins, cssPostPlugin(config, cssEngine)]
+  const pluginList = resolvePluginList(config, config.plugins, { cssEngine })
+  const clientEnv = new NastiEnvironment('client', { ...config, plugins: pluginList }, {
+    mode: 'build',
+    plugins: pluginList,
+  })
+  await clientEnv.init()
+  const allPlugins = clientEnv.plugins
 
   // 运行插件的 buildStart 钩子，并收集 emitFile 输出文件
   const pluginContainer = new PluginContainer(config)
@@ -102,9 +98,9 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
     },
   }
 
-  // 加载环境变量并生成 define 替换表
+  // 加载环境变量并生成 define 替换表（per-env define 钩子：SSR 由 consumer 派生）
   const env = loadEnv(config.mode, config.root, config.envPrefix)
-  const envDefine = buildEnvDefine(env, config.mode)
+  const envDefine = buildEnvDefine(env, config.mode, ssrDefineOverrides(clientEnv.consumer))
 
   // 调用 Rolldown
   // Rolldown 1.x 把 `define` 从顶层 InputOptions 移到了 `transform.define`，

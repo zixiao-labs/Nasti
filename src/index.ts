@@ -9,6 +9,13 @@ export { startElectronDev } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
 export { monacoEditorPlugin } from './plugins/monaco-editor.js'
 
+// 2.0: Environment API + Logger
+export { NastiEnvironment, resolveEnvironmentPlugins } from './core/environment.js'
+export { createNoopHotChannel, createWsHotChannel } from './core/hot-channel.js'
+export { createLogger, printServerUrls, LogLevels } from './core/logger.js'
+export { createDebugger } from './core/debug.js'
+export { loadEnv, buildEnvDefine, ssrDefineOverrides } from './core/env.js'
+
 export type {
   NastiConfig,
   NastiPlugin,
@@ -20,7 +27,17 @@ export type {
   ModuleNode,
   HmrPayload,
   TransformResult,
+  // 2.0: Environment API
+  EnvironmentOptions,
+  ResolvedEnvironmentOptions,
+  EnvironmentInstance,
+  HotChannel,
+  HotChannelClient,
+  HotChannelInvokeHandlers,
+  PluginContext,
+  RenderChunkContext,
 } from './types.js'
+export type { Logger, LogLevel, LogOptions } from './core/logger.js'
 export type {
   MonacoEditorPluginOptions,
   MonacoEditorLanguageWorker,

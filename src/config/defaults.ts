@@ -48,7 +48,7 @@ const defaultElectron: Required<ElectronConfig> = {
   external: ['electron'],
 }
 
-export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger'>> & { plugins: [] } = {
+export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | 'environments'>> & { plugins: [] } = {
   root: '.',
   base: '/',
   mode: 'development',

@@ -40,15 +40,13 @@ export function createCssEngine(): CssEngine {
 }
 
 /**
- * 规范化模块 id：去掉 Rolldown 虚拟模块的 null-byte 前缀与 query。
+ * 规范化模块 id：去掉 Rolldown 虚拟模块的 null-byte 前缀。
+ * **保留 query** —— Vue style 子块（`App.vue?vue&type=style&...&lang.css`）与
+ * 父模块 `App.vue` 是不同模块，剥 query 会让二者 key 撞车导致 CSS 重复输出。
  * chunk.moduleIds 里的 id 必须与 transform 期注册的 key 一致 —— 两侧都过这个函数。
  */
 export function normalizeCssModuleId(id: string): string {
-  let normalized = id
-  if (normalized.startsWith('\0')) normalized = normalized.slice(1)
-  const queryIdx = normalized.indexOf('?')
-  if (queryIdx !== -1) normalized = normalized.slice(0, queryIdx)
-  return normalized
+  return id.startsWith('\0') ? id.slice(1) : id
 }
 
 let lightningCss: typeof import('lightningcss') | null | undefined
