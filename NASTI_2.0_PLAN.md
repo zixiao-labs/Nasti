@@ -89,6 +89,7 @@ interface EnvironmentOptions {
 - 统一 `server/index.ts:27-34` 与 `build/index.ts:69-75` 的内置插件拼装为**一个 per-env 函数**。
 - `server.moduleGraph` 保留为 client 图别名（加未来弃用注记，跟随 Vite 退役 flat `server.*`）。
 - **back-compat 镜像**：top-level `resolve`/`build` ↔ `environments.client` 必须精确镜像，否则现有插件全炸。默认一切按 client 行为。
+- **运行时验证（Phase 1 检查）**：在 config 初始化路径（plugin-container 构造/environment 暴露时）和构建 per-env 插件的函数中（统一 server/index.ts:27-34 和 build/index.ts:69-75 的代码），添加仅在开发模式下（默认）启用的断言，比较 top-level `resolve`/`build` 对象与 `environments.client` 的序列化表示（包括 sourcemap 和 timestamp 策略）是否逐字节一致。不匹配时抛出/记录清晰的错误。文档化精确的比较规则（包含/排除哪些字段）。提供 opt-in 回归测试运行器，自动跨示例项目比较快照。
 
 ---
 
@@ -122,7 +123,7 @@ interface EnvironmentOptions {
 3. 经现有 `processHtml`/`HtmlTagDescriptor`（html.ts）向 index.html 注入静态 `<link rel=stylesheet>`。
 4. `augmentChunkHash` 把 importedCss 折进 JS chunk hash（缓存正确性）；`getEmptyChunkReplacer` 清理纯 CSS chunk 产生的空 JS。
 
-> **关键仓库事实（✓核实）**：build/index.ts:128-139 把 Nasti 插件映射成**真正的 Rolldown 插件**，但只转发 `resolveId/load/transform/buildStart/buildEnd/closeBundle`。因此 **`renderChunk` 必须同时加进 `NastiPlugin` 类型 *和* 这张转发表**；转发后 `this.emitFile`/`this.getFileName` 才是 Rolldown 真正的 Rollup 兼容 context（**不是** plugin-container.ts:33-41 那个只在 buildStart 用的 stub）。
+> **关键仓库事实（✓核实）**：build/index.ts:128-139 把 Nasti 插件映射成**真正的 Rolldown 插件**，但只转发 `resolveId/load/transform/buildStart/buildEnd/closeBundle`。因此 **`renderChunk` 必须同时加进 `NastiPlugin` 类型 *和* 这张转发表**；转发后 `this.emitFile`/`this.getFileName` 才是 Rolldown 真正的 Rollup 兼容 context（**不是** plugin-container.ts:33-41 那个只在 buildStart 用的 stub）。**实施**：在 Nasti-to-Rolldown 插件映射器（build/index.ts 的映射逻辑）中添加 renderChunk，将其绑定/转发到真实的 Rollup context（this.emitFile 和 this.getFileName 是 Rollup 兼容实现）。更新 NastiPlugin 类型以包含 renderChunk 钩子签名。添加最小测试调用 plugin.renderChunk 并断言 this.emitFile/this.getFileName 存在且行为正确。将此变更标记为 Phase 0 阻塞项（见附录 C）。
 
 > **校正（来自核验）**：Vite 8 **默认转换器是 PostCSS**，只有**压缩器**默认 Lightning CSS。所以 Nasti 选 Lightning CSS 是**有意为之的取舍**（纯 Rust、依赖更小），需如实标注，**不要**说成"对齐 Vite 默认转换器"。
 
@@ -162,7 +163,7 @@ interface EnvironmentOptions {
   > 对照 Vite：`DevEnvironment.hot.setInvokeHandler({fetchModule, getBuiltins})` 是 RPC 桥，runner 回调 `fetchModule`→`transformRequest`→求值（✓核实 `server/environment.ts:146-160,230-249`）。
 - **Prod 构建**：per-env builder 出 SSR bundle（node conditions、server mainFields、builtins 外部化）。
 - `ssrLoadModule` 作为 runner 的 back-compat shim。
-- **`import.meta.env.SSR` 必须 consumer 派生**：`core/env.ts` 的 `buildEnvDefine` 现把它写死 `'false'`，server 图需为 `true`。
+- **`import.meta.env.SSR` 必须 consumer 派生**：更新 `core/env.ts` 中的 `buildEnvDefine`，不再硬编码 `import.meta.env.SSR='false'`，而是提供 per-env define 钩子（例如接受 overrides map 或 callback），允许调用方为 server vs client 分别设置。使 `build/index.ts` 和 dev server 构造调用该钩子以为 server 运行注入 `SSR='true'`。在 §4 中记录 Phase1→Phase2 接口契约为"per-env define hook for import.meta.env.SSR"，并添加"define mechanism supports per-env overrides"到 Phase 1 退出标准（附录 C），确保 per-env define 已实现且可测试。
 - `isSsrTargetWebworker` 是 edge/worker 的先例（server consumer + browser-like resolve）。
 
 **新增**：`server/runnable-environment.ts`
@@ -218,6 +219,13 @@ class DevEngine {
 
 **风险（最高）**：rc.13 实验 API 无 semver；Nasti 的 per-request PluginContainer 变换（虚拟模块、import 改写、env define、`bundlePackageAsEsm` + react-aria 等 subpath shim）若不重表达为 Rolldown/OXC 插件**会静默失效**；node_modules 交给 Rolldown 单图后，bespoke 修复可能回归。→ **严格 opt-in，unbundled 保持默认**；推广前移植关键变换为 Rolldown 插件 + 加 react-aria context-identity 回归测试。
 
+**渐进迁移策略与兼容性矩阵**：为避免静默破坏，采用分阶段迁移 per-request PluginContainer 转换到 Rolldown/OXC 插件：
+- **Phase 3.0**：迁移无状态转换（如 env define）以验证 DevEngine 机制。
+- **Phase 3.1**：增量迁移虚拟模块和 import-rewrite 转换，每个转换配对 unbundled vs bundled 回归测试。
+- **Phase 3.2**：最后处理生态系统 shim（如 react-aria context-identity、bundlePackageAsEsm/subpath shim），持续监控。
+- **严格 opt-in bundled 模式**：保持 unbundled 为默认。添加"bundled mode compatibility matrix"列出已验证可用的 Nasti 功能/插件。
+- **迁移要求**：任何被移植的 per-request PluginContainer 转换必须包含自动化配对回归测试和 rollout 检查清单，确认后才能移除旧路径。
+
 ---
 
 ## 3. 分阶段路线图
@@ -225,7 +233,7 @@ class DevEngine {
 | 阶段 | 目标 | 依赖 | 退出标准 |
 |---|---|---|---|
 | **Phase 0**：输出 + CSS 地基 | 真·体积表、dev banner、HMR 日志、debug 命名空间；CSS 真·per-chunk hash 抽取 | 无 | `nasti build` 打印 Vite 形态的对齐 gzip 表 + 黄色大 chunk 警告；`nasti dev` 显示 ready-in + Local/Network；HMR 打 `hmr update`/`page reload`；`DEBUG=nasti:*` 生效；多组件共享 CSS 产出 content-hash 的 `assets/*.css` 经 `<link>` 注入（产物无运行时 `<style>`），CSS 变则 JS chunk hash 变，无 Rolldown 报错 |
-| **Phase 1**：Environment 主干 | environments 配置 map + consumer + per-env container/graph/hot + `this.environment` | Phase 0 | `config.environments.client/.ssr` 含正确 per-consumer resolve；插件可读 `this.environment`；React/Vue/Electron 示例前后逐字节一致；`applyToEnvironment` 过滤正确。**尚无 SSR 执行** |
+| **Phase 1**：Environment 主干 | environments 配置 map + consumer + per-env container/graph/hot + `this.environment` | Phase 0 | `config.environments.client/.ssr` 含正确 per-consumer resolve；插件可读 `this.environment`；React/Vue/Electron 示例前后逐字节一致；`applyToEnvironment` 过滤正确；define mechanism supports per-env overrides（per-env define hook for import.meta.env.SSR 已实现且可测试）；运行时验证断言 top-level resolve/build 与 environments.client 镜像一致。**尚无 SSR 执行** |
 | **Phase 2**：多端 builder + SSR | builder 迭代 environments；Electron 折入；`RunnableEnvironment`（moduleRunnerTransform） | Phase 1 | `nasti build` 串行跑 N 个环境；Electron 经 env 模型产物与旧 bespoke 一致；最小 SSR 应用经 RunnableEnvironment（ssrLoadModule shim）服务端渲染，node conditions 正确、server 图 `import.meta.env.SSR===true` |
 | **Phase 3**：完整打包模式 | `experimental.bundledDev`（`--bundle`）：DevEngine + 内存产物 + onHmrUpdates 驱动 HMR | Phase 2 | `--bundle` 冷启动服务内存 bundle；单文件改动出 Patch 无整页刷新；边界破坏触发 full reload；动态 import 经 `/@nasti/lazy` 编译；多 tab 不冲突；React Fast Refresh 经原生 wrapper 工作；错误进 overlay。**unbundled 仍为默认且不变** |
 
@@ -241,7 +249,7 @@ class DevEngine {
 3. **Logger vs 全部**：先落地，否则新代码（reporter、dev-engine overlay、hmr 日志）要从 `console.*` 回填。
 4. **React Fast Refresh 双实现**：unbundled 用服务端 per-module wrapper；bundled 用原生 `viteReactRefreshWrapperPlugin`——两者边界行为要一致。
 5. **`emitFile` 三条路径别混**：PluginContainer stub（plugin-container.ts:33-41，仅 buildStart）/ Rolldown 真 context（renderChunk 必须用这条）/ assets.ts sha256（应统一到 Rolldown `assetFileNames`）。
-6. **`env.ts` 全局写死 `import.meta.env.SSR='false'`**：SSR 需 consumer 派生，把 consumer 耦合进 build/dev 共享的 define 构造。
+6. **`env.ts` per-env define for import.meta.env.SSR**：`buildEnvDefine` 不再硬编码 `import.meta.env.SSR='false'`，改为 per-env define 钩子（overrides map/callback），build/index.ts 和 dev server 调用它为 server 注入 `SSR='true'`。Phase1→Phase2 接口契约："per-env define hook for import.meta.env.SSR"。
 
 ---
 
@@ -293,5 +301,5 @@ class DevEngine {
 - `require("rolldown/experimental")`：38 导出；`dev`/`DevEngine`/`moduleRunnerTransform`/`scan`/`viteReporterPlugin`/`viteReactRefreshWrapperPlugin` + 全套 `vite*` 插件**均为 function**；**`memfs` 运行时 `undefined`**（native 构建，仅 WASI 提供）。
 - `experimental-index.d.mts`：`DevEngine`/`DevOptions{onHmrUpdates,onOutput,rebuildStrategy,watch.skipWrite}` 签名见 §2.5。
 
-## 附录 C：现有 Nasti 待改锚点
-`types.ts:30`(logLevel 未接线)、`build/index.ts:120-124`(transform.define)、`:128-139`(插件转发表，缺 renderChunk)、`:198-205`(体积统计漏 assets)、`plugins/css.ts:25-28`(Tailwind)、`:34-57`(dev style)、`:88,105`(moduleType:js)、`plugin-container.ts:33-41`(emitFile stub)、`:80`(ssr:false)、`assets.ts:50-55`(sha256)、`core/env.ts`(buildEnvDefine 写死 SSR='false')、`server/index.ts:27-34` vs `build/index.ts:69-75`(内置插件重复拼装)。
+## 附录 C：现有 Nasti 待改锚点与 Phase 0 阻塞项
+`types.ts:30`(logLevel 未接线)、`build/index.ts:120-124`(transform.define)、`:128-139`(插件转发表，缺 renderChunk，**Phase 0 阻塞项**：必须添加 renderChunk 到 NastiPlugin 类型和转发表，确保 this.emitFile/getFileName 可用)、`:198-205`(体积统计漏 assets)、`plugins/css.ts:25-28`(Tailwind)、`:34-57`(dev style)、`:88,105`(moduleType:js)、`plugin-container.ts:33-41`(emitFile stub)、`:80`(ssr:false)、`assets.ts:50-55`(sha256)、`core/env.ts`(buildEnvDefine 写死 SSR='false'，**Phase 1 改为 per-env define 钩子**)、`server/index.ts:27-34` vs `build/index.ts:69-75`(内置插件重复拼装)。
