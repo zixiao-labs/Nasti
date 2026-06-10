@@ -136,9 +136,12 @@ export type NastiRolldownOptions = Omit<InputOptions, 'input' | 'plugins'> & {
 }
 
 export interface CssConfig {
-  /** CSP nonce to add to inline <style> tags */
+  /** CSP nonce to add to inline <style> tags (dev only since 2.0 — build emits real .css files) */
   nonce?: string
-  /** Emit CSS as separate files instead of inline injection (CSP-friendly) */
+  /**
+   * @deprecated 2.0 起 build 始终抽取真实 .css 文件（per-chunk hash + <link> 注入），
+   * 该开关不再生效。控制拆分用 `build.cssCodeSplit`，控制压缩用 `build.cssMinify`。
+   */
   emitCssFile?: boolean
 }
 
@@ -178,6 +181,15 @@ export interface NastiPlugin {
     this: RenderChunkContext,
     chunk: RenderedChunk,
   ) => string | void | Promise<string | void>
+  /**
+   * Rolldown output 收尾钩子（write 前最后时机）。`this` 同 renderChunk，
+   * 可 emitFile 补充产物（如 cssCodeSplit:false 的合并 CSS、manifest 等）。
+   */
+  generateBundle?: (
+    this: RenderChunkContext,
+    options?: unknown,
+    bundle?: Record<string, unknown>,
+  ) => void | Promise<void>
 
   // Vite 特有钩子
   config?: (config: NastiConfig, env: { mode: string; command: string }) => NastiConfig | null | void | Promise<NastiConfig | null | void>
@@ -210,7 +222,17 @@ export interface ResolveIdOptions {
 
 export type ResolveIdResult = string | null | undefined | { id: string; external?: boolean }
 export type LoadResult = string | null | undefined | { code: string; map?: unknown }
-export type TransformResult = string | null | undefined | { code: string; map?: unknown; moduleType?: string }
+export type TransformResult =
+  | string
+  | null
+  | undefined
+  | {
+      code: string
+      map?: unknown
+      moduleType?: string
+      /** 透传 Rolldown：'no-treeshake' 可保证模块不被摇出 chunk.moduleIds */
+      moduleSideEffects?: boolean | 'no-treeshake'
+    }
 
 export interface EmittedFile {
   type: 'asset' | 'chunk'

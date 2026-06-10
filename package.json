@@ -70,6 +70,7 @@
     "typescript": "^5.7.0"
   },
   "optionalDependencies": {
-    "@vue/compiler-sfc": "^3.5.0"
+    "@vue/compiler-sfc": "^3.5.0",
+    "lightningcss": "^1.32.0"
   }
 }

@@ -2,10 +2,12 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { rolldown } from 'rolldown'
-import type { NastiConfig } from '../types.js'
+import type { NastiConfig, HtmlTagDescriptor } from '../types.js'
 import { resolveConfig } from '../config/index.js'
 import { resolvePlugin } from '../plugins/resolve.js'
 import { cssPlugin } from '../plugins/css.js'
+import { cssPostPlugin } from '../plugins/css-post.js'
+import { createCssEngine } from '../core/css-engine.js'
 import { assetsPlugin } from '../plugins/assets.js'
 import { vuePlugin } from '../plugins/vue.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
@@ -72,13 +74,15 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
 
   // 构建内置插件 + 用户插件作为 Rolldown 插件
   // vuePlugin 需排在最前（enforce: 'pre' 语义）：先把 .vue 编译成 JS，再交给后续插件。
+  // cssPostPlugin 在最后（enforce: 'post' 语义）：renderChunk 聚合 CSS 抽取产物。
+  const cssEngine = createCssEngine()
   const builtinPlugins = [
     ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
     resolvePlugin(config),
-    cssPlugin(config),
+    cssPlugin(config, cssEngine),
     assetsPlugin(config),
   ]
-  const allPlugins = [...builtinPlugins, ...config.plugins]
+  const allPlugins = [...builtinPlugins, ...config.plugins, cssPostPlugin(config, cssEngine)]
 
   // 运行插件的 buildStart 钩子，并收集 emitFile 输出文件
   const pluginContainer = new PluginContainer(config)
@@ -153,6 +157,7 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
         // —— CSS per-chunk 抽取（css-post）依赖这一点。
         renderChunk: p.renderChunk as any,
         augmentChunkHash: p.augmentChunkHash as any,
+        generateBundle: p.generateBundle as any,
       })),
       ...(nativeReporter ? [nativeReporter as any] : []),
     ],
@@ -185,10 +190,11 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   if (html) {
     let processedHtml = html
 
-    // 执行插件的 transformIndexHtml 钩子
-    const htmlPlugin_ = htmlPlugin(config)
-    if (htmlPlugin_.transformIndexHtml) {
-      const result = await htmlPlugin_.transformIndexHtml(processedHtml)
+    // 执行 transformIndexHtml 钩子：内置 htmlPlugin + 用户插件
+    // （1.x 只执行内置插件的钩子，用户插件如 PWA manifest 注入会被静默忽略）
+    const htmlPlugins = [...allPlugins.filter((p) => p.transformIndexHtml), htmlPlugin(config)]
+    for (const p of htmlPlugins) {
+      const result = await p.transformIndexHtml!(processedHtml)
       if (typeof result === 'string') {
         processedHtml = result
       } else if (result && 'html' in result) {
@@ -196,6 +202,30 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
       } else if (Array.isArray(result)) {
         processedHtml = processHtml(processedHtml, result)
       }
+    }
+
+    // 注入抽取出的 CSS：entry chunk 的 css → 静态 <link rel="stylesheet">
+    // （动态 chunk 的 css 由 css-post 追加的运行时片段按需注入）
+    const cssLinkTags: HtmlTagDescriptor[] = []
+    if (cssEngine.singleFileName) {
+      cssLinkTags.push({
+        tag: 'link',
+        attrs: { rel: 'stylesheet', href: config.base + cssEngine.singleFileName },
+        injectTo: 'head',
+      })
+    } else {
+      for (const files of cssEngine.entryCss.values()) {
+        for (const file of files) {
+          cssLinkTags.push({
+            tag: 'link',
+            attrs: { rel: 'stylesheet', href: config.base + file },
+            injectTo: 'head',
+          })
+        }
+      }
+    }
+    if (cssLinkTags.length > 0) {
+      processedHtml = processHtml(processedHtml, cssLinkTags)
     }
 
     // 替换 script src 为打包后的路径（支持多入口）
