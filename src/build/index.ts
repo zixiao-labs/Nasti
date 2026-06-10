@@ -12,7 +12,11 @@ import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
 import { PluginContainer } from '../core/plugin-container.js'
+import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
+import { createDebugger } from '../core/debug.js'
 import pc from 'picocolors'
+
+const debug = createDebugger('nasti:build')
 
 export interface BuildResult {
   output: Array<{ fileName: string; type: string; code?: string; source?: Uint8Array | string }>
@@ -20,11 +24,13 @@ export interface BuildResult {
 
 export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult> {
   const config = await resolveConfig(inlineConfig, 'build')
+  const logger = config.logger
   const startTime = performance.now()
 
-  console.log(pc.cyan('\n🔨 nasti build') + pc.dim(` v${__NASTI_VERSION__}`))
-  console.log(pc.dim(`  root: ${config.root}`))
-  console.log(pc.dim(`  mode: ${config.mode}`))
+  logger.info(
+    pc.cyan(`\nnasti v${__NASTI_VERSION__} `) + pc.green(`building for ${config.mode}...`),
+  )
+  debug?.(`root: ${config.root}`)
 
   const outDir = path.resolve(config.root, config.build.outDir)
 
@@ -118,6 +124,12 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
       }
     : {}
   const mergedDefine = { ...vueDefine, ...(userTransform?.define ?? {}), ...envDefine }
+
+  // 原生体积报告插件（rolldown/experimental，守卫导入；不可用时走 JS 表格 fallback）
+  const nativeReporter = config.logLevel === 'silent'
+    ? null
+    : await tryNativeReporterPlugin(config, logger)
+
   const bundle = await rolldown({
     ...restInputOptions,
     input: entryPoints,
@@ -136,7 +148,13 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
         // `bundle.close()` below. This is the hook Vite plugins (e.g. PWA
         // manifest/SW writers) rely on for final-stage artifact emission.
         closeBundle: p.closeBundle as any,
+        // Output 阶段钩子直接转发：Rolldown 会以真实的（Rollup 兼容）插件
+        // 上下文调用，this.emitFile / this.getFileName 在 renderChunk 中可用
+        // —— CSS per-chunk 抽取（css-post）依赖这一点。
+        renderChunk: p.renderChunk as any,
+        augmentChunkHash: p.augmentChunkHash as any,
       })),
+      ...(nativeReporter ? [nativeReporter as any] : []),
     ],
   })
 
@@ -195,22 +213,26 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   }
 
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(2)
+
+  // 体积表：原生 reporter 已在 write 阶段输出；否则走 JS fallback
+  if (!nativeReporter && config.logLevel !== 'silent') {
+    reportBuildOutput(output as any, config, logger)
+  }
+  // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
+  warnLargeChunks(output as any, config, logger)
+
+  // 体积合计：chunk 按 code、asset 按 source，统一 Buffer.byteLength
+  // （旧实现只算 chunk.code.length，漏掉全部 assets 且多字节字符算错）
   const totalSize = output.reduce((sum, chunk) => {
-    if (chunk.type === 'chunk' && chunk.code) return sum + chunk.code.length
-    return sum
+    const content = chunk.type === 'chunk' ? chunk.code : (chunk as any).source
+    if (content == null) return sum
+    return sum + (typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength)
   }, 0)
 
-  console.log(pc.green(`\n✓ Built in ${elapsed}s`))
-  console.log(pc.dim(`  ${output.length} files, ${formatSize(totalSize)} total`))
-  console.log(pc.dim(`  output: ${config.build.outDir}/\n`))
+  logger.info(pc.green(`✓ built in ${elapsed}s`))
+  logger.info(pc.dim(`  ${output.length} files, ${displaySize(totalSize)} total → ${config.build.outDir}/`))
 
   return { output: output as any }
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} kB`
-  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
 
 function escapeRegExp(string: string): string {

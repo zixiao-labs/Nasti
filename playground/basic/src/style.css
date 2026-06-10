@@ -1,0 +1,10 @@
+body {
+  font-family: system-ui, sans-serif;
+  background: #f5f7fa;
+}
+
+.title {
+  color: #5a8fb0;
+  /* url() 重写测试用注释 */
+  border-bottom: 2px solid #5a8fb0;
+}

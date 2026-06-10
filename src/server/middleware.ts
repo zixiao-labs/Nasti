@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import pc from 'picocolors'
 import type { ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { ModuleGraph } from '../core/module-graph.js'
@@ -211,7 +212,10 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
           return
         }
       } catch (err: any) {
-        console.error(`[nasti] Transform error: ${url}`, err.message)
+        ctx.config.logger.error(
+          pc.red(`Transform error: ${url}\n`) + (err.stack ?? err.message),
+          { timestamp: true, error: err },
+        )
         res.statusCode = 500
         res.end(`Transform error: ${err.message}`)
         return

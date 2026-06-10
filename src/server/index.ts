@@ -10,6 +10,7 @@ import type { NastiConfig, ResolvedConfig, DevServer } from '../types.js'
 import { resolveConfig } from '../config/index.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { ModuleGraph } from '../core/module-graph.js'
+import { printServerUrls } from '../core/logger.js'
 import { createWebSocketServer } from './ws.js'
 import { transformMiddleware } from './middleware.js'
 import { handleFileChange } from './hmr.js'
@@ -20,7 +21,9 @@ import { vuePlugin } from '../plugins/vue.js'
 import { htmlPlugin } from '../plugins/html.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
+  const startTime = performance.now()
   const config = await resolveConfig(inlineConfig, 'serve')
+  const logger = config.logger
 
   // 组装内置插件 + 用户插件
   // vuePlugin 排在最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道。
@@ -107,17 +110,19 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
         const onListening = () => {
           const actualPort = (httpServer.address() as any)?.port ?? currentPort
           config.server.port = actualPort
-          const localUrl = `http://localhost:${actualPort}`
-          const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}` : null
+          const localUrl = `http://localhost:${actualPort}/`
+          const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}/` : null
 
-          console.log()
-          console.log(pc.cyan('  nasti dev server') + pc.dim(` v${__NASTI_VERSION__}`))
-          console.log()
-          console.log(`  ${pc.green('>')} Local:   ${pc.cyan(localUrl)}`)
-          if (networkUrl) {
-            console.log(`  ${pc.green('>')} Network: ${pc.cyan(networkUrl)}`)
-          }
-          console.log()
+          logger.clearScreen('info')
+          const readyIn = Math.ceil(performance.now() - startTime)
+          logger.info(
+            `\n  ${pc.cyan(pc.bold('NASTI'))} ${pc.cyan(`v${__NASTI_VERSION__}`)}  ${pc.dim('ready in')} ${pc.bold(readyIn)} ${pc.dim('ms')}\n`,
+          )
+          printServerUrls(
+            { local: [localUrl], network: networkUrl ? [networkUrl] : [] },
+            logger.info,
+          )
+          logger.info('')
 
           resolve(server)
         }
@@ -126,7 +131,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
         httpServer.on('error', (err: NodeJS.ErrnoException) => {
           if (err.code === 'EADDRINUSE') {
             currentPort++
-            console.log(pc.yellow(`Port ${currentPort - 1} is in use, trying ${currentPort}...`))
+            logger.info(pc.yellow(`Port ${currentPort - 1} is in use, trying ${currentPort}...`))
             httpServer.listen(currentPort, host)
           } else {
             reject(err)

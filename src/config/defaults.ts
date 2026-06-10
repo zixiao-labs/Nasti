@@ -26,6 +26,11 @@ const defaultBuild: Required<BuildConfig> = {
   rolldownOptions: {},
   emptyOutDir: true,
   css: {},
+  reportCompressedSize: true,
+  chunkSizeWarningLimit: 500,
+  cssCodeSplit: true,
+  // 默认跟随 build.minify（resolveConfig 中按 minify 取值填充）
+  cssMinify: true,
 }
 
 // Electron 41+ 捆绑 Node 22.x / Chromium 138，故主进程目标默认 node22
@@ -43,7 +48,7 @@ const defaultElectron: Required<ElectronConfig> = {
   external: ['electron'],
 }
 
-export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } = {
+export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger'>> & { plugins: [] } = {
   root: '.',
   base: '/',
   mode: 'development',
@@ -56,4 +61,5 @@ export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } 
   plugins: [],
   envPrefix: ['NASTI_', 'VITE_'],
   logLevel: 'info',
+  clearScreen: true,
 }

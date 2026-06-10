@@ -3,6 +3,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { NastiConfig, ResolvedConfig, NastiPlugin } from '../types.js'
 import { defaults } from './defaults.js'
+import { createLogger } from '../core/logger.js'
 
 /** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
 function loadTsconfigPaths(root: string): Record<string, string> {
@@ -110,6 +111,17 @@ export async function resolveConfig(
   }
 
   // 先构建 resolved，plugins 稍后填入（避免过滤时引用未初始化变量）
+  const logLevel = merged.logLevel ?? defaults.logLevel
+  const clearScreen = merged.clearScreen ?? defaults.clearScreen
+  const logger = createLogger(logLevel, {
+    allowClearScreen: clearScreen,
+    customLogger: merged.customLogger,
+  })
+  const mergedBuild = { ...defaults.build, ...merged.build } as ResolvedConfig['build']
+  // cssMinify 未显式配置时跟随 minify
+  if (merged.build?.cssMinify === undefined) {
+    mergedBuild.cssMinify = !!mergedBuild.minify
+  }
   const resolved: ResolvedConfig = {
     root,
     base: merged.base ?? defaults.base,
@@ -126,14 +138,16 @@ export async function resolveConfig(
     },
     plugins: [],
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
-    build: { ...defaults.build, ...merged.build } as ResolvedConfig['build'],
+    build: mergedBuild,
     electron: { ...defaults.electron, ...merged.electron } as ResolvedConfig['electron'],
     envPrefix: (Array.isArray(merged.envPrefix)
       ? merged.envPrefix
       : merged.envPrefix
         ? [merged.envPrefix]
         : [...defaults.envPrefix]) as string[],
-    logLevel: merged.logLevel ?? defaults.logLevel,
+    logLevel,
+    clearScreen,
+    logger,
   }
 
   // 过滤插件（apply 为函数时可安全访问已初始化的 resolved）

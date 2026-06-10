@@ -1,8 +1,62 @@
 // Nasti CLI - 命令行入口
 import { cac } from 'cac'
 import pc from 'picocolors'
+import { createLogger, type LogLevel, type Logger } from './core/logger.js'
 
 const cli = cac('nasti')
+
+interface GlobalCLIOptions {
+  logLevel?: LogLevel
+  clearScreen?: boolean
+  debug?: boolean | string
+  filter?: string
+  verbose?: boolean
+}
+
+/**
+ * 处理全局调试选项（须在动态 import 任何核心模块之前调用，
+ * core/debug.ts 在模块加载时读取 DEBUG / NASTI_DEBUG_FILTER）。
+ */
+function setupDebug(options: GlobalCLIOptions): void {
+  if (options.debug || options.verbose) {
+    const namespaces =
+      typeof options.debug === 'string'
+        ? options.debug
+            .split(',')
+            .map((s) => (s.includes(':') ? s : `nasti:${s}`))
+            .join(',')
+        : 'nasti:*'
+    process.env.DEBUG = process.env.DEBUG
+      ? `${process.env.DEBUG},${namespaces}`
+      : namespaces
+  }
+  if (options.filter) {
+    process.env.NASTI_DEBUG_FILTER = options.filter
+  }
+}
+
+function createCliLogger(options: GlobalCLIOptions): Logger {
+  return createLogger(options.logLevel ?? 'info', {
+    allowClearScreen: options.clearScreen !== false,
+  })
+}
+
+function logCliError(logger: Logger, prefix: string, err: any): never {
+  // hasErrorLogged 去重：内部已经 logger.error 过的错误不重复打印堆栈
+  if (!(err instanceof Error) || !logger.hasErrorLogged(err)) {
+    logger.error(pc.red(`\n  ${prefix}:\n  ${err.message}\n`), { error: err })
+    if (err.stack) logger.error(pc.dim(err.stack))
+  }
+  process.exit(1)
+}
+
+// 全局选项（对所有命令生效）
+cli
+  .option('--logLevel <level>', 'Log level: info | warn | error | silent')
+  .option('--clearScreen', 'Allow/disable clear screen when logging', { default: true })
+  .option('-d, --debug [namespaces]', 'Show debug logs (e.g. -d build,hmr)')
+  .option('-f, --filter <filter>', 'Filter debug logs by content')
+  .option('--verbose', 'Shorthand for --debug (all nasti:* namespaces)')
 
 // nasti dev
 cli
@@ -13,11 +67,16 @@ cli
   .option('--open [path]', 'Open browser on startup')
   .option('--mode <mode>', 'Set env mode')
   .action(async (root: string | undefined, options: any) => {
+    setupDebug(options)
+    const logger = createCliLogger(options)
     try {
       const { createServer } = await import('./server/index.js')
       const server = await createServer({
         root: root ?? '.',
         mode: options.mode ?? 'development',
+        logLevel: options.logLevel,
+        clearScreen: options.clearScreen,
+        customLogger: logger,
         server: {
           port: options.port,
           host: options.host,
@@ -26,9 +85,7 @@ cli
       })
       await server.listen()
     } catch (err: any) {
-      console.error(pc.red(`\n  Error starting dev server:\n  ${err.message}\n`))
-      if (err.stack) console.error(pc.dim(err.stack))
-      process.exit(1)
+      logCliError(logger, 'Error starting dev server', err)
     }
   })
 
@@ -41,6 +98,8 @@ cli
   .option('--mode <mode>', 'Set env mode')
   .option('--target <target>', 'Build target: web | electron', { default: 'web' })
   .action(async (root: string | undefined, options: any) => {
+    setupDebug(options)
+    const logger = createCliLogger(options)
     try {
       const target = options.target
       if (target !== 'web' && target !== 'electron') {
@@ -50,6 +109,9 @@ cli
         root: root ?? '.',
         mode: options.mode ?? 'production',
         target,
+        logLevel: options.logLevel,
+        clearScreen: options.clearScreen,
+        customLogger: logger,
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
@@ -64,9 +126,7 @@ cli
         await build(inline)
       }
     } catch (err: any) {
-      console.error(pc.red(`\n  Build failed:\n  ${err.message}\n`))
-      if (err.stack) console.error(pc.dim(err.stack))
-      process.exit(1)
+      logCliError(logger, 'Build failed', err)
     }
   })
 
@@ -80,12 +140,17 @@ cli
   .option('--no-spawn', 'Compile main/preload but do not spawn Electron')
   .option('--no-restart', 'Disable auto-restart on main/preload changes')
   .action(async (root: string | undefined, options: any) => {
+    setupDebug(options)
+    const logger = createCliLogger(options)
     try {
       const { startElectronDev } = await import('./server/electron-dev.js')
       await startElectronDev({
         root: root ?? '.',
         mode: options.mode ?? 'development',
         target: 'electron',
+        logLevel: options.logLevel,
+        clearScreen: options.clearScreen,
+        customLogger: logger,
         server: {
           port: options.port,
           host: options.host,
@@ -96,9 +161,7 @@ cli
         noSpawn: options.spawn === false,
       })
     } catch (err: any) {
-      console.error(pc.red(`\n  Electron dev failed:\n  ${err.message}\n`))
-      if (err.stack) console.error(pc.dim(err.stack))
-      process.exit(1)
+      logCliError(logger, 'Electron dev failed', err)
     }
   })
 
@@ -110,12 +173,17 @@ cli
   .option('--minify', 'Minify output', { default: true })
   .option('--mode <mode>', 'Set env mode')
   .action(async (root: string | undefined, options: any) => {
+    setupDebug(options)
+    const logger = createCliLogger(options)
     try {
       const { buildElectron } = await import('./build/electron.js')
       await buildElectron({
         root: root ?? '.',
         mode: options.mode ?? 'production',
         target: 'electron',
+        logLevel: options.logLevel,
+        clearScreen: options.clearScreen,
+        customLogger: logger,
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
@@ -123,9 +191,7 @@ cli
         },
       })
     } catch (err: any) {
-      console.error(pc.red(`\n  Electron build failed:\n  ${err.message}\n`))
-      if (err.stack) console.error(pc.dim(err.stack))
-      process.exit(1)
+      logCliError(logger, 'Electron build failed', err)
     }
   })
 
@@ -136,11 +202,14 @@ cli
   .option('--host [host]', 'Hostname')
   .option('--outDir <dir>', 'Output directory to serve', { default: 'dist' })
   .action(async (root: string | undefined, options: any) => {
+    setupDebug(options)
+    const logger = createCliLogger(options)
     try {
       const http = await import('node:http')
       const path = await import('node:path')
       const sirv = (await import('sirv')).default
       const connect = (await import('connect')).default
+      const { printServerUrls } = await import('./core/logger.js')
 
       const resolvedRoot = path.resolve(root ?? '.')
       const outDir = path.resolve(resolvedRoot, options.outDir)
@@ -152,15 +221,18 @@ cli
       const host = options.host === true ? '0.0.0.0' : (options.host ?? 'localhost')
 
       http.createServer(app).listen(port, host, () => {
-        console.log()
-        console.log(pc.cyan('  🔍 nasti preview'))
-        console.log()
-        console.log(`  ${pc.green('➜')} Local: ${pc.cyan(`http://localhost:${port}`)}`)
-        console.log()
+        logger.info(`\n  ${pc.cyan(pc.bold('NASTI'))} ${pc.cyan(`v${__NASTI_VERSION__}`)}  ${pc.dim('preview')}\n`)
+        printServerUrls(
+          {
+            local: [`http://localhost:${port}/`],
+            network: host === '0.0.0.0' ? [`http://${host}:${port}/`] : [],
+          },
+          logger.info,
+        )
+        logger.info('')
       })
     } catch (err: any) {
-      console.error(pc.red(`\n  Preview failed:\n  ${err.message}\n`))
-      process.exit(1)
+      logCliError(logger, 'Preview failed', err)
     }
   })
 

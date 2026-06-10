@@ -1,7 +1,8 @@
 // Nasti - 核心类型定义
 // 兼容 Vite Plugin 接口
 
-import type { InputOptions, OutputOptions } from 'rolldown'
+import type { InputOptions, OutputOptions, RenderedChunk } from 'rolldown'
+import type { Logger } from './core/logger.js'
 
 export interface NastiConfig {
   /** 项目根目录 */
@@ -28,6 +29,10 @@ export interface NastiConfig {
   envPrefix?: string | string[]
   /** 日志级别 */
   logLevel?: 'info' | 'warn' | 'error' | 'silent'
+  /** 启动/重启时是否允许清屏（CI/非 TTY 下自动禁用），默认 true */
+  clearScreen?: boolean
+  /** 自定义 Logger（替换内置实现，logLevel 等选项由自定义实现自行处理） */
+  customLogger?: Logger
 }
 
 /** Electron 目标专用配置，支持 Electron 41+ */
@@ -111,6 +116,14 @@ export interface BuildConfig {
   rolldownOptions?: NastiRolldownOptions
   emptyOutDir?: boolean
   css?: CssConfig
+  /** 体积表是否计算 gzip 压缩后大小（大产物可关闭以加速构建），默认 true */
+  reportCompressedSize?: boolean
+  /** 触发大 chunk 警告的体积阈值（单位 kB，按压缩前 chunk 体积），默认 500 */
+  chunkSizeWarningLimit?: number
+  /** 按 chunk 抽取 CSS 为独立 .css 文件（关闭则全部合并为单个 CSS 文件），默认 true */
+  cssCodeSplit?: boolean
+  /** 是否压缩抽取出的 CSS（Lightning CSS，不可用时回退正则压缩），默认同 minify */
+  cssMinify?: boolean
 }
 
 /**
@@ -147,6 +160,24 @@ export interface NastiPlugin {
   resolveId?: (this: PluginContext, source: string, importer: string | undefined, options: ResolveIdOptions) => ResolveIdResult | Promise<ResolveIdResult>
   load?: (this: PluginContext, id: string) => LoadResult | Promise<LoadResult>
   transform?: (this: PluginContext, code: string, id: string) => TransformResult | Promise<TransformResult>
+  /**
+   * Rolldown output 阶段钩子：对每个 chunk 的最终代码做变换或按 chunk 收集产物。
+   * 仅在生产构建生效（dev unbundled 管线没有 chunk 概念）。
+   *
+   * `this` 是 Rolldown 真实的（Rollup 兼容）插件上下文，不是 PluginContext stub：
+   * `this.emitFile({type:'asset'})` 经 `output.assetFileNames` 产出带 hash 的文件，
+   * `this.getFileName(ref)` 可立即解析最终文件名。CSS per-chunk 抽取依赖这两点。
+   */
+  renderChunk?: (
+    this: RenderChunkContext,
+    code: string,
+    chunk: RenderedChunk,
+  ) => string | { code: string; map?: unknown } | null | undefined | Promise<string | { code: string; map?: unknown } | null | undefined>
+  /** 向 chunk hash 折叠额外输入（如该 chunk 关联的 CSS 内容），保证缓存正确性 */
+  augmentChunkHash?: (
+    this: RenderChunkContext,
+    chunk: RenderedChunk,
+  ) => string | void | Promise<string | void>
 
   // Vite 特有钩子
   config?: (config: NastiConfig, env: { mode: string; command: string }) => NastiConfig | null | void | Promise<NastiConfig | null | void>
@@ -160,6 +191,16 @@ export interface PluginContext {
   resolve: (source: string, importer?: string) => Promise<ResolveIdResult>
   emitFile: (file: EmittedFile) => string
   getModuleInfo: (id: string) => ModuleInfo | null
+}
+
+/**
+ * renderChunk / augmentChunkHash 的 `this`：Rolldown 真实插件上下文的最小可用面。
+ * 与 {@link PluginContext}（dev/buildStart 用的 stub）不同，这里的 emitFile 返回
+ * referenceId，getFileName 能解析出带 hash 的最终文件名。
+ */
+export interface RenderChunkContext {
+  emitFile: (file: EmittedFile) => string
+  getFileName: (referenceId: string) => string
 }
 
 export interface ResolveIdOptions {
@@ -220,6 +261,9 @@ export interface ResolvedConfig {
   electron: Required<ElectronConfig>
   envPrefix: string[]
   logLevel: 'info' | 'warn' | 'error' | 'silent'
+  clearScreen: boolean
+  /** 已接线 logLevel 的 Logger 实例，所有 Nasti 输出统一经此通道 */
+  logger: Logger
 }
 
 // Dev Server 接口
