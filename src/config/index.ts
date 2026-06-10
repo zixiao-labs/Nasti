@@ -187,6 +187,7 @@ export async function resolveConfig(
       if (envOptions.build) Object.assign(resolved.build, envOptions.build)
       resolved.environments.client = {
         consumer,
+        entry: [],
         // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
         resolve: resolved.resolve,
         build: resolved.build,
@@ -196,6 +197,12 @@ export async function resolveConfig(
 
     resolved.environments[name] = {
       consumer,
+      entry: (Array.isArray(envOptions.entry)
+        ? envOptions.entry
+        : envOptions.entry
+          ? [envOptions.entry]
+          : []
+      ).map((e) => path.resolve(root, e)),
       resolve: {
         alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
         extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],
@@ -209,7 +216,14 @@ export async function resolveConfig(
           envOptions.resolve?.mainFields ??
           (consumer === 'server' ? ['module', 'main'] : [...resolved.resolve.mainFields]),
       },
-      build: { ...resolved.build, ...envOptions.build },
+      build: {
+        ...resolved.build,
+        ...envOptions.build,
+        // 非 client 环境默认产出到 <outDir>/<envName>（如 dist/ssr），可显式覆盖
+        outDir: envOptions.build?.outDir ?? path.join(resolved.build.outDir, name),
+        // server 产物默认不压缩（可调试性优先，与 Vite SSR 默认一致），可显式覆盖
+        minify: envOptions.build?.minify ?? (consumer === 'server' ? false : resolved.build.minify),
+      },
     }
   }
 

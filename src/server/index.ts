@@ -31,8 +31,8 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const ws = createWebSocketServer(httpServer)
 
   // ── Environment API：client 环境承载 dev 运行时（per-env 容器/图/热通道）──
-  // ssr 等其余环境 Phase 1 只有配置形态（consumer/resolve），不建容器 ——
-  // 生命周期钩子默认 client 单次触发，避免插件副作用重复。
+  // ssr 等其余环境：server consumer 的插件列表带 consumer 标记（css 无 DOM stub），
+  // 容器在首次使用（ssrLoadModule）时初始化 —— 生命周期钩子默认 client 单次触发。
   const clientEnv = new NastiEnvironment('client', configWithPlugins, {
     hot: createWsHotChannel(ws),
     mode: 'dev',
@@ -42,7 +42,26 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const environments: Record<string, NastiEnvironment> = { client: clientEnv }
   for (const name of Object.keys(config.environments)) {
     if (name === 'client') continue
-    environments[name] = new NastiEnvironment(name, configWithPlugins, { mode: 'dev' })
+    const consumer = config.environments[name].consumer
+    const envPlugins = resolvePluginList(config, config.plugins, { consumer })
+    environments[name] = new NastiEnvironment(name, { ...config, plugins: envPlugins }, {
+      mode: 'dev',
+      plugins: envPlugins,
+    })
+  }
+
+  // SSR module runner（懒初始化：仅在 ssrLoadModule 首次调用时建容器/runner）
+  let ssrRunner: import('./runnable-environment.js').NastiModuleRunner | null = null
+  async function getSsrRunner() {
+    if (ssrRunner) return ssrRunner
+    const ssrEnv = environments.ssr
+    if (!ssrEnv) {
+      throw new Error('[nasti] no "ssr" environment configured (config.environments.ssr)')
+    }
+    await ssrEnv.init()
+    const { createModuleRunner } = await import('./runnable-environment.js')
+    ssrRunner = createModuleRunner(ssrEnv)
+    return ssrRunner
   }
 
   const moduleGraph = clientEnv.moduleGraph
@@ -86,10 +105,12 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   let server: DevServer
 
   watcher.on('change', (file: string) => {
+    ssrRunner?.invalidateFile(file)
     handleFileChange(file, server)
   })
 
   watcher.on('add', (file: string) => {
+    ssrRunner?.invalidateFile(file)
     handleFileChange(file, server)
   })
 
@@ -148,6 +169,11 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     async transformRequest(url: string) {
       const { transformRequest } = await import('./middleware.js')
       return transformRequest(url, { config: configWithPlugins, pluginContainer, moduleGraph })
+    },
+
+    async ssrLoadModule(url: string) {
+      const runner = await getSsrRunner()
+      return runner.import(url)
     },
 
     async close() {

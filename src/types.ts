@@ -50,6 +50,11 @@ export interface EnvironmentOptions {
    * 默认：环境名为 'client' → 'client'，其余 → 'server'。
    */
   consumer?: 'client' | 'server'
+  /**
+   * 该环境的构建入口（相对 root）。client 环境忽略此项（入口从 index.html
+   * 提取）；非 client 环境**只有声明了 entry 才会被 `nasti build` 构建**。
+   */
+  entry?: string | string[]
   /** per-env 路径解析（client 默认含 'browser' condition；server 走 node conditions） */
   resolve?: ResolveConfig
   /** per-env 构建覆盖（未设置的字段回退 top-level build） */
@@ -59,6 +64,8 @@ export interface EnvironmentOptions {
 /** 解析后的环境配置 */
 export interface ResolvedEnvironmentOptions {
   consumer: 'client' | 'server'
+  /** 非 client 环境的构建入口（绝对路径）；client 恒为 [] */
+  entry: string[]
   resolve: Required<ResolveConfig>
   build: Required<BuildConfig>
 }
@@ -372,6 +379,13 @@ export interface DevServer {
   listen: (port?: number) => Promise<DevServer>
   close: () => Promise<void>
   transformRequest: (url: string) => Promise<TransformResult>
+  /**
+   * SSR：在 server consumer 环境（默认 `ssr`）中加载并执行模块，返回其导出。
+   * Vite `server.ssrLoadModule` 的 back-compat shim（底层是 module runner +
+   * HotChannel invoke 桥）。模块经 moduleRunnerTransform 转换后在进程内求值，
+   * `import.meta.env.SSR === true`，bare import 外部化交给 node 解析。
+   */
+  ssrLoadModule: (url: string) => Promise<Record<string, unknown>>
 }
 
 export interface ModuleGraph {

@@ -12,7 +12,11 @@ import type { CssEngine } from '../core/css-engine.js'
 import { normalizeCssModuleId } from '../core/css-engine.js'
 import { compileTailwind, hasTailwindDirectives } from './tailwind.js'
 
-export function cssPlugin(config: ResolvedConfig, engine?: CssEngine): NastiPlugin {
+export function cssPlugin(
+  config: ResolvedConfig,
+  engine?: CssEngine,
+  consumer: 'client' | 'server' = 'client',
+): NastiPlugin {
   return {
     name: 'nasti:css',
 
@@ -47,6 +51,12 @@ export function cssPlugin(config: ResolvedConfig, engine?: CssEngine): NastiPlug
 
       // ?inline：只要编译后的字符串，不注入、不抽取（dev/build 行为一致）
       if (query === 'inline') {
+        return { code: `export default ${escaped};\n`, moduleType: 'js' }
+      }
+
+      // server consumer（SSR dev/build、Electron main/preload）：无 DOM 环境，
+      // 返回 CSS 字符串导出（SSR 可收集），真实 .css 产物由 client 环境负责
+      if (consumer === 'server') {
         return { code: `export default ${escaped};\n`, moduleType: 'js' }
       }
 

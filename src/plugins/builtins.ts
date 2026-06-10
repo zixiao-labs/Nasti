@@ -15,6 +15,8 @@ import { htmlPlugin } from './html.js'
 export interface BuiltinPluginOptions {
   /** build 期 CSS 抽取引擎（serve 不传，dev 走 <style> 注入路径） */
   cssEngine?: CssEngine
+  /** 环境 consumer：server 时 css 插件返回无 DOM 的纯 stub（SSR/main/preload） */
+  consumer?: 'client' | 'server'
 }
 
 /**
@@ -31,7 +33,7 @@ export function resolvePluginList(
     // vuePlugin 排最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道
     ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
     resolvePlugin(config),
-    cssPlugin(config, opts.cssEngine),
+    cssPlugin(config, opts.cssEngine, opts.consumer),
     assetsPlugin(config),
     ...(isServe ? [htmlPlugin(config)] : []),
     ...userPlugins,

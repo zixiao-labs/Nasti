@@ -28,8 +28,28 @@ dev 的 CSS `<style>`+HMR 注入路径逐字节不变；HMR 新增带时间戳�
 
 ---
 
-## Phase 1：Environment API 主干（进行中）
-（待补）
+## Phase 1：Environment API 主干（已落地，commit f6995f2）
+
+### 行为变化
+
+| 变化 | 影响 | 需要的迁移动作 |
+|---|---|---|
+| 新增 `config.environments`（默认 `{client, ssr}`），client 与 top-level `resolve`/`build` 同引用精确镜像（运行时断言） | 三个项目均无感——flat config 原样可用 | 无 |
+| 插件新钩子：`applyToEnvironment(env)` / `configEnvironment(name, opts)`；钩子里可读 `this.environment` | chen 可用它做 SSR/client 差异化（Vite 同款 API 形态） | 可选采用 |
+| `server.environments.client` 持有 per-env 容器/模块图/HotChannel；`server.moduleGraph` 保留为 client 图别名（加弃用注记） | chen 的 configureServer 用 `server.moduleGraph`/`watcher`/`ws` —— 全部继续工作 | 建议 chen 新代码改用 `server.environments.client.moduleGraph`，2.x 移除别名前完成 |
+| `buildEnvDefine` 支持 per-env overrides；`import.meta.env.SSR` 由 consumer 派生（Phase 2 SSR 接口契约） | 无现状影响（client 仍为 false） | 无 |
+| resolveId 钩子的 `options.ssr` 不再写死 false，由环境 consumer 派生 | client 环境恒 false，行为不变 | 无 |
+
+### 🎁 顺带修复：Vue SFC 支持（1.7.1 的 dev 与 build 双双损坏）
+- **build**：`App.vue?vue&type=style` 虚拟模块没有 load 钩子，Rolldown 按字面路径读盘 → `UNLOADABLE_DEPENDENCY` 直接失败。已修：vuePlugin 新增 load 钩子，style 子块 id 改 `&lang.css` 结尾接入 CSS 管线（含 scoped，抽取为 hashed .css）。
+- **dev**：style 子模块 URL 被"读盘+剥 query"路径错当成完整 SFC 重新编译，样式从未注入。已修：middleware 对带语义 query 的请求先走插件 load→transform 管道。
+- **这就是 create-nasti Vue 模板等待的核心修复**——发布 2.0 后 create-nasti 即可解锁 Vue 模板。
+
+### 实测结果
+- playground/basic：产物 sha 逐字节一致 ✓
+- Wuling frontend / logos：hashed 文件集完全一致（=内容一致）✓
+- playground/vue-basic（新增）：build 产出 scoped CSS 正确、dev 样式虚拟模块正常服务 ✓
+- 探针验证：`applyToEnvironment` 过滤（ssr-only 插件被 client 剔除）、`this.environment === client/client`、per-env define（server → SSR='true'）✓
 
 ## Phase 2：多端 builder + SSR（未开始）
 （待补）
