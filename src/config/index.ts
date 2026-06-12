@@ -154,6 +154,9 @@ export async function resolveConfig(
     clearScreen,
     logger,
     environments: {},
+    experimental: {
+      bundledDev: merged.experimental?.bundledDev ?? defaults.experimental.bundledDev,
+    },
   }
 
   // ── Environment API：解析 environments map（默认 client + ssr）──────────

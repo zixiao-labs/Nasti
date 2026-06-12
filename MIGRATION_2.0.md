@@ -51,8 +51,61 @@ dev 的 CSS `<style>`+HMR 注入路径逐字节不变；HMR 新增带时间戳�
 - playground/vue-basic（新增）：build 产出 scoped CSS 正确、dev 样式虚拟模块正常服务 ✓
 - 探针验证：`applyToEnvironment` 过滤（ssr-only 插件被 client 剔除）、`this.environment === client/client`、per-env define（server → SSR='true'）✓
 
-## Phase 2：多端 builder + SSR（未开始）
-（待补）
+## Phase 2：多端 builder + SSR（已落地，commit c8ada94）
 
-## Phase 3：完整打包模式（未开始）
-（待补）
+### 行为变化
+
+| 变化 | 影响 | 需要的迁移动作 |
+|---|---|---|
+| `nasti build` 串行构建多环境：client + 所有**显式声明 `entry`** 的环境；默认注入的裸 ssr 环境不构建 | 三个项目无感（都只有 client） | 想要 SSR 构建：`environments.ssr.entry: 'src/entry-server.ts'` |
+| 非 client 环境产物默认到 `<outDir>/<envName>/`（如 `dist/ssr/`）、esm、`[name].js` 不带 hash、默认不压缩 | 新功能 | 可经 `environments.<name>.build` 覆盖 |
+| server consumer 构建：platform=node、env conditions/mainFields 接到 rolldown resolve、node 内建+bare import 默认外部化 | 新功能 | 内联依赖用 `environments.<name>.build.rolldownOptions.external` 覆盖 |
+| 新增 `server.ssrLoadModule(url)`（Vite shim，底层 module runner + HotChannel invoke） | **chen 框架**：未来做 SSR 路由渲染的直接入口，API 与 Vite 同形 | 可选采用 |
+| SSR 管线中 css import 返回纯字符串导出（无 DOM 副作用），`import.meta.env.SSR === true` | 新功能 | 无 |
+| `BuildResult` 增加 `environments` 字段（`output` 保持 client 产物，1.x 形态不变） | 编程 API 用户无感 | 无 |
+| Electron main/preload 仍走 bespoke 路径（renderer 已经流经新 builder）。env 模型折叠待对拍后切换 | **logos** 无感（electron-build 实测端到端正常） | 无 |
+
+### 实测结果
+- playground/ssr-basic（新增）：dev `ssrLoadModule` 渲染 `SSR=true` + node:path 外部化；`nasti build` 产出 client + dist/ssr/entry-server.js，prod bundle 直接 node 执行 ✓
+- 回归：playground sha 一致、Wuling/logos 文件集一致、Vue scoped CSS 一致、logos electron-build 端到端正常 ✓
+
+### Phase 2 遗留（跟进项）
+- Electron main/preload 折叠为环境（bespoke 对拍通过后删除）——计划允许的保留项
+- Vue SSR（compileTemplate ssr 模式）未实现——React/纯 TS SSR 可用
+
+## Phase 3：完整打包模式（已落地）
+
+### 行为变化
+
+| 变化 | 影响 | 需要的迁移动作 |
+|---|---|---|
+| 新增 opt-in `experimental.bundledDev`（CLI `--bundle`）：dev 用 Rolldown `dev()` 引擎整体打包 client 环境，产物存内存 Map 经中间件服务（ETag/304） | 三个项目无感——**unbundled 仍为默认**，不开启时该路径完全不执行 | 想试用：`nasti dev --bundle` 或配置 `experimental.bundledDev: true` |
+| HMR 由 DevEngine 内置 watcher 驱动：自接受模块（CSS 等）产出 Patch 经 `<link>` 同源 patch URL 推送；无 HMR 边界的改动触发整页刷新 | 新功能 | 无 |
+| 动态 `import()` 走懒编译端点（rc.13 stub 硬编码 `/@vite/lazy`，`/@nasti/lazy` 同义），首次点击时按需编译 | 新功能 | 无 |
+| React Fast Refresh 经 rolldown 原生 `viteReactRefreshWrapperPlugin` + bundle 内 runtime/preamble 虚拟模块（与 unbundled 的服务端 wrapper 是两套实现） | React 项目（logos/Wuling）bundled 模式下可用；契约经 rc.13 探针验证 | 无 |
+| `rolldown` 依赖从 `^1.0.0-rc.12` **锁定到精确 `1.0.0-rc.13`**（dev()/DevEngine 实验 API 无 semver 保护，按已安装 `.d.mts` 编码） | 全部（升级 rolldown 需同步验证 bundled 模式） | 无 |
+| dev 的 CSS `<style>` 注入模板加 `import.meta.hot.prune` 存在性守卫（bundled 的 rolldown hot context 无 prune）+ `moduleType:'js'` 标注（unbundled 中间件忽略该字段） | 无感（unbundled 行为不变，模板逐字节等效） | 无 |
+
+### 已知限制（rc.13 实验 API，均已在代码注释中记录）
+- **`engine.invalidate(file)` 不可用**：一旦有客户端注册过模块，任意路径格式都会触发 rolldown panic（`hmr_stage.rs:100`，纯 rolldown 最小复现确认）。HMR 完全依赖引擎内置 watcher —— 不要恢复显式失效路径。
+- **catch-all `load` 钩子会清空引擎 watch 列表**：rc.13 只 watch 原生加载过的模块路径。`nasti:resolve` 的兜底 load（unbundled PluginContainer 必需）已在 bundled 模式剥除；**用户插件若带「存在即读盘」的 load，对应文件将失去 HMR**。
+- 端口被占自动 +1 时，默认 DevRuntime 烤进 bundle 的 ws 地址指向原端口，HMR 失联（产物仍可正常服务）。
+- 仅 client 环境（同 Vite `FullBundleDevEnvironment`）。
+
+### 实测结果（playground/basic `--bundle`）
+- 冷启动：内存 bundle 服务（ETag/304 正确）、index.html 入口改写到 `/assets/main.js`、refresh runtime/preamble 进 bundle ✓
+- 懒编译：bundle 内 lazy proxy chunk → `/@vite/lazy?id=&clientId=` → `compileEntry` 按需编译 lazy.ts+lazy.css（CSS 含 `<style>` 注入与 hot 守卫）✓
+- HMR：style.css 改动 → Patch（patch 内容含新 CSS、XSSI 加固尾缀）经 `hmr:update` 推送 ✓；main.ts（无边界）→ 引擎报 `no hmr boundary` → `ensureLatestBuildOutput` + 整页刷新 ✓
+- 回归：unbundled dev（`<style>`+HMR 注入、/@nasti/client、transform 管线）与生产构建路径不受影响（css.ts 改动仅在 `command === 'serve'` 分支）✓
+
+### 下游兼容性验证（2026-06-12，本分支全量 Phase 0–3）
+- **Wuling frontend**：`nasti build` 1.55s / **199 files**（与 Phase 2 记录一致）；chen 全链路（PWA 标签注入 + sw.js/manifest.json closeBundle 产物）；单 `main.*.css` + `<link>` ✓
+- **logos**：`nasti build` **92 files**（与 Phase 2 一致，monaco 大 chunk 黄色警告=预期）；`nasti electron-build` renderer+main.cjs+preload.cjs 端到端 ✓
+- **create-nasti Vue 模板**：dev（SFC 编译 + HMR 上下文注入）与 build 双通 —— **发布 2.0 即解锁 Vue 模板**；react-tanstack 模板 build 通过（覆盖 plugin-tanstack 集成）✓
+- playground basic/vue-basic（scoped CSS 抽取）/ssr-basic（client+SSR 双产物）build 全过 ✓
+
+### Phase 3 遗留（跟进项）
+- React Fast Refresh 浏览器内端到端（patch 执行→组件态保留）待真实 React 项目人工验证 —— 服务端契约（wrapper 激活/注册/preamble 单实例）已经探针验证
+- 多 tab clientId 隔离与 error overlay 行为待浏览器实测
+- bundled 模式兼容矩阵 + 关键 per-request 变换移植（计划 §2.5 Phase 3.1/3.2）随推广推进
+

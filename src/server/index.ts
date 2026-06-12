@@ -67,6 +67,21 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const moduleGraph = clientEnv.moduleGraph
   const pluginContainer = clientEnv.pluginContainer!
 
+  // ── 完整打包模式（opt-in，experimental.bundledDev / --bundle）──────────
+  // DevEngine 整体打包 client 环境，产物从内存服务；中间件注册在
+  // transformMiddleware 之前（接管 '/'、/assets/*、懒编译端点）。
+  // unbundled 管线保持默认 —— 不开启时下面这段完全不执行。
+  let bundledServer: import('./bundled/dev-engine.js').BundledDevServer | null = null
+  if (config.experimental.bundledDev) {
+    const { createBundledDevServer } = await import('./bundled/dev-engine.js')
+    bundledServer = await createBundledDevServer({
+      config: configWithPlugins,
+      clientEnv,
+      httpServer,
+    })
+    app.use(bundledServer.middleware)
+  }
+
   // 转译中间件（处理 .ts, .tsx, .jsx, .css, .vue 等）
   app.use(transformMiddleware({
     config: configWithPlugins,
@@ -178,6 +193,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
 
     async close() {
       await pluginContainer.buildEnd()
+      await bundledServer?.close()
       watcher.close()
       ws.close()
       httpServer.close()

@@ -123,7 +123,7 @@ export function getRolldownOptions(
 
 /** Nasti 插件 → Rolldown 插件的转发表（output 阶段钩子直接转发，
  * this.emitFile / this.getFileName 在 renderChunk 中是真实 Rollup 兼容上下文） */
-function toRolldownPlugins(plugins: NastiPlugin[]): unknown[] {
+export function toRolldownPlugins(plugins: NastiPlugin[]): unknown[] {
   return plugins.map((p) => ({
     name: p.name,
     resolveId: p.resolveId as any,
@@ -140,7 +140,7 @@ function toRolldownPlugins(plugins: NastiPlugin[]): unknown[] {
 }
 
 /** 从 index.html 提取 client 入口（含常见路径回退） */
-function resolveClientEntries(config: ResolvedConfig, html: string | null): string[] {
+export function resolveClientEntries(config: ResolvedConfig, html: string | null): string[] {
   const entryPoints: string[] = []
   if (html) {
     const scriptMatches = html.matchAll(/<script[^>]+src=["']([^"']+)["'][^>]*>/gi)

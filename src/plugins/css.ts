@@ -73,16 +73,21 @@ style.setAttribute('data-nasti-css', __nasti_css_id__);
 style.textContent = css;
 document.head.appendChild(style);
 
-// HMR
+// HMR（prune 在 bundled 模式的 rolldown hot context 上不存在，须守卫）
 if (import.meta.hot) {
   import.meta.hot.accept();
-  import.meta.hot.prune(() => {
-    style.remove();
-  });
+  if (import.meta.hot.prune) {
+    import.meta.hot.prune(() => {
+      style.remove();
+    });
+  }
 }
 
 export default css;
 `,
+          // bundled dev（DevEngine）下该模块会进 Rolldown：不标 js 会按 .css
+          // 扩展名走 CSS 管线触发 #4271 报错；unbundled 中间件忽略此字段
+          moduleType: 'js',
         }
       }
 

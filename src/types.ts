@@ -41,6 +41,20 @@ export interface NastiConfig {
    * config 的既有插件与新 API 看到同一份配置。
    */
   environments?: Record<string, EnvironmentOptions>
+  /** 实验特性（无稳定性保证，随时可能变更/移除） */
+  experimental?: ExperimentalOptions
+}
+
+export interface ExperimentalOptions {
+  /**
+   * dev 用 Rolldown `dev()` 引擎整体打包 client 环境后从内存服务
+   * （完整打包模式 / Full Bundle Mode）。HMR 由引擎的 patch 机制驱动，
+   * 动态 import 走懒编译端点。依赖 rolldown 实验 API（无 semver 保护，
+   * 版本锁定 rc.13）。unbundled 管线保持默认。
+   * @experimental
+   * @default false
+   */
+  bundledDev?: boolean
 }
 
 /** 单个环境的可配置面（Environment API） */
@@ -360,6 +374,7 @@ export interface ResolvedConfig {
    * resolve/build 与 top-level **同引用**（精确镜像，运行时有断言校验）。
    */
   environments: Record<string, ResolvedEnvironmentOptions>
+  experimental: Required<ExperimentalOptions>
 }
 
 // Dev Server 接口

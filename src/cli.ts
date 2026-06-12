@@ -66,6 +66,7 @@ cli
   .option('--host [host]', 'Hostname')
   .option('--open [path]', 'Open browser on startup')
   .option('--mode <mode>', 'Set env mode')
+  .option('--bundle', 'Experimental: serve a full in-memory bundle via the Rolldown dev engine')
   .action(async (root: string | undefined, options: any) => {
     setupDebug(options)
     const logger = createCliLogger(options)
@@ -77,6 +78,7 @@ cli
         logLevel: options.logLevel,
         clearScreen: options.clearScreen,
         customLogger: logger,
+        ...(options.bundle ? { experimental: { bundledDev: true } } : {}),
         server: {
           port: options.port,
           host: options.host,

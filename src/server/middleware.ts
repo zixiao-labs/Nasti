@@ -23,7 +23,7 @@ const __require = createRequire(import.meta.url)
  * 读一次缓存一次：dev server 生命周期内不会变。
  */
 let __refreshRuntimeCache: string | null = null
-function getReactRefreshRuntimeEsm(): string {
+export function getReactRefreshRuntimeEsm(): string {
   if (__refreshRuntimeCache) return __refreshRuntimeCache
   // react-refresh 的 package.json `exports` 没有暴露 ./cjs/*，Node 24 严格执行
   // exports 后 `require.resolve('react-refresh/cjs/...')` 会抛 ERR_PACKAGE_PATH_NOT_EXPORTED。
