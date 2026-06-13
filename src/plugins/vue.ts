@@ -80,6 +80,8 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
         filename: filePath,
         id: `data-v-${scopeId}`,
         scoped: style.scoped ?? false,
+        // <style lang="scss|less|stylus"> 需经对应预处理器（缺省 undefined = 纯 CSS）
+        preprocessLang: style.lang,
       })
       return result.code as string
     },

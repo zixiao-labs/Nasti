@@ -91,7 +91,9 @@ export async function minifyCss(css: string, config: ResolvedConfig): Promise<st
 function fallbackMinify(css: string): string {
   return css
     .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\s*([{}:;,>~+])\s*/g, '$1')
+    // 仅折叠结构性标点周围的空白；不碰 + > ~ —— 它们在 calc()（`1 + 2`）
+    // 与选择器组合符里语义敏感，去空格会产出非法 CSS
+    .replace(/\s*([{}:;,])\s*/g, '$1')
     .replace(/;}/g, '}')
     .replace(/\s+/g, ' ')
     .trim()

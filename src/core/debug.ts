@@ -42,7 +42,16 @@ export function createDebugger(
     const elapsed = now - lastTime
     lastTime = now
     const msg = args
-      .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
+      .map((a) => {
+        if (typeof a === 'string') return a
+        // JSON.stringify 在循环引用 / BigInt 上会抛 —— 调试输出绝不能反过来
+        // 中断主流程，故 try/catch 回退到 String()
+        try {
+          return JSON.stringify(a)
+        } catch {
+          return String(a)
+        }
+      })
       .join(' ')
     if (filter && !msg.includes(filter)) return
     console.debug(

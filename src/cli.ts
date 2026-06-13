@@ -41,11 +41,14 @@ function createCliLogger(options: GlobalCLIOptions): Logger {
   })
 }
 
-function logCliError(logger: Logger, prefix: string, err: any): never {
+function logCliError(logger: Logger, prefix: string, err: unknown): never {
+  // 归一为真正的 Error —— 抛出值可能是 string/null/对象，直接读 .message
+  // 会崩，且 hasErrorLogged 的 WeakSet 只接受对象
+  const error = err instanceof Error ? err : new Error(typeof err === 'string' ? err : String(err))
   // hasErrorLogged 去重：内部已经 logger.error 过的错误不重复打印堆栈
-  if (!(err instanceof Error) || !logger.hasErrorLogged(err)) {
-    logger.error(pc.red(`\n  ${prefix}:\n  ${err.message}\n`), { error: err })
-    if (err.stack) logger.error(pc.dim(err.stack))
+  if (!logger.hasErrorLogged(error)) {
+    logger.error(pc.red(`\n  ${prefix}:\n  ${error.message}\n`), { error })
+    if (error.stack) logger.error(pc.dim(error.stack))
   }
   process.exit(1)
 }
@@ -209,6 +212,7 @@ cli
     try {
       const http = await import('node:http')
       const path = await import('node:path')
+      const os = await import('node:os')
       const sirv = (await import('sirv')).default
       const connect = (await import('connect')).default
       const { printServerUrls } = await import('./core/logger.js')
@@ -227,7 +231,14 @@ cli
         printServerUrls(
           {
             local: [`http://localhost:${port}/`],
-            network: host === '0.0.0.0' ? [`http://${host}:${port}/`] : [],
+            // 0.0.0.0 本身不可访问：枚举真实网卡的非内网 IPv4 地址
+            network:
+              host === '0.0.0.0'
+                ? Object.values(os.networkInterfaces())
+                    .flat()
+                    .filter((i) => i && i.family === 'IPv4' && !i.internal)
+                    .map((i) => `http://${i!.address}:${port}/`)
+                : [],
           },
           logger.info,
         )

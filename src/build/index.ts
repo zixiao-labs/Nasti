@@ -19,7 +19,6 @@ import { createCssEngine, type CssEngine } from '../core/css-engine.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
-import { PluginContainer } from '../core/plugin-container.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
 import pc from 'picocolors'
@@ -49,6 +48,9 @@ export function getRolldownOptions(
   const envOptions = environment.options
   const isServer = environment.consumer === 'server'
   const outDir = path.resolve(config.root, envOptions.build.outDir)
+  // 产物子目录前缀跟随 build.assetsDir（默认 'assets'）—— 与 assets 插件、
+  // 体积报告器使用同一来源，避免 JS/资源散落到不同目录
+  const assetsDir = envOptions.build.assetsDir
 
   // Rolldown 1.x 把 `define` 从顶层 InputOptions 移到了 `transform.define`，
   // 顶层传入会触发 "Invalid key" 警告并静默丢弃。
@@ -101,7 +103,7 @@ export function getRolldownOptions(
         minify: !!envOptions.build.minify,
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
-        assetFileNames: 'assets/[name].[hash][extname]',
+        assetFileNames: `${assetsDir}/[name].[hash][extname]`,
         ...userOutput,
         dir: outDir,
       }
@@ -109,9 +111,9 @@ export function getRolldownOptions(
         format: 'esm',
         sourcemap: !!envOptions.build.sourcemap,
         minify: !!envOptions.build.minify,
-        entryFileNames: 'assets/[name].[hash].js',
-        chunkFileNames: 'assets/[name].[hash].js',
-        assetFileNames: 'assets/[name].[hash][extname]',
+        entryFileNames: `${assetsDir}/[name].[hash].js`,
+        chunkFileNames: `${assetsDir}/[name].[hash].js`,
+        assetFileNames: `${assetsDir}/[name].[hash][extname]`,
         // 用户可覆盖默认输出：代码拆分（advancedChunks / codeSplitting）、chunk 命名等
         ...userOutput,
         // dir 始终由 Nasti 掌管 —— HTML 改写依赖固定的产物目录，故放在最后强制生效
@@ -257,10 +259,6 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResu
   await clientEnv.init()
   const allPlugins = clientEnv.plugins
 
-  // 运行插件的 buildStart 钩子，并收集 emitFile 输出文件
-  const pluginContainer = new PluginContainer(config)
-  await pluginContainer.buildStart()
-
   // 原生体积报告插件（守卫导入；不可用时走 JS 表格 fallback）
   const nativeReporter = config.logLevel === 'silent'
     ? null
@@ -276,14 +274,6 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResu
   const bundle = await rolldown(inputOptions)
   const { output } = await bundle.write(outputOptions)
   await bundle.close()
-  await pluginContainer.buildEnd()
-
-  // 将 emitFile 产出的文件写入输出目录
-  for (const ef of pluginContainer.getEmittedFiles()) {
-    const dest = path.resolve(outDir, ef.fileName)
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.writeFileSync(dest, ef.source)
-  }
 
   // 处理 HTML
   if (html) {

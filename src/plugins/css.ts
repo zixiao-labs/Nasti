@@ -135,7 +135,8 @@ export function rewriteCssUrls(css: string, from: string, root: string): string 
       return match
     }
     const resolved = path.resolve(path.dirname(from), url)
-    const relative = '/' + path.relative(root, resolved)
+    // path.relative 在 Windows 上产出反斜杠 —— URL 必须用 POSIX 分隔符
+    const relative = '/' + path.relative(root, resolved).replace(/\\/g, '/')
     return `url(${relative})`
   })
 }

@@ -300,7 +300,9 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
       })
       ws.on('close', () => {
         bundledClients.delete(clientId)
-        engine.removeClient(clientId).catch(() => {})
+        engine
+          .removeClient(clientId)
+          .catch((err: any) => debug?.(`removeClient failed for ${clientId}: ${err?.message ?? err}`))
       })
     })
   })

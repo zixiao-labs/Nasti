@@ -106,8 +106,14 @@ export async function resolveConfig(
     ...(inlineConfig.plugins ?? []),
   ]
 
+  // mode：merged.mode 优先，否则按 command 取默认。env（传给 plugin.config）
+  // 与最终 resolved.mode 共用此值，避免二者分叉（否则 loadEnv 会按错误的
+  // mode 加载 .env.<mode>，且插件看到的 env.mode 与 resolved.mode 不一致）
+  const mode = (merged.mode ??
+    (command === 'build' ? 'production' : 'development')) as ResolvedConfig['mode']
+
   // 执行插件 config 钩子
-  const env = { mode: merged.mode ?? defaults.mode, command }
+  const env = { mode, command }
   for (const plugin of rawPlugins) {
     if (plugin.config) {
       const result = await plugin.config(merged, env)
@@ -130,7 +136,7 @@ export async function resolveConfig(
   const resolved: ResolvedConfig = {
     root,
     base: merged.base ?? defaults.base,
-    mode: (command === 'build' ? 'production' : 'development') as ResolvedConfig['mode'],
+    mode,
     target: (merged.target ?? defaults.target) as ResolvedConfig['target'],
     framework: merged.framework ?? defaults.framework,
     command,
@@ -384,11 +390,20 @@ export function assertClientEnvironmentMirror(config: ResolvedConfig): void {
   }
 }
 
+/** 仅普通对象字面量返回 true —— 类实例 / 函数 / Date / Map 等不算，
+ *  避免 deepMerge 递归剥掉它们的原型方法（如自定义 customLogger 实例）。 */
+function isPlainObject(val: unknown): val is Record<string, any> {
+  if (val === null || typeof val !== 'object') return false
+  const proto = Object.getPrototypeOf(val)
+  return proto === Object.prototype || proto === null
+}
+
 function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
   const result = { ...target }
   for (const key of Object.keys(source)) {
     const val = source[key]
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
+    // 只对普通对象递归合并；其余（类实例/函数/数组…）整体按引用赋值，保留原型
+    if (isPlainObject(val)) {
       result[key as keyof T] = deepMerge(
         (result[key as keyof T] as Record<string, any>) ?? {},
         val,
