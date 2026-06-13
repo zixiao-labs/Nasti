@@ -1,4 +1,4 @@
-import type { NastiConfig, ResolvedConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig } from '../types.js'
+import type { NastiConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig, ExperimentalOptions } from '../types.js'
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
@@ -26,6 +26,11 @@ const defaultBuild: Required<BuildConfig> = {
   rolldownOptions: {},
   emptyOutDir: true,
   css: {},
+  reportCompressedSize: true,
+  chunkSizeWarningLimit: 500,
+  cssCodeSplit: true,
+  // 默认跟随 build.minify（resolveConfig 中按 minify 取值填充）
+  cssMinify: true,
 }
 
 // Electron 41+ 捆绑 Node 22.x / Chromium 138，故主进程目标默认 node22
@@ -43,7 +48,14 @@ const defaultElectron: Required<ElectronConfig> = {
   external: ['electron'],
 }
 
-export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } = {
+const defaultExperimental: Required<ExperimentalOptions> = {
+  bundledDev: false,
+}
+
+export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | 'environments' | 'experimental'>> & {
+  plugins: []
+  experimental: Required<ExperimentalOptions>
+} = {
   root: '.',
   base: '/',
   mode: 'development',
@@ -56,4 +68,6 @@ export const defaults: Required<Omit<NastiConfig, 'plugins'>> & { plugins: [] } 
   plugins: [],
   envPrefix: ['NASTI_', 'VITE_'],
   logLevel: 'info',
+  clearScreen: true,
+  experimental: defaultExperimental,
 }

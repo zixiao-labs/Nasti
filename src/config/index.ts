@@ -1,8 +1,14 @@
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
-import type { NastiConfig, ResolvedConfig, NastiPlugin } from '../types.js'
+import type {
+  NastiConfig,
+  ResolvedConfig,
+  NastiPlugin,
+  EnvironmentOptions,
+} from '../types.js'
 import { defaults } from './defaults.js'
+import { createLogger } from '../core/logger.js'
 
 /** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
 function loadTsconfigPaths(root: string): Record<string, string> {
@@ -100,8 +106,14 @@ export async function resolveConfig(
     ...(inlineConfig.plugins ?? []),
   ]
 
+  // mode：merged.mode 优先，否则按 command 取默认。env（传给 plugin.config）
+  // 与最终 resolved.mode 共用此值，避免二者分叉（否则 loadEnv 会按错误的
+  // mode 加载 .env.<mode>，且插件看到的 env.mode 与 resolved.mode 不一致）
+  const mode = (merged.mode ??
+    (command === 'build' ? 'production' : 'development')) as ResolvedConfig['mode']
+
   // 执行插件 config 钩子
-  const env = { mode: merged.mode ?? defaults.mode, command }
+  const env = { mode, command }
   for (const plugin of rawPlugins) {
     if (plugin.config) {
       const result = await plugin.config(merged, env)
@@ -110,10 +122,21 @@ export async function resolveConfig(
   }
 
   // 先构建 resolved，plugins 稍后填入（避免过滤时引用未初始化变量）
+  const logLevel = merged.logLevel ?? defaults.logLevel
+  const clearScreen = merged.clearScreen ?? defaults.clearScreen
+  const logger = createLogger(logLevel, {
+    allowClearScreen: clearScreen,
+    customLogger: merged.customLogger,
+  })
+  const mergedBuild = { ...defaults.build, ...merged.build } as ResolvedConfig['build']
+  // cssMinify 未显式配置时跟随 minify
+  if (merged.build?.cssMinify === undefined) {
+    mergedBuild.cssMinify = !!mergedBuild.minify
+  }
   const resolved: ResolvedConfig = {
     root,
     base: merged.base ?? defaults.base,
-    mode: (command === 'build' ? 'production' : 'development') as ResolvedConfig['mode'],
+    mode,
     target: (merged.target ?? defaults.target) as ResolvedConfig['target'],
     framework: merged.framework ?? defaults.framework,
     command,
@@ -126,15 +149,94 @@ export async function resolveConfig(
     },
     plugins: [],
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
-    build: { ...defaults.build, ...merged.build } as ResolvedConfig['build'],
+    build: mergedBuild,
     electron: { ...defaults.electron, ...merged.electron } as ResolvedConfig['electron'],
     envPrefix: (Array.isArray(merged.envPrefix)
       ? merged.envPrefix
       : merged.envPrefix
         ? [merged.envPrefix]
         : [...defaults.envPrefix]) as string[],
-    logLevel: merged.logLevel ?? defaults.logLevel,
+    logLevel,
+    clearScreen,
+    logger,
+    environments: {},
+    experimental: {
+      bundledDev: merged.experimental?.bundledDev ?? defaults.experimental.bundledDev,
+    },
   }
+
+  // ── Environment API：解析 environments map（默认 client + ssr）──────────
+  // client 与 top-level resolve/build 精确镜像（同引用）；其余环境按 consumer
+  // 取 per-consumer resolve 默认值。configEnvironment 钩子在最终化前调用。
+  const userEnvironments: Record<string, EnvironmentOptions> = {
+    client: {},
+    ssr: {},
+    ...(merged.environments ?? {}),
+  }
+  for (const [name, envOptions] of Object.entries(userEnvironments)) {
+    for (const plugin of rawPlugins) {
+      if (plugin.configEnvironment) {
+        const result = await plugin.configEnvironment(name, envOptions, env)
+        if (result) Object.assign(envOptions, deepMerge(envOptions, result))
+      }
+    }
+  }
+  for (const [name, envOptions] of Object.entries(userEnvironments)) {
+    const consumer: 'client' | 'server' =
+      envOptions.consumer ?? (name === 'client' ? 'client' : 'server')
+
+    if (name === 'client') {
+      // 用户对 environments.client 的覆盖写回 top-level（镜像语义：二者是同一份）
+      if (envOptions.resolve) {
+        Object.assign(resolved.resolve, {
+          ...envOptions.resolve,
+          alias: { ...resolved.resolve.alias, ...envOptions.resolve.alias },
+        })
+      }
+      if (envOptions.build) Object.assign(resolved.build, envOptions.build)
+      resolved.environments.client = {
+        consumer,
+        entry: [],
+        // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
+        resolve: resolved.resolve,
+        build: resolved.build,
+      }
+      continue
+    }
+
+    resolved.environments[name] = {
+      consumer,
+      entry: (Array.isArray(envOptions.entry)
+        ? envOptions.entry
+        : envOptions.entry
+          ? [envOptions.entry]
+          : []
+      ).map((e) => path.resolve(root, e)),
+      resolve: {
+        alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
+        extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],
+        // server consumer：node conditions（去 'browser'）；client 非默认环境沿用 top-level
+        conditions:
+          envOptions.resolve?.conditions ??
+          (consumer === 'server'
+            ? ['node', ...resolved.resolve.conditions.filter((c) => c !== 'browser')]
+            : [...resolved.resolve.conditions]),
+        mainFields:
+          envOptions.resolve?.mainFields ??
+          (consumer === 'server' ? ['module', 'main'] : [...resolved.resolve.mainFields]),
+      },
+      build: {
+        ...resolved.build,
+        ...envOptions.build,
+        // 非 client 环境默认产出到 <outDir>/<envName>（如 dist/ssr），可显式覆盖
+        outDir: envOptions.build?.outDir ?? path.join(resolved.build.outDir, name),
+        // server 产物默认不压缩（可调试性优先，与 Vite SSR 默认一致），可显式覆盖
+        minify: envOptions.build?.minify ?? (consumer === 'server' ? false : resolved.build.minify),
+      },
+    }
+  }
+
+  assertClientEnvironmentMirror(resolved)
 
   // 过滤插件（apply 为函数时可安全访问已初始化的 resolved）
   const filteredPlugins = rawPlugins.filter((p) => {
@@ -250,11 +352,58 @@ function hasDotNodeFile(dir: string, depth = 0): boolean {
   return false
 }
 
+/**
+ * 运行时镜像断言（Phase 1 检查，NASTI_2.0_PLAN.md §1.2）：
+ * top-level `resolve`/`build` 与 `environments.client` 必须**精确镜像**，
+ * 否则读 flat config 的既有插件与 Environment API 会看到两份配置。
+ *
+ * 比较规则（文档化）：
+ *   - 快路径：引用相等（resolveConfig 保证同引用，正常永远走这里）
+ *   - 慢路径：JSON 序列化逐字节比较 resolve{alias,extensions,conditions,
+ *     mainFields} 与 build 全字段（含 sourcemap）；函数值（如
+ *     rolldownOptions.output.advancedChunks 的 test 回调）会被 JSON 丢弃，
+ *     不参与比较 —— 不要在 per-env build 覆盖里只改函数字段
+ *   - 设 NASTI_DISABLE_MIRROR_ASSERT=1 可关闭（不建议）
+ */
+export function assertClientEnvironmentMirror(config: ResolvedConfig): void {
+  if (process.env.NASTI_DISABLE_MIRROR_ASSERT) return
+  const client = config.environments.client
+  if (!client) {
+    throw new Error('[nasti] internal: environments.client missing after resolveConfig')
+  }
+  if (client.resolve === config.resolve && client.build === config.build) return
+  const pairs: Array<[string, unknown, unknown]> = [
+    ['resolve', config.resolve, client.resolve],
+    ['build', config.build, client.build],
+  ]
+  for (const [field, top, env] of pairs) {
+    const a = JSON.stringify(top)
+    const b = JSON.stringify(env)
+    if (a !== b) {
+      throw new Error(
+        `[nasti] config mirror violation: top-level \`${field}\` and ` +
+          `\`environments.client.${field}\` diverged.\n  top-level: ${a}\n  client:    ${b}\n` +
+          `top-level 与 client 环境必须精确镜像 —— 请通过 top-level 或 ` +
+          `environments.client 之一配置，不要在解析后分别修改两者。`,
+      )
+    }
+  }
+}
+
+/** 仅普通对象字面量返回 true —— 类实例 / 函数 / Date / Map 等不算，
+ *  避免 deepMerge 递归剥掉它们的原型方法（如自定义 customLogger 实例）。 */
+function isPlainObject(val: unknown): val is Record<string, any> {
+  if (val === null || typeof val !== 'object') return false
+  const proto = Object.getPrototypeOf(val)
+  return proto === Object.prototype || proto === null
+}
+
 function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
   const result = { ...target }
   for (const key of Object.keys(source)) {
     const val = source[key]
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
+    // 只对普通对象递归合并；其余（类实例/函数/数组…）整体按引用赋值，保留原型
+    if (isPlainObject(val)) {
       result[key as keyof T] = deepMerge(
         (result[key as keyof T] as Record<string, any>) ?? {},
         val,

@@ -1,7 +1,8 @@
 // HMR 逻辑 - 文件变更 → 模块失效 → 通知客户端
 import path from 'node:path'
 import fs from 'node:fs'
-import type { DevServer, ModuleNode, HmrPayload, HmrUpdate, HmrContext } from '../types.js'
+import pc from 'picocolors'
+import type { DevServer, ModuleNode, HmrUpdate, HmrContext } from '../types.js'
 import { ModuleGraph } from '../core/module-graph.js'
 
 export async function handleFileChange(
@@ -9,7 +10,9 @@ export async function handleFileChange(
   server: DevServer,
 ): Promise<void> {
   const { moduleGraph, ws, config } = server
+  const logger = config.logger
   const relativePath = '/' + path.relative(config.root, file)
+  const shortFile = path.relative(config.root, file)
 
   // 找到受影响的模块
   const mods = moduleGraph.getModulesByFile(file)
@@ -49,6 +52,7 @@ export async function handleFileChange(
       const boundaries = (moduleGraph as ModuleGraph).getHmrBoundaries(affected)
       if (boundaries.length === 0) {
         // 无法热更新，full reload
+        logger.info(pc.green('page reload ') + pc.dim(shortFile), { timestamp: true })
         ws.send({ type: 'full-reload', path: relativePath })
         return
       }
@@ -65,6 +69,12 @@ export async function handleFileChange(
   }
 
   if (updates.length > 0) {
+    logger.info(
+      updates
+        .map((u) => pc.green('hmr update ') + pc.dim(u.path))
+        .join('\n'),
+      { timestamp: true },
+    )
     ws.send({ type: 'update', updates })
   }
 }
