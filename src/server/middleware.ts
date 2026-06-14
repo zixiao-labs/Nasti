@@ -257,16 +257,22 @@ export async function transformRequest(
     // 路径。解析真实路径后必须 (a) 是普通文件、(b) 落在某个 node_modules 内或项目根之下，
     // 否则拒绝 —— 防止借此把 /etc/passwd、~/.ssh/* 等任意磁盘文件打成 ESM 读出去。
     let realId: string | null = null
+    let realIdValid = false
     try {
-      if (idParam) realId = fs.realpathSync(idParam)
+      if (idParam) {
+        realId = fs.realpathSync(idParam)
+        // statSync 可能在 realpathSync 之后、检查之前因文件被删 / 权限变更而抛错（TOCTOU）。
+        // 与上面的 realpathSync 一样按「校验失败」处理：落到下面的解析分支，而非把
+        // 文件系统竞态变成 500（HTTP 路径）或向 server.transformRequest 调用方抛异常。
+        realIdValid =
+          fs.statSync(realId).isFile() &&
+          (realId.includes(`${path.sep}node_modules${path.sep}`) || isUnderRoot(realId, config.root))
+      }
     } catch {
       realId = null
+      realIdValid = false
     }
-    if (
-      realId &&
-      fs.statSync(realId).isFile() &&
-      (realId.includes(`${path.sep}node_modules${path.sep}`) || isUnderRoot(realId, config.root))
-    ) {
+    if (realId && realIdValid) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
       moduleGraph.registerModule(mod, realId)
       const code = await bundlePackageAsEsm(realId, config.root)
