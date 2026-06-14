@@ -246,6 +246,42 @@ export async function transformRequest(
     return { code: getReactRefreshRuntimeEsm() }
   }
 
+  // `/@modules/<spec>?id=<abs>`：打包阶段已（相对 importer 真实目录）解析好的依赖文件。
+  // 直接按该绝对路径打成 ESM，跳过 `resolveNodeModule(root, ...)` —— pnpm 严格布局下
+  // 传递依赖不在顶层 node_modules，从 root 解析必然 404。`id` 由 externalSpecToModuleUrl /
+  // subpath shim 用 encodeURIComponent 写入，URLSearchParams.get 自动解码（含 pnpm 路径里的 `+`）。
+  if (cleanReqUrl.startsWith('/@modules/') && url.includes('?')) {
+    const idParam = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('id')
+    // 安全校验：`?id=` 本应只由我们自己写入（externalSpecToModuleUrl / subpath shim
+    // 解析到的 node_modules 真实文件），但浏览器或恶意页面可向 dev server 伪造任意绝对
+    // 路径。解析真实路径后必须 (a) 是普通文件、(b) 落在某个 node_modules 内或项目根之下，
+    // 否则拒绝 —— 防止借此把 /etc/passwd、~/.ssh/* 等任意磁盘文件打成 ESM 读出去。
+    let realId: string | null = null
+    let realIdValid = false
+    try {
+      if (idParam) {
+        realId = fs.realpathSync(idParam)
+        // statSync 可能在 realpathSync 之后、检查之前因文件被删 / 权限变更而抛错（TOCTOU）。
+        // 与上面的 realpathSync 一样按「校验失败」处理：落到下面的解析分支，而非把
+        // 文件系统竞态变成 500（HTTP 路径）或向 server.transformRequest 调用方抛异常。
+        realIdValid =
+          fs.statSync(realId).isFile() &&
+          (realId.includes(`${path.sep}node_modules${path.sep}`) || isUnderRoot(realId, config.root))
+      }
+    } catch {
+      realId = null
+      realIdValid = false
+    }
+    if (realId && realIdValid) {
+      const mod = await moduleGraph.ensureEntryFromUrl(url)
+      moduleGraph.registerModule(mod, realId)
+      const code = await bundlePackageAsEsm(realId, config.root)
+      const transformResult = { code }
+      mod.transformResult = transformResult
+      return transformResult
+    }
+  }
+
   // 插件提供的虚拟模块。
   //
   // Vite 风格的插件（如 chen-the-dawnstreak 的 file-based routing、virtual SVG sprite 等）
@@ -308,7 +344,7 @@ export async function transformRequest(
   // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
   // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
   if (cleanReqUrl.startsWith('/@modules/')) {
-    const code = await bundlePackageAsEsm(filePath)
+    const code = await bundlePackageAsEsm(filePath, config.root)
     const transformResult = { code }
     mod.transformResult = transformResult
     return transformResult
@@ -417,21 +453,21 @@ async function loadVirtualModule(
 // Promise 缓存：同一入口文件只打包一次，防止并发重复打包
 const esmBundleCache = new Map<string, Promise<string>>()
 
-async function bundlePackageAsEsm(entryFile: string): Promise<string> {
+async function bundlePackageAsEsm(entryFile: string, root: string): Promise<string> {
   if (!esmBundleCache.has(entryFile)) {
-    esmBundleCache.set(entryFile, doBundlePackage(entryFile))
+    esmBundleCache.set(entryFile, doBundlePackage(entryFile, root))
   }
   return esmBundleCache.get(entryFile)!
 }
 
-async function doBundlePackage(entryFile: string): Promise<string> {
+async function doBundlePackage(entryFile: string, root: string): Promise<string> {
   // 子路径入口（如 `react-aria-components/Select`）尝试生成 re-export shim，
   // 指向同包主入口。否则每个子路径会被 rolldown 各自打成独立 bundle，
   // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
   // React Aria 之类对 context identity 敏感的库会出现「provider 与 consumer
   // 看到的不是同一个 context」、`useContext` 返回 null 的运行期崩溃。
   // 详见: https://github.com/zixiao-labs/Nasti/pull/16
-  const shim = await tryGenerateSubpathShim(entryFile)
+  const shim = await tryGenerateSubpathShim(entryFile, root)
   if (shim != null) return shim
 
   const { rolldown } = await import('rolldown')
@@ -453,21 +489,24 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   // 替换 process.env.NODE_ENV（rolldown 的 define 选项在此版本无效）
   code = code.replace(/process\.env\.NODE_ENV/g, '"development"')
 
-  // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载
+  // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载。
+  // 解析相对「本包自身的真实目录」进行（externalSpecToModuleUrl），以兼容 pnpm
+  // 严格布局下未被提升到顶层 node_modules 的传递依赖。
   // ⚠️ 必须用 ^ + m 锚定行首，只匹配真正的 import/export 声明，
   // 避免误匹配字符串内出现的 from "..." 导致 SyntaxError
+  const externalBaseDir = path.dirname(entryFile)
   code = code
     .replace(/^(import\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
     .replace(/^(export\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
     .replace(/^(import\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
 
   // CJS 外部 require 改写：
   // rolldown 将 CJS 的 require("pkg") 转为 __require("pkg")，在浏览器中抛异常。
   // 收集所有 __require("pkg")，替换为顶层 ESM import 的变量引用。
-  code = rewriteExternalRequires(code)
+  code = rewriteExternalRequires(code, externalBaseDir)
 
   // CJS 包的具名导出补全 + ESM-interop default 解包：
   // rolldown 将 CJS 包包装为 __commonJSMin，只输出 `export default require_xxx()`，
@@ -505,7 +544,7 @@ async function doBundlePackage(entryFile: string): Promise<string> {
  *
  * 仅 dev server 使用：build 模式走单一 rolldown 整图打包，本身不会重复内联。
  */
-async function tryGenerateSubpathShim(entryFile: string): Promise<string | null> {
+async function tryGenerateSubpathShim(entryFile: string, root: string): Promise<string | null> {
   // 1. 必须位于 node_modules 内
   const NM = `${path.sep}node_modules${path.sep}`
   if (!entryFile.includes(NM)) return null
@@ -579,10 +618,22 @@ async function tryGenerateSubpathShim(entryFile: string): Promise<string | null>
   }
 
   // 6. 生成 ESM shim：浏览器从 `/@modules/<pkgName>` 取到主 bundle 的命名空间，
-  //    再按子路径所声明的导出名重新对外暴露
+  //    再按子路径所声明的导出名重新对外暴露。
+  //    主入口 URL 必须与「其他模块对该包主入口的裸 import」命中同一个浏览器模块实例
+  //    —— 这正是 shim 去重 context（避免出现两份 `createContext`）的前提，见 PR #16。
+  //    rewriteImports 把用户源码里的裸 import 改写成裸 `/@modules/<pkgName>`，所以当该包
+  //    主入口能从项目根解析、且解析到的就是当前这份包目录（同一版本实例）时，shim 也必须
+  //    用裸 URL —— 浏览器按 URL 字符串去重，带 `?id=` 会被当成另一个模块而重复实例化。
+  //    否则（pnpm 下未提升到顶层的传递依赖，或根部命中的是另一个版本）才回落到 `?id=`
+  //    携带绝对路径，既避免 dev server 从 root 解析 404，也不会串到错误版本。
+  const rootMain = resolveNodeModule(root, pkgName)
+  const mainEntryUrl =
+    rootMain && rootMain.startsWith(pkgDir + path.sep)
+      ? `/@modules/${pkgName}`
+      : `/@modules/${pkgName}?id=${encodeURIComponent(mainEntry)}`
   const lines: string[] = [
     `// Nasti subpath shim → ${pkgName} (avoid duplicate bundling)`,
-    `import * as __pkg from "/@modules/${pkgName}";`,
+    `import * as __pkg from "${mainEntryUrl}";`,
   ]
   for (const k of subKeys) {
     lines.push(`export const ${k} = __pkg[${JSON.stringify(k)}];`)
@@ -641,7 +692,7 @@ function pickMainEntryByExtension(pkgDir: string, preferredExt: string): string 
  *  使用 namespace import + default 回退，兼容 CJS 和 ESM 模块：
  *  - CJS 包有 default export（__cjsMod）→ 取 .default
  *  - ESM 包只有 named exports → 取 namespace 本身 */
-function rewriteExternalRequires(code: string): string {
+function rewriteExternalRequires(code: string, baseDir: string): string {
   const pkgs = new Set<string>()
   const re = /__require\(["']([^"']+)["']\)/g
   let m
@@ -654,7 +705,7 @@ function rewriteExternalRequires(code: string): string {
   const imports: string[] = []
   for (const pkg of pkgs) {
     const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
-    imports.push(`import * as __ns_${safe} from "/@modules/${pkg}";`)
+    imports.push(`import * as __ns_${safe} from "${externalSpecToModuleUrl(pkg, baseDir)}";`)
     imports.push(`var __req_${safe} = "default" in __ns_${safe} ? __ns_${safe}["default"] : __ns_${safe};`)
     result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
     result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
@@ -864,11 +915,45 @@ function rewriteNodeModuleRelativeImports(
 }
 
 /**
+ * 把 bundle 中被 external 化的 bare specifier 解析为浏览器可加载的 URL。
+ *
+ * 关键：相对「正在打包的包自身的真实目录」解析（而非项目根）。pnpm 严格布局下，
+ * 传递依赖不会被提升到顶层 node_modules（只有直接依赖以 symlink 形式出现在那里），
+ * 真实文件在 `.pnpm/<pkg>@<ver>/node_modules/` 内，其依赖是同目录下的兄弟包。
+ * 从项目根向上走只能找到直接依赖 → 传递依赖（如 react-router 的 @tanstack/router-core）
+ * 必然 404。改为从 importer 包的真实目录向上走即可命中。
+ *
+ * 解析成功时把解析到的绝对路径编码进 `?id=`，dev server 据此直接打包该文件，无需再次
+ * 从 root 解析（见 transformRequest 中的 `/@modules/...?id=` 分支）。解析失败回落到
+ * 裸 `/@modules/<spec>`（npm/yarn 扁平布局下 root 解析仍可命中，行为不变）。
+ */
+function externalSpecToModuleUrl(spec: string, baseDir: string): string {
+  const resolved = resolveNodeModule(baseDir, spec)
+  return resolved
+    ? `/@modules/${spec}?id=${encodeURIComponent(resolved)}`
+    : `/@modules/${spec}`
+}
+
+/**
  * ESM-aware node_modules 解析：支持 package.json exports 字段的 import/browser/module/default 条件，
  * 兼容 ESM-only 包（如只有 "import" 条件而无 "require" 的包）。
  * createRequire 使用 CJS 解析逻辑，遇到 ESM-only exports 会抛异常，因此不能用于此场景。
+ *
+ * **返回真实路径**（解析 symlink）：pnpm 把直接依赖以 symlink 放在顶层 node_modules，
+ * 真实文件在 `.pnpm/.../node_modules/` 下。后续打包阶段用 `dirname(entryFile)` 向上找
+ * 传递依赖，只有从真实路径出发才能命中那些未被提升的兄弟包。
  */
-function resolveNodeModule(root: string, moduleName: string): string | null {
+function resolveNodeModule(baseDir: string, moduleName: string): string | null {
+  const resolved = resolveNodeModuleEntry(baseDir, moduleName)
+  if (!resolved) return null
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+function resolveNodeModuleEntry(root: string, moduleName: string): string | null {
   // 解析包名和子路径（处理 scoped 包如 @scope/pkg/sub）
   let pkgName: string
   let subpath: string
@@ -947,7 +1032,20 @@ function resolvePackageExports(exports: any, key: string, pkgDir: string): strin
     return key === '.' ? path.join(pkgDir, exports) : null
   }
   const entry = exports[key]
-  if (entry === undefined) return null
+  if (entry === undefined) {
+    // 顶层条件对象（如 `{"import": "./x.mjs", "require": "./x.cjs"}`）是 "." 入口的
+    // 语法糖：当对象没有任何以 "." 开头的子路径键时，整个对象就是 "." 的条件映射，
+    // 交给 resolveExportValue 走 ESM_CONDITIONS 解析，而不是误判为「无此导出」返回 null
+    // （否则只能回落到 module/main，exports-only 的双格式包会解析失败）。
+    if (
+      key === '.' &&
+      typeof exports === 'object' &&
+      !Object.keys(exports).some((k) => k.startsWith('.'))
+    ) {
+      return resolveExportValue(exports, pkgDir)
+    }
+    return null
+  }
   return resolveExportValue(entry, pkgDir)
 }
 
