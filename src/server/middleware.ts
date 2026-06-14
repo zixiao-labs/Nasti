@@ -252,10 +252,24 @@ export async function transformRequest(
   // subpath shim 用 encodeURIComponent 写入，URLSearchParams.get 自动解码（含 pnpm 路径里的 `+`）。
   if (cleanReqUrl.startsWith('/@modules/') && url.includes('?')) {
     const idParam = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('id')
-    if (idParam && fs.existsSync(idParam)) {
+    // 安全校验：`?id=` 本应只由我们自己写入（externalSpecToModuleUrl / subpath shim
+    // 解析到的 node_modules 真实文件），但浏览器或恶意页面可向 dev server 伪造任意绝对
+    // 路径。解析真实路径后必须 (a) 是普通文件、(b) 落在某个 node_modules 内或项目根之下，
+    // 否则拒绝 —— 防止借此把 /etc/passwd、~/.ssh/* 等任意磁盘文件打成 ESM 读出去。
+    let realId: string | null = null
+    try {
+      if (idParam) realId = fs.realpathSync(idParam)
+    } catch {
+      realId = null
+    }
+    if (
+      realId &&
+      fs.statSync(realId).isFile() &&
+      (realId.includes(`${path.sep}node_modules${path.sep}`) || isUnderRoot(realId, config.root))
+    ) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
-      moduleGraph.registerModule(mod, idParam)
-      const code = await bundlePackageAsEsm(idParam)
+      moduleGraph.registerModule(mod, realId)
+      const code = await bundlePackageAsEsm(realId, config.root)
       const transformResult = { code }
       mod.transformResult = transformResult
       return transformResult
@@ -324,7 +338,7 @@ export async function transformRequest(
   // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
   // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
   if (cleanReqUrl.startsWith('/@modules/')) {
-    const code = await bundlePackageAsEsm(filePath)
+    const code = await bundlePackageAsEsm(filePath, config.root)
     const transformResult = { code }
     mod.transformResult = transformResult
     return transformResult
@@ -433,21 +447,21 @@ async function loadVirtualModule(
 // Promise 缓存：同一入口文件只打包一次，防止并发重复打包
 const esmBundleCache = new Map<string, Promise<string>>()
 
-async function bundlePackageAsEsm(entryFile: string): Promise<string> {
+async function bundlePackageAsEsm(entryFile: string, root: string): Promise<string> {
   if (!esmBundleCache.has(entryFile)) {
-    esmBundleCache.set(entryFile, doBundlePackage(entryFile))
+    esmBundleCache.set(entryFile, doBundlePackage(entryFile, root))
   }
   return esmBundleCache.get(entryFile)!
 }
 
-async function doBundlePackage(entryFile: string): Promise<string> {
+async function doBundlePackage(entryFile: string, root: string): Promise<string> {
   // 子路径入口（如 `react-aria-components/Select`）尝试生成 re-export shim，
   // 指向同包主入口。否则每个子路径会被 rolldown 各自打成独立 bundle，
   // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
   // React Aria 之类对 context identity 敏感的库会出现「provider 与 consumer
   // 看到的不是同一个 context」、`useContext` 返回 null 的运行期崩溃。
   // 详见: https://github.com/zixiao-labs/Nasti/pull/16
-  const shim = await tryGenerateSubpathShim(entryFile)
+  const shim = await tryGenerateSubpathShim(entryFile, root)
   if (shim != null) return shim
 
   const { rolldown } = await import('rolldown')
@@ -524,7 +538,7 @@ async function doBundlePackage(entryFile: string): Promise<string> {
  *
  * 仅 dev server 使用：build 模式走单一 rolldown 整图打包，本身不会重复内联。
  */
-async function tryGenerateSubpathShim(entryFile: string): Promise<string | null> {
+async function tryGenerateSubpathShim(entryFile: string, root: string): Promise<string | null> {
   // 1. 必须位于 node_modules 内
   const NM = `${path.sep}node_modules${path.sep}`
   if (!entryFile.includes(NM)) return null
@@ -599,9 +613,18 @@ async function tryGenerateSubpathShim(entryFile: string): Promise<string | null>
 
   // 6. 生成 ESM shim：浏览器从 `/@modules/<pkgName>` 取到主 bundle 的命名空间，
   //    再按子路径所声明的导出名重新对外暴露。
-  //    主入口用 `?id=` 携带已解析的绝对路径，避免 dev server 再从 root 解析
-  //    （pnpm 下传递依赖的主包同样不在顶层 node_modules）。
-  const mainEntryUrl = `/@modules/${pkgName}?id=${encodeURIComponent(mainEntry)}`
+  //    主入口 URL 必须与「其他模块对该包主入口的裸 import」命中同一个浏览器模块实例
+  //    —— 这正是 shim 去重 context（避免出现两份 `createContext`）的前提，见 PR #16。
+  //    rewriteImports 把用户源码里的裸 import 改写成裸 `/@modules/<pkgName>`，所以当该包
+  //    主入口能从项目根解析、且解析到的就是当前这份包目录（同一版本实例）时，shim 也必须
+  //    用裸 URL —— 浏览器按 URL 字符串去重，带 `?id=` 会被当成另一个模块而重复实例化。
+  //    否则（pnpm 下未提升到顶层的传递依赖，或根部命中的是另一个版本）才回落到 `?id=`
+  //    携带绝对路径，既避免 dev server 从 root 解析 404，也不会串到错误版本。
+  const rootMain = resolveNodeModule(root, pkgName)
+  const mainEntryUrl =
+    rootMain && rootMain.startsWith(pkgDir + path.sep)
+      ? `/@modules/${pkgName}`
+      : `/@modules/${pkgName}?id=${encodeURIComponent(mainEntry)}`
   const lines: string[] = [
     `// Nasti subpath shim → ${pkgName} (avoid duplicate bundling)`,
     `import * as __pkg from "${mainEntryUrl}";`,
@@ -1003,7 +1026,20 @@ function resolvePackageExports(exports: any, key: string, pkgDir: string): strin
     return key === '.' ? path.join(pkgDir, exports) : null
   }
   const entry = exports[key]
-  if (entry === undefined) return null
+  if (entry === undefined) {
+    // 顶层条件对象（如 `{"import": "./x.mjs", "require": "./x.cjs"}`）是 "." 入口的
+    // 语法糖：当对象没有任何以 "." 开头的子路径键时，整个对象就是 "." 的条件映射，
+    // 交给 resolveExportValue 走 ESM_CONDITIONS 解析，而不是误判为「无此导出」返回 null
+    // （否则只能回落到 module/main，exports-only 的双格式包会解析失败）。
+    if (
+      key === '.' &&
+      typeof exports === 'object' &&
+      !Object.keys(exports).some((k) => k.startsWith('.'))
+    ) {
+      return resolveExportValue(exports, pkgDir)
+    }
+    return null
+  }
   return resolveExportValue(entry, pkgDir)
 }
 
