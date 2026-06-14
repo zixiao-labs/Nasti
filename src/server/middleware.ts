@@ -246,6 +246,22 @@ export async function transformRequest(
     return { code: getReactRefreshRuntimeEsm() }
   }
 
+  // `/@modules/<spec>?id=<abs>`：打包阶段已（相对 importer 真实目录）解析好的依赖文件。
+  // 直接按该绝对路径打成 ESM，跳过 `resolveNodeModule(root, ...)` —— pnpm 严格布局下
+  // 传递依赖不在顶层 node_modules，从 root 解析必然 404。`id` 由 externalSpecToModuleUrl /
+  // subpath shim 用 encodeURIComponent 写入，URLSearchParams.get 自动解码（含 pnpm 路径里的 `+`）。
+  if (cleanReqUrl.startsWith('/@modules/') && url.includes('?')) {
+    const idParam = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('id')
+    if (idParam && fs.existsSync(idParam)) {
+      const mod = await moduleGraph.ensureEntryFromUrl(url)
+      moduleGraph.registerModule(mod, idParam)
+      const code = await bundlePackageAsEsm(idParam)
+      const transformResult = { code }
+      mod.transformResult = transformResult
+      return transformResult
+    }
+  }
+
   // 插件提供的虚拟模块。
   //
   // Vite 风格的插件（如 chen-the-dawnstreak 的 file-based routing、virtual SVG sprite 等）
@@ -453,21 +469,24 @@ async function doBundlePackage(entryFile: string): Promise<string> {
   // 替换 process.env.NODE_ENV（rolldown 的 define 选项在此版本无效）
   code = code.replace(/process\.env\.NODE_ENV/g, '"development"')
 
-  // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载
+  // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载。
+  // 解析相对「本包自身的真实目录」进行（externalSpecToModuleUrl），以兼容 pnpm
+  // 严格布局下未被提升到顶层 node_modules 的传递依赖。
   // ⚠️ 必须用 ^ + m 锚定行首，只匹配真正的 import/export 声明，
   // 避免误匹配字符串内出现的 from "..." 导致 SyntaxError
+  const externalBaseDir = path.dirname(entryFile)
   code = code
     .replace(/^(import\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
     .replace(/^(export\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
     .replace(/^(import\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}/@modules/${spec}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
 
   // CJS 外部 require 改写：
   // rolldown 将 CJS 的 require("pkg") 转为 __require("pkg")，在浏览器中抛异常。
   // 收集所有 __require("pkg")，替换为顶层 ESM import 的变量引用。
-  code = rewriteExternalRequires(code)
+  code = rewriteExternalRequires(code, externalBaseDir)
 
   // CJS 包的具名导出补全 + ESM-interop default 解包：
   // rolldown 将 CJS 包包装为 __commonJSMin，只输出 `export default require_xxx()`，
@@ -579,10 +598,13 @@ async function tryGenerateSubpathShim(entryFile: string): Promise<string | null>
   }
 
   // 6. 生成 ESM shim：浏览器从 `/@modules/<pkgName>` 取到主 bundle 的命名空间，
-  //    再按子路径所声明的导出名重新对外暴露
+  //    再按子路径所声明的导出名重新对外暴露。
+  //    主入口用 `?id=` 携带已解析的绝对路径，避免 dev server 再从 root 解析
+  //    （pnpm 下传递依赖的主包同样不在顶层 node_modules）。
+  const mainEntryUrl = `/@modules/${pkgName}?id=${encodeURIComponent(mainEntry)}`
   const lines: string[] = [
     `// Nasti subpath shim → ${pkgName} (avoid duplicate bundling)`,
-    `import * as __pkg from "/@modules/${pkgName}";`,
+    `import * as __pkg from "${mainEntryUrl}";`,
   ]
   for (const k of subKeys) {
     lines.push(`export const ${k} = __pkg[${JSON.stringify(k)}];`)
@@ -641,7 +663,7 @@ function pickMainEntryByExtension(pkgDir: string, preferredExt: string): string 
  *  使用 namespace import + default 回退，兼容 CJS 和 ESM 模块：
  *  - CJS 包有 default export（__cjsMod）→ 取 .default
  *  - ESM 包只有 named exports → 取 namespace 本身 */
-function rewriteExternalRequires(code: string): string {
+function rewriteExternalRequires(code: string, baseDir: string): string {
   const pkgs = new Set<string>()
   const re = /__require\(["']([^"']+)["']\)/g
   let m
@@ -654,7 +676,7 @@ function rewriteExternalRequires(code: string): string {
   const imports: string[] = []
   for (const pkg of pkgs) {
     const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
-    imports.push(`import * as __ns_${safe} from "/@modules/${pkg}";`)
+    imports.push(`import * as __ns_${safe} from "${externalSpecToModuleUrl(pkg, baseDir)}";`)
     imports.push(`var __req_${safe} = "default" in __ns_${safe} ? __ns_${safe}["default"] : __ns_${safe};`)
     result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
     result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
@@ -864,11 +886,45 @@ function rewriteNodeModuleRelativeImports(
 }
 
 /**
+ * 把 bundle 中被 external 化的 bare specifier 解析为浏览器可加载的 URL。
+ *
+ * 关键：相对「正在打包的包自身的真实目录」解析（而非项目根）。pnpm 严格布局下，
+ * 传递依赖不会被提升到顶层 node_modules（只有直接依赖以 symlink 形式出现在那里），
+ * 真实文件在 `.pnpm/<pkg>@<ver>/node_modules/` 内，其依赖是同目录下的兄弟包。
+ * 从项目根向上走只能找到直接依赖 → 传递依赖（如 react-router 的 @tanstack/router-core）
+ * 必然 404。改为从 importer 包的真实目录向上走即可命中。
+ *
+ * 解析成功时把解析到的绝对路径编码进 `?id=`，dev server 据此直接打包该文件，无需再次
+ * 从 root 解析（见 transformRequest 中的 `/@modules/...?id=` 分支）。解析失败回落到
+ * 裸 `/@modules/<spec>`（npm/yarn 扁平布局下 root 解析仍可命中，行为不变）。
+ */
+function externalSpecToModuleUrl(spec: string, baseDir: string): string {
+  const resolved = resolveNodeModule(baseDir, spec)
+  return resolved
+    ? `/@modules/${spec}?id=${encodeURIComponent(resolved)}`
+    : `/@modules/${spec}`
+}
+
+/**
  * ESM-aware node_modules 解析：支持 package.json exports 字段的 import/browser/module/default 条件，
  * 兼容 ESM-only 包（如只有 "import" 条件而无 "require" 的包）。
  * createRequire 使用 CJS 解析逻辑，遇到 ESM-only exports 会抛异常，因此不能用于此场景。
+ *
+ * **返回真实路径**（解析 symlink）：pnpm 把直接依赖以 symlink 放在顶层 node_modules，
+ * 真实文件在 `.pnpm/.../node_modules/` 下。后续打包阶段用 `dirname(entryFile)` 向上找
+ * 传递依赖，只有从真实路径出发才能命中那些未被提升的兄弟包。
  */
-function resolveNodeModule(root: string, moduleName: string): string | null {
+function resolveNodeModule(baseDir: string, moduleName: string): string | null {
+  const resolved = resolveNodeModuleEntry(baseDir, moduleName)
+  if (!resolved) return null
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+function resolveNodeModuleEntry(root: string, moduleName: string): string | null {
   // 解析包名和子路径（处理 scoped 包如 @scope/pkg/sub）
   let pkgName: string
   let subpath: string
