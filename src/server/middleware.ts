@@ -497,16 +497,16 @@ async function doBundlePackage(entryFile: string, root: string): Promise<string>
   const externalBaseDir = path.dirname(entryFile)
   code = code
     .replace(/^(import\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir, root)}${q}`)
     .replace(/^(export\b[^;'"]*?\bfrom\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir, root)}${q}`)
     .replace(/^(import\s+)(['"])([^'"./][^'"]*)(\2)/gm,
-      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir)}${q}`)
+      (_, prefix, q, spec) => `${prefix}${q}${externalSpecToModuleUrl(spec, externalBaseDir, root)}${q}`)
 
   // CJS 外部 require 改写：
   // rolldown 将 CJS 的 require("pkg") 转为 __require("pkg")，在浏览器中抛异常。
   // 收集所有 __require("pkg")，替换为顶层 ESM import 的变量引用。
-  code = rewriteExternalRequires(code, externalBaseDir)
+  code = rewriteExternalRequires(code, externalBaseDir, root)
 
   // CJS 包的具名导出补全 + ESM-interop default 解包：
   // rolldown 将 CJS 包包装为 __commonJSMin，只输出 `export default require_xxx()`，
@@ -692,7 +692,7 @@ function pickMainEntryByExtension(pkgDir: string, preferredExt: string): string 
  *  使用 namespace import + default 回退，兼容 CJS 和 ESM 模块：
  *  - CJS 包有 default export（__cjsMod）→ 取 .default
  *  - ESM 包只有 named exports → 取 namespace 本身 */
-function rewriteExternalRequires(code: string, baseDir: string): string {
+function rewriteExternalRequires(code: string, baseDir: string, root: string): string {
   const pkgs = new Set<string>()
   const re = /__require\(["']([^"']+)["']\)/g
   let m
@@ -705,7 +705,7 @@ function rewriteExternalRequires(code: string, baseDir: string): string {
   const imports: string[] = []
   for (const pkg of pkgs) {
     const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
-    imports.push(`import * as __ns_${safe} from "${externalSpecToModuleUrl(pkg, baseDir)}";`)
+    imports.push(`import * as __ns_${safe} from "${externalSpecToModuleUrl(pkg, baseDir, root)}";`)
     imports.push(`var __req_${safe} = "default" in __ns_${safe} ? __ns_${safe}["default"] : __ns_${safe};`)
     result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
     result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
@@ -923,15 +923,24 @@ function rewriteNodeModuleRelativeImports(
  * 从项目根向上走只能找到直接依赖 → 传递依赖（如 react-router 的 @tanstack/router-core）
  * 必然 404。改为从 importer 包的真实目录向上走即可命中。
  *
- * 解析成功时把解析到的绝对路径编码进 `?id=`，dev server 据此直接打包该文件，无需再次
- * 从 root 解析（见 transformRequest 中的 `/@modules/...?id=` 分支）。解析失败回落到
- * 裸 `/@modules/<spec>`（npm/yarn 扁平布局下 root 解析仍可命中，行为不变）。
+ * URL 去重（关键，关系到 React 等对实例唯一性敏感的库能否工作）：用户源码里的裸 import
+ * 被 rewriteImports 改写成裸 `/@modules/<spec>`，并由 dev server 从项目根解析。若从 importer
+ * 真实目录解析与从项目根解析命中**同一真实文件**（npm/yarn 扁平布局，或依赖已被提升到顶层
+ * node_modules），就必须同样发裸 URL —— 浏览器按 URL 字符串去重，带 `?id=` 会被当成另一个
+ * 模块重复实例化。否则 app 的 `/@modules/react` 与 react-dom 外部化得到的
+ * `/@modules/react?id=...` 会变成两份 React → 二者 dispatcher 不互通 → useEffect 读到 null →
+ * "Invalid hook call. Hooks can only be called inside of the body of a function component"。
+ *
+ * 仅当项目根解析不到、或解析到的是**不同文件**（pnpm 未提升的传递依赖、多版本并存）时，
+ * 才把 importer 相对解析到的绝对路径编码进 `?id=`，dev server 据此直接打包该文件，无需再次
+ * 从 root 解析（见 transformRequest 中的 `/@modules/...?id=` 分支）。
  */
-function externalSpecToModuleUrl(spec: string, baseDir: string): string {
+function externalSpecToModuleUrl(spec: string, baseDir: string, root: string): string {
   const resolved = resolveNodeModule(baseDir, spec)
-  return resolved
-    ? `/@modules/${spec}?id=${encodeURIComponent(resolved)}`
-    : `/@modules/${spec}`
+  if (!resolved) return `/@modules/${spec}`
+  const rootResolved = resolveNodeModule(root, spec)
+  if (rootResolved && rootResolved === resolved) return `/@modules/${spec}`
+  return `/@modules/${spec}?id=${encodeURIComponent(resolved)}`
 }
 
 /**
