@@ -208,7 +208,7 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
     transform(code: string, id: string) {
       if (!shouldTransform(id)) return null
       const result = transformCode(id, code, {
-        sourcemap: !!config.build.sourcemap,
+        sourcemap: true,
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })
@@ -226,7 +226,7 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
   await bundle.write({
     file: opts.outFile,
     format: opts.format === 'cjs' ? 'cjs' : 'esm',
-    sourcemap: false,
+    sourcemap: true,
     minify: false,
     // rolldown 已弃用 inlineDynamicImports，改用 codeSplitting:false 表达
     // 同样语义（单 chunk、内联 dynamic import）
