@@ -188,9 +188,13 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
         needsLatestOutput = true
         continue
       }
-      // Patch：存内存 + 通知该 client 拉取（XSSI 加固：尾部 export {}）
+      // Patch：存内存 + 通知该 client 拉取。浏览器完成 patch 求值后刷新页面，
+      // 与 unbundled 客户端保持一致；尾部 export {} 同时用于 XSSI 加固。
       const patchPath = `__nasti_patch/${update.filename}`
-      patches.set(patchPath, update.code + '\n;export {}')
+      patches.set(
+        patchPath,
+        update.code + '\n;globalThis.location?.reload();\n;export {}',
+      )
       if (update.sourcemap && update.sourcemapFilename) {
         patches.set(`__nasti_patch/${update.sourcemapFilename}`, update.sourcemap)
       }

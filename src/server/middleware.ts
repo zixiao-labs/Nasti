@@ -1128,7 +1128,7 @@ const hotModulesMap = new Map();
 const disposeMap = new Map();
 const pruneMap = new Map();
 
-socket.addEventListener('message', ({ data }) => {
+socket.addEventListener('message', async ({ data }) => {
   const payload = JSON.parse(data);
   switch (payload.type) {
     case 'connected':
@@ -1136,14 +1136,21 @@ socket.addEventListener('message', ({ data }) => {
       clearErrorOverlay();
       break;
     case 'update':
-      payload.updates.forEach((update) => {
-        if (update.type === 'js-update') {
-          fetchUpdate(update);
-        } else if (update.type === 'css-update') {
-          updateCss(update.path);
-        }
-      });
-      clearErrorOverlay();
+      try {
+        await Promise.all(payload.updates.map((update) => {
+          if (update.type === 'js-update') {
+            return fetchUpdate(update);
+          } else if (update.type === 'css-update') {
+            return updateCss(update.path);
+          }
+        }));
+        clearErrorOverlay();
+        console.log('[nasti] HMR update complete, reloading page');
+        location.reload();
+      } catch (err) {
+        console.error('[nasti] HMR update failed:', err);
+        showErrorOverlay(err);
+      }
       break;
     case 'full-reload':
       console.log('[nasti] full reload');
@@ -1185,7 +1192,7 @@ async function fetchUpdate(update) {
 function updateCss(path) {
   const el = document.querySelector(\`style[data-nasti-css="\${path}"]\`);
   if (el) {
-    fetch(path + '?t=' + Date.now())
+    return fetch(path + '?t=' + Date.now())
       .then(r => r.text())
       .then(css => { el.textContent = css; });
   }
