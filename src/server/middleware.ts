@@ -1136,16 +1136,21 @@ socket.addEventListener('message', async ({ data }) => {
       clearErrorOverlay();
       break;
     case 'update':
-      await Promise.all(payload.updates.map((update) => {
-        if (update.type === 'js-update') {
-          return fetchUpdate(update);
-        } else if (update.type === 'css-update') {
-          return updateCss(update.path);
-        }
-      }));
-      clearErrorOverlay();
-      console.log('[nasti] HMR update complete, reloading page');
-      location.reload();
+      try {
+        await Promise.all(payload.updates.map((update) => {
+          if (update.type === 'js-update') {
+            return fetchUpdate(update);
+          } else if (update.type === 'css-update') {
+            return updateCss(update.path);
+          }
+        }));
+        clearErrorOverlay();
+        console.log('[nasti] HMR update complete, reloading page');
+        location.reload();
+      } catch (err) {
+        console.error('[nasti] HMR update failed:', err);
+        showErrorOverlay(err);
+      }
       break;
     case 'full-reload':
       console.log('[nasti] full reload');
