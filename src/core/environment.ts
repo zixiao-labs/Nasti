@@ -115,8 +115,11 @@ export class NastiEnvironment implements EnvironmentInstance {
   }
 
   async close(): Promise<void> {
-    await this.driver?.close?.(this.getDriverContext())
-    await this.hot.close?.()
+    try {
+      await this.driver?.close?.(this.getDriverContext())
+    } finally {
+      await this.hot.close?.()
+    }
   }
 }
 

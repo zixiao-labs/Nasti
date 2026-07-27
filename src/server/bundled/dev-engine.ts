@@ -38,7 +38,12 @@ import pc from 'picocolors'
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from 'node:http'
 import type { ResolvedConfig } from '../../types.js'
 import type { NastiEnvironment } from '../../core/environment.js'
-import { getRolldownOptions, toRolldownPlugins, resolveClientEntries } from '../../build/index.js'
+import {
+  getRolldownOptions,
+  replaceEntryScript,
+  resolveClientEntries,
+  toRolldownPlugins,
+} from '../../build/index.js'
 import { readHtmlFile, processHtml } from '../../plugins/html.js'
 import { transformCode } from '../../core/transformer.js'
 import { getReactRefreshRuntimeEsm } from '../middleware.js'
@@ -581,25 +586,14 @@ async function renderBundledIndexHtml(
   }
   // 入口 script src → 内存产物 URL
   for (const [facadeModuleId, fileName] of entryFileNames) {
-    const originalEntry = path.relative(config.root, facadeModuleId).split(path.sep).join('/')
-    const htmlFile = config.environments.client?.html
-    const htmlRelative = htmlFile
-      ? path.relative(path.dirname(htmlFile), facadeModuleId).split(path.sep).join('/')
-      : originalEntry
-    for (const candidate of new Set([
-      originalEntry,
-      `/${originalEntry}`,
-      htmlRelative,
-      `./${htmlRelative}`,
-    ])) {
-      processed = processed.replace(
-        new RegExp(
-          `(src=["'])${candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([?#][^"']*)?(["'])`,
-          'g',
-        ),
-        `$1/${fileName}$3`,
-      )
-    }
+    processed = replaceEntryScript(
+      processed,
+      facadeModuleId,
+      fileName,
+      config,
+      config.environments.client?.html ?? 'index.html',
+      '/',
+    )
   }
   return processed
 }

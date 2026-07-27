@@ -24,4 +24,7 @@ async function createWindow(): Promise<void> {
   }
 }
 
-void app.whenReady().then(createWindow)
+void app.whenReady().then(createWindow).catch((error: unknown) => {
+  console.error('[nasti] failed to start Electron application', error)
+  app.exit(1)
+})

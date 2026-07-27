@@ -64,7 +64,7 @@ export function orderPlugins(plugins: NastiPlugin[]): NastiPlugin[] {
       .filter((_, index) => indegree[index] > 0)
       .map((plugin) => plugin.name)
     throw new Error(
-      `[nasti] circular plugin setup dependency: ${[...new Set(cyclic)].join(' -> ')}`,
+      `[nasti] circular plugin setup dependency: ${[...new Set(cyclic)].join(', ')}`,
     )
   }
 
@@ -101,7 +101,10 @@ export async function setupPluginApi(
 export function getPluginApi(config: ResolvedConfig): PluginApi {
   const api = apiByConfig.get(config)
   if (!api) {
-    throw new Error('[nasti] internal: plugin API requested before setup')
+    throw new Error(
+      '[nasti] internal: plugin API requested before setup; getPluginApi requires ' +
+        'the original ResolvedConfig reference registered by setupPluginApi, not a shallow copy',
+    )
   }
   return api
 }

@@ -152,13 +152,11 @@ test('external environment driver participates in dev serve, watch, and close', 
     },
     server: { port: 0 },
   })
-  await new Promise((resolve) => {
-    const fallback = setTimeout(resolve, 250)
-    server.watcher.once('ready', () => {
-      clearTimeout(fallback)
-      resolve()
+  if (!server.watcher._readyEmitted) {
+    await new Promise((resolve) => {
+      server.watcher.once('ready', resolve)
     })
-  })
+  }
   try {
     await server.listen(0)
     assert.deepEqual(server.environmentServices.lynx.localUrls, [

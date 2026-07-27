@@ -94,18 +94,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     app.use(bundledServer.middleware)
   }
 
-  // 转译中间件（处理 .ts, .tsx, .jsx, .css, .vue 等）
-  app.use(transformMiddleware({
-    config: configWithPlugins,
-    pluginContainer,
-    moduleGraph,
-  }))
-
-  // 静态文件服务（public 目录 + 项目根目录）
-  const publicDir = path.resolve(config.root, 'public')
-  app.use(sirv(publicDir, { dev: true, etag: true }))
-  app.use(sirv(config.root, { dev: true, etag: true }))
-
   // 文件监听
   // chokidar v4 不再把 `ignored` 字符串当作 glob 处理，而是按字面值精确匹配
   // （见 chokidar/esm/index.js 的 createPattern），原先的 `**/node_modules/**`
@@ -133,18 +121,47 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const environmentServices: Record<string, EnvironmentServeResult> = {}
   let environmentDriversStarted = false
 
+  const logCloseError = (target: string, error: unknown) => {
+    const normalized = error instanceof Error ? error : new Error(String(error))
+    logger.error(`[nasti] failed to close ${target}`, { error: normalized })
+  }
+
   const startEnvironmentDrivers = async () => {
     if (environmentDriversStarted) return
     environmentDriversStarted = true
-    for (const [name, environment] of Object.entries(environments)) {
-      if (!environment.driver?.serve) continue
-      const result = await environment.driver.serve({
-        ...environment.getDriverContext(),
-        server,
-      })
-      const service = result ?? {}
-      environmentServices[name] = service
-      if (service.middleware) app.use(service.middleware)
+    const started: Array<{
+      name: string
+      environment: NastiEnvironment
+      service: EnvironmentServeResult
+    }> = []
+    const attempted: NastiEnvironment[] = []
+    try {
+      for (const [name, environment] of Object.entries(environments)) {
+        if (!environment.driver?.serve) continue
+        attempted.push(environment)
+        const result = await environment.driver.serve({
+          ...environment.getDriverContext(),
+          server,
+        })
+        started.push({ name, environment, service: result ?? {} })
+      }
+      for (const { name, service } of started) {
+        environmentServices[name] = service
+        if (service.middleware) app.use(service.middleware)
+      }
+    } catch (error) {
+      environmentDriversStarted = false
+      for (const { name } of started) {
+        delete environmentServices[name]
+      }
+      for (const environment of attempted.reverse()) {
+        try {
+          await environment.driver?.close?.(environment.getDriverContext())
+        } catch (closeError) {
+          logCloseError(`environment driver "${environment.driver!.name}"`, closeError)
+        }
+      }
+      throw error
     }
   }
 
@@ -257,16 +274,66 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     async close() {
       await pluginContainer.buildEnd()
       await bundledServer?.close()
+      let environmentCloseFailed = false
+      let firstEnvironmentCloseError: unknown
       for (const environment of Object.values(environments).reverse()) {
-        if (environment.driver) {
-          await environment.driver.close?.(environment.getDriverContext())
+        try {
+          await environment.close()
+        } catch (error) {
+          if (!environmentCloseFailed) {
+            environmentCloseFailed = true
+            firstEnvironmentCloseError = error
+          }
+          logCloseError(`environment "${environment.name}"`, error)
         }
       }
-      watcher.close()
+      await watcher.close()
       ws.close()
       httpServer.close()
+      if (environmentCloseFailed) {
+        throw firstEnvironmentCloseError
+      }
     },
   }
+
+  try {
+    await startEnvironmentDrivers()
+  } catch (error) {
+    if (bundledServer) {
+      try {
+        await bundledServer.close()
+      } catch (closeError) {
+        logCloseError('bundled dev server after driver startup failure', closeError)
+      }
+    }
+    try {
+      await watcher.close()
+    } catch (closeError) {
+      logCloseError('file watcher after driver startup failure', closeError)
+    }
+    try {
+      ws.close()
+    } catch (closeError) {
+      logCloseError('WebSocket server after driver startup failure', closeError)
+    }
+    try {
+      httpServer.close()
+    } catch (closeError) {
+      logCloseError('HTTP server after driver startup failure', closeError)
+    }
+    throw error
+  }
+
+  // 外部环境驱动中间件优先于 Nasti 的转换和静态文件服务。
+  app.use(transformMiddleware({
+    config: configWithPlugins,
+    pluginContainer,
+    moduleGraph,
+  }))
+
+  const publicDir = path.resolve(config.root, 'public')
+  app.use(sirv(publicDir, { dev: true, etag: true }))
+  app.use(sirv(config.root, { dev: true, etag: true }))
 
   // 执行插件的 configureServer 钩子（此时 server 已完全初始化，
   // 插件可安全访问 server.middlewares / server.watcher 等）

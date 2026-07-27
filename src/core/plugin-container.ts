@@ -24,7 +24,7 @@ export class PluginContainer {
   constructor(config: ResolvedConfig, environment?: EnvironmentInstance) {
     this.config = config
     this.environment = environment
-    // 按 enforce 排序: pre → normal → post
+    // 按 enforce 分组，处理 pre/post 显式依赖并执行稳定拓扑排序
     this.plugins = orderPlugins(config.plugins)
     this.ctx = this.createContext()
   }

@@ -2,6 +2,7 @@
 // 兼容 Vite Plugin 接口
 
 import type { InputOptions, OutputOptions, RenderedChunk } from 'rolldown'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Logger } from './core/logger.js'
 
 export interface NastiConfig {
@@ -343,7 +344,11 @@ export interface EnvironmentBuildResult {
 export interface EnvironmentServeResult {
   localUrls?: string[]
   networkUrls?: string[]
-  middleware?: any
+  middleware?: (
+    request: IncomingMessage,
+    response: ServerResponse,
+    next: (error?: unknown) => void,
+  ) => void
 }
 
 export interface EnvironmentDriverContext {

@@ -231,6 +231,7 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   const environmentResults: Record<string, EnvironmentBuildResult> = {}
   const initializedEnvironments: NastiEnvironment[] = []
   let clientOutput: BuildResult['output'] = []
+  let buildFailed = false
 
   try {
     for (const name of buildableNames) {
@@ -251,9 +252,28 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
     for (const plugin of config.plugins) {
       await plugin.afterBuildApp?.(environmentResults, pluginApi)
     }
+  } catch (error) {
+    buildFailed = true
+    throw error
   } finally {
-    for (const environment of initializedEnvironments.reverse()) {
-      await environment.close()
+    let closeFailed = false
+    let firstCloseError: unknown
+    for (const environment of [...initializedEnvironments].reverse()) {
+      try {
+        await environment.close()
+      } catch (error) {
+        if (!closeFailed) {
+          closeFailed = true
+          firstCloseError = error
+        }
+        const closeError = error instanceof Error ? error : new Error(String(error))
+        logger.error(`[nasti] failed to close environment "${environment.name}"`, {
+          error: closeError,
+        })
+      }
+    }
+    if (closeFailed && !buildFailed) {
+      throw firstCloseError
     }
   }
 
@@ -290,97 +310,111 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
     pluginApi: getPluginApi(config),
   })
   await clientEnv.init()
-  if (clientEnv.driver) {
-    if (!clientEnv.driver.build) {
-      await clientEnv.close()
-      throw new Error(
-        `[nasti] environment "client" driver "${clientEnv.driver.name}" does not implement build()`,
-      )
-    }
-    try {
-      const result = await clientEnv.driver.build(clientEnv.getDriverContext())
-      return { environment: clientEnv, result }
-    } catch (error) {
-      await clientEnv.close()
-      throw error
-    }
-  }
 
-  // 清空输出目录
-  if (config.build.emptyOutDir && fs.existsSync(outDir)) {
-    fs.rmSync(outDir, { recursive: true, force: true })
-  }
-  fs.mkdirSync(outDir, { recursive: true })
-
-  const htmlFile = config.environments.client.html ?? path.resolve(config.root, 'index.html')
-  const html = await readHtmlFile(config.root, htmlFile)
-  const entryPoints = resolveClientEntries(config, html)
-  if (entryPoints.length === 0) {
-    throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
-  }
-
-  const allPlugins = clientEnv.plugins
-
-  // 原生体积报告插件（守卫导入；不可用时走 JS 表格 fallback）
-  const nativeReporter = config.logLevel === 'silent'
-    ? null
-    : await tryNativeReporterPlugin(config, logger)
-
-  const rolldownPlugins = [
-    createOxcTransformPlugin(config, clientEnv),
-    ...toRolldownPlugins(allPlugins),
-    ...(nativeReporter ? [nativeReporter as any] : []),
-  ]
-  const { inputOptions, outputOptions } = getRolldownOptions(clientEnv, entryPoints, rolldownPlugins)
-
-  const bundle = await rolldown(inputOptions)
-  const { output } = await bundle.write(outputOptions)
-  await bundle.close()
-
-  // 处理 HTML
-  if (html) {
-    let processedHtml = html
-
-    // 执行 transformIndexHtml 钩子：用户插件 + 内置 htmlPlugin
-    const htmlPlugins = [...allPlugins.filter((p) => p.transformIndexHtml), htmlPlugin(config)]
-    for (const p of htmlPlugins) {
-      const result = await p.transformIndexHtml!(processedHtml)
-      if (typeof result === 'string') {
-        processedHtml = result
-      } else if (result && 'html' in result) {
-        processedHtml = processHtml(result.html, result.tags)
-      } else if (Array.isArray(result)) {
-        processedHtml = processHtml(processedHtml, result)
-      }
-    }
-
-    // 注入抽取出的 CSS：entry chunk 的 css → 静态 <link rel="stylesheet">
-    processedHtml = injectCssLinks(processedHtml, cssEngine, config)
-
-    // 替换 script src 为打包后的路径（支持多入口）
-    for (const chunk of output) {
-      if (chunk.type === 'chunk' && chunk.isEntry && chunk.facadeModuleId) {
-        processedHtml = replaceEntryScript(
-          processedHtml,
-          chunk.facadeModuleId,
-          chunk.fileName,
-          config,
-          htmlFile,
+  try {
+    if (clientEnv.driver) {
+      if (!clientEnv.driver.build) {
+        throw new Error(
+          `[nasti] environment "client" driver "${clientEnv.driver.name}" does not implement build()`,
         )
       }
+      const result = await clientEnv.driver.build(clientEnv.getDriverContext())
+      return { environment: clientEnv, result }
     }
 
-    fs.writeFileSync(path.resolve(outDir, 'index.html'), processedHtml)
-  }
+    // 清空输出目录
+    if (config.build.emptyOutDir && fs.existsSync(outDir)) {
+      fs.rmSync(outDir, { recursive: true, force: true })
+    }
+    fs.mkdirSync(outDir, { recursive: true })
 
-  // 体积表：原生 reporter 已在 write 阶段输出；否则走 JS fallback
-  if (!nativeReporter && config.logLevel !== 'silent') {
-    reportBuildOutput(output as any, config, logger)
-  }
-  // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
-  warnLargeChunks(output as any, config, logger)
+    const htmlFile = config.environments.client.html ?? path.resolve(config.root, 'index.html')
+    const html = await readHtmlFile(config.root, htmlFile)
+    const entryPoints = resolveClientEntries(config, html)
+    if (entryPoints.length === 0) {
+      throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
+    }
 
-  return { environment: clientEnv, result: { output: output as any } }
+    const allPlugins = clientEnv.plugins
+
+    // 原生体积报告插件（守卫导入；不可用时走 JS 表格 fallback）
+    const nativeReporter = config.logLevel === 'silent'
+      ? null
+      : await tryNativeReporterPlugin(config, logger)
+
+    const rolldownPlugins = [
+      createOxcTransformPlugin(config, clientEnv),
+      ...toRolldownPlugins(allPlugins),
+      ...(nativeReporter ? [nativeReporter as any] : []),
+    ]
+    const { inputOptions, outputOptions } = getRolldownOptions(
+      clientEnv,
+      entryPoints,
+      rolldownPlugins,
+    )
+
+    const bundle = await rolldown(inputOptions)
+    const { output } = await bundle.write(outputOptions)
+    await bundle.close()
+
+    // 处理 HTML
+    if (html) {
+      let processedHtml = html
+
+      // 执行 transformIndexHtml 钩子：用户插件 + 内置 htmlPlugin
+      const htmlPlugins = [...allPlugins.filter((p) => p.transformIndexHtml), htmlPlugin(config)]
+      for (const p of htmlPlugins) {
+        const result = await p.transformIndexHtml!(processedHtml)
+        if (typeof result === 'string') {
+          processedHtml = result
+        } else if (result && 'html' in result) {
+          processedHtml = processHtml(result.html, result.tags)
+        } else if (Array.isArray(result)) {
+          processedHtml = processHtml(processedHtml, result)
+        }
+      }
+
+      // 注入抽取出的 CSS：entry chunk 的 css → 静态 <link rel="stylesheet">
+      processedHtml = injectCssLinks(processedHtml, cssEngine, config)
+
+      // 替换 script src 为打包后的路径（支持多入口）
+      for (const chunk of output) {
+        if (chunk.type === 'chunk' && chunk.isEntry && chunk.facadeModuleId) {
+          processedHtml = replaceEntryScript(
+            processedHtml,
+            chunk.facadeModuleId,
+            chunk.fileName,
+            config,
+            htmlFile,
+            config.base,
+          )
+        }
+      }
+
+      fs.writeFileSync(path.resolve(outDir, 'index.html'), processedHtml)
+    }
+
+    // 体积表：原生 reporter 已在 write 阶段输出；否则走 JS fallback
+    if (!nativeReporter && config.logLevel !== 'silent') {
+      reportBuildOutput(output as any, config, logger)
+    }
+    // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
+    warnLargeChunks(output as any, config, logger)
+
+    return { environment: clientEnv, result: { output: output as any } }
+  } catch (error) {
+    try {
+      await clientEnv.close()
+    } catch (closeError) {
+      const normalized = closeError instanceof Error
+        ? closeError
+        : new Error(String(closeError))
+      logger.error('[nasti] failed to close client environment after build failure', {
+        error: normalized,
+      })
+    }
+    throw error
+  }
 }
 
 /** 非 client 环境构建（SSR / worker / main / preload …）：entry 显式声明 */
@@ -474,15 +508,20 @@ function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function replaceEntryScript(
+export function replaceEntryScript(
   html: string,
   facadeModuleId: string,
   fileName: string,
   config: ResolvedConfig,
   htmlFile: string,
+  urlPrefix: string,
 ): string {
   const rootRelative = path.relative(config.root, facadeModuleId).split(path.sep).join('/')
-  const htmlRelative = path.relative(path.dirname(htmlFile), facadeModuleId).split(path.sep).join('/')
+  const resolvedHtmlFile = path.resolve(config.root, htmlFile)
+  const htmlRelative = path
+    .relative(path.dirname(resolvedHtmlFile), facadeModuleId)
+    .split(path.sep)
+    .join('/')
   const candidates = new Set([
     rootRelative,
     `/${rootRelative}`,
@@ -493,7 +532,7 @@ function replaceEntryScript(
   for (const candidate of candidates) {
     processed = processed.replace(
       new RegExp(`(src=["'])${escapeRegExp(candidate)}([?#][^"']*)?(["'])`, 'g'),
-      `$1${config.base}${fileName}$3`,
+      `$1${urlPrefix}${fileName}$3`,
     )
   }
   return processed
