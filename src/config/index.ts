@@ -9,6 +9,7 @@ import type {
 } from '../types.js'
 import { defaults } from './defaults.js'
 import { createLogger } from '../core/logger.js'
+import { orderPlugins, setupPluginApi } from '../core/plugin-api.js'
 
 /** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
 function loadTsconfigPaths(root: string): Record<string, string> {
@@ -60,6 +61,60 @@ export async function loadConfigFromFile(root: string): Promise<NastiConfig> {
     return mod.default ?? mod
   }
   return {}
+}
+
+/**
+ * 将 framework:auto 收敛为具体框架。
+ *
+ * 优先使用源码中的 .vue 文件消除同时安装 React/Vue 时的歧义，其次读取
+ * package.json dependencies，最后回退 React 以保持 1.x 默认行为。
+ */
+export function detectFramework(root: string): 'react' | 'vue' {
+  const sourceRoot = path.resolve(root, 'src')
+  if (containsVueFile(sourceRoot)) return 'vue'
+
+  const packagePath = path.resolve(root, 'package.json')
+  if (fs.existsSync(packagePath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8'))
+      const dependencies = {
+        ...(pkg.dependencies ?? {}),
+        ...(pkg.devDependencies ?? {}),
+        ...(pkg.peerDependencies ?? {}),
+        ...(pkg.optionalDependencies ?? {}),
+      }
+      const hasVue = 'vue' in dependencies || '@vue/runtime-dom' in dependencies
+      const hasReact = 'react' in dependencies || 'react-dom' in dependencies
+      if (hasVue && !hasReact) return 'vue'
+      if (hasReact) return 'react'
+      if (hasVue) return 'vue'
+    } catch {
+      // Invalid package.json is reported by package managers; framework detection
+      // remains deterministic and falls back to the existing React behavior.
+    }
+  }
+
+  return 'react'
+}
+
+function containsVueFile(dir: string, depth = 0): boolean {
+  if (depth > 5 || !fs.existsSync(dir)) return false
+  try {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.vue')) return true
+      if (
+        entry.isDirectory() &&
+        entry.name !== 'node_modules' &&
+        entry.name !== 'dist' &&
+        containsVueFile(path.join(dir, entry.name), depth + 1)
+      ) {
+        return true
+      }
+    }
+  } catch {
+    return false
+  }
+  return false
 }
 
 async function loadTsConfig(filePath: string): Promise<NastiConfig> {
@@ -138,7 +193,10 @@ export async function resolveConfig(
     base: merged.base ?? defaults.base,
     mode,
     target: (merged.target ?? defaults.target) as ResolvedConfig['target'],
-    framework: merged.framework ?? defaults.framework,
+    framework:
+      (merged.framework ?? defaults.framework) === 'auto'
+        ? detectFramework(root)
+        : (merged.framework as 'react' | 'vue'),
     command,
     resolve: {
       // tsconfig paths 优先级最低：tsconfig < defaults < user config
@@ -196,7 +254,13 @@ export async function resolveConfig(
       if (envOptions.build) Object.assign(resolved.build, envOptions.build)
       resolved.environments.client = {
         consumer,
-        entry: [],
+        entry: normalizeEnvironmentEntries(envOptions.entry, root),
+        html: path.resolve(
+          root,
+          envOptions.html ??
+            (resolved.target === 'electron' ? resolved.electron.renderer : 'index.html'),
+        ),
+        driver: envOptions.driver,
         // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
         resolve: resolved.resolve,
         build: resolved.build,
@@ -206,12 +270,12 @@ export async function resolveConfig(
 
     resolved.environments[name] = {
       consumer,
-      entry: (Array.isArray(envOptions.entry)
-        ? envOptions.entry
-        : envOptions.entry
-          ? [envOptions.entry]
-          : []
-      ).map((e) => path.resolve(root, e)),
+      entry: normalizeEnvironmentEntries(envOptions.entry, root),
+      html:
+        envOptions.consumer === 'client' && envOptions.html
+          ? path.resolve(root, envOptions.html)
+          : undefined,
+      driver: envOptions.driver,
       resolve: {
         alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
         extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],
@@ -239,12 +303,16 @@ export async function resolveConfig(
   assertClientEnvironmentMirror(resolved)
 
   // 过滤插件（apply 为函数时可安全访问已初始化的 resolved）
-  const filteredPlugins = rawPlugins.filter((p) => {
+  const filteredPlugins = orderPlugins(rawPlugins.filter((p) => {
     if (!p.apply) return true
     if (typeof p.apply === 'function') return p.apply(resolved, env)
     return p.apply === command
-  })
+  }))
   resolved.plugins = filteredPlugins
+
+  // setup 是 configResolved 前的单次初始化阶段；环境驱动与后续生命周期
+  // 通过同一 PluginApi 访问 expose/useExposed 注册表。
+  await setupPluginApi(resolved, filteredPlugins)
 
   // Electron 目标：扫描 dependencies 自动外部化 native 模块
   // （带 binding.gyp、gypfile:true，或 node_modules 内存在 *.node 的包）。
@@ -266,6 +334,14 @@ export async function resolveConfig(
   }
 
   return resolved
+}
+
+function normalizeEnvironmentEntries(
+  entry: string | string[] | undefined,
+  root: string,
+): string[] {
+  const entries = Array.isArray(entry) ? entry : entry ? [entry] : []
+  return entries.map((item) => path.resolve(root, item))
 }
 
 /**

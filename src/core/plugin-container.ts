@@ -11,6 +11,7 @@ import type {
   ModuleInfo,
   EnvironmentInstance,
 } from '../types.js'
+import { orderPlugins } from './plugin-api.js'
 
 export class PluginContainer {
   private plugins: NastiPlugin[]
@@ -23,8 +24,8 @@ export class PluginContainer {
   constructor(config: ResolvedConfig, environment?: EnvironmentInstance) {
     this.config = config
     this.environment = environment
-    // 按 enforce 排序: pre → normal → post
-    this.plugins = sortPlugins(config.plugins)
+    // 按 enforce 分组，处理 pre/post 显式依赖并执行稳定拓扑排序
+    this.plugins = orderPlugins(config.plugins)
     this.ctx = this.createContext()
   }
 
@@ -146,18 +147,4 @@ export class PluginContainer {
   getPlugins(): NastiPlugin[] {
     return this.plugins
   }
-}
-
-function sortPlugins(plugins: NastiPlugin[]): NastiPlugin[] {
-  const pre: NastiPlugin[] = []
-  const normal: NastiPlugin[] = []
-  const post: NastiPlugin[] = []
-
-  for (const plugin of plugins) {
-    if (plugin.enforce === 'pre') pre.push(plugin)
-    else if (plugin.enforce === 'post') post.push(plugin)
-    else normal.push(plugin)
-  }
-
-  return [...pre, ...normal, ...post]
 }

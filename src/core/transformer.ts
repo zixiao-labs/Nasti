@@ -8,6 +8,7 @@ export interface TransformOptions {
   typescript?: boolean
   sourcemap?: boolean
   reactRefresh?: boolean
+  target?: string | string[]
 }
 
 export interface TransformOutput {
@@ -46,6 +47,7 @@ export function transformCode(
         }
       : undefined,
     sourcemap: options.sourcemap ?? true,
+    target: options.target,
   })
 
   if (result.errors && result.errors.length > 0) {

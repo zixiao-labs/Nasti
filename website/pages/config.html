@@ -106,10 +106,38 @@
         <tr><td><code>base</code></td><td><code>string</code></td><td><code>'/'</code></td><td>公共基础路径</td></tr>
         <tr><td><code>mode</code></td><td><code>string</code></td><td><code>'development'</code></td><td>运行模式</td></tr>
         <tr><td><code>target</code></td><td><code>'web' | 'electron'</code></td><td><code>'web'</code></td><td>打包目标平台，详见 <a href="/pages/electron.html">Electron</a></td></tr>
-        <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型</td></tr>
+        <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型；auto 会根据 <code>src/**/*.vue</code> 与 package.json 依赖解析为具体框架</td></tr>
         <tr><td><code>logLevel</code></td><td><code>'info' | 'warn' | 'error' | 'silent'</code></td><td><code>'info'</code></td><td>日志级别</td></tr>
         <tr><td><code>envPrefix</code></td><td><code>string | string[]</code></td><td><code>['NASTI_', 'VITE_']</code></td><td>暴露给客户端的环境变量前缀</td></tr>
         <tr><td><code>plugins</code></td><td><code>NastiPlugin[]</code></td><td><code>[]</code></td><td>插件列表</td></tr>
+      </tbody>
+    </table>
+
+    <h2>environments 选项</h2>
+    <p>
+      每个环境可使用内置 Rolldown 流水线，也可通过 <code>driver</code> 交给插件提供的
+      外部编译器。client 环境还可指定自定义 HTML 或直接入口。
+    </p>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">environments</span>: {
+    <span class="type">client</span>: {
+      <span class="type">html</span>: <span class="string">'src/renderer/index.html'</span>,
+    },
+    <span class="type">lynx</span>: {
+      <span class="type">consumer</span>: <span class="string">'client'</span>,
+      <span class="type">driver</span>: <span class="string">'rspeedy'</span>,
+    },
+  },
+})</pre></div>
+    <table>
+      <thead><tr><th>选项</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>consumer</code></td><td><code>'client' | 'server'</code></td><td>决定解析条件和 <code>import.meta.env.SSR</code></td></tr>
+        <tr><td><code>entry</code></td><td><code>string | string[]</code></td><td>显式构建入口；client 未设置时从 HTML 提取</td></tr>
+        <tr><td><code>html</code></td><td><code>string</code></td><td>client HTML 入口，默认 <code>index.html</code></td></tr>
+        <tr><td><code>driver</code></td><td><code>string</code></td><td>由插件 <code>createEnvironmentDriver</code> 提供的外部编译驱动</td></tr>
+        <tr><td><code>resolve</code></td><td><code>ResolveConfig</code></td><td>环境级解析覆盖</td></tr>
+        <tr><td><code>build</code></td><td><code>BuildConfig</code></td><td>环境级构建覆盖</td></tr>
       </tbody>
     </table>
 
