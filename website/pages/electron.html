@@ -64,7 +64,7 @@
     <p>
       Nasti 原生支持构建 Electron 桌面应用，最低要求 <strong>Electron 41</strong>
       （对应 Node.js 22.x / Chromium 138，完整 ESM 主进程能力）。主进程、Preload、
-      渲染进程由同一个 Nasti 流水线统一打包。
+      渲染进程由同一个 Nasti 流水线统一打包；renderer 可使用 React 或 Vue。
     </p>
 
     <div class="tip">
@@ -92,11 +92,12 @@
 
 <span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">target</span>: <span class="string">'electron'</span>,
-  <span class="type">framework</span>: <span class="string">'react'</span>,
+  <span class="type">framework</span>: <span class="string">'auto'</span>, <span class="comment">// 自动识别 React / Vue</span>
 
   <span class="type">electron</span>: {
     <span class="type">main</span>: <span class="string">'src/electron/main.ts'</span>,
     <span class="type">preload</span>: <span class="string">'src/electron/preload.ts'</span>,
+    <span class="type">renderer</span>: <span class="string">'src/renderer/index.html'</span>,
     <span class="type">mainFormat</span>: <span class="string">'cjs'</span>,       <span class="comment">// 'cjs' | 'esm'（Electron 41+ 支持 ESM）</span>
     <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>,
     <span class="type">nodeTarget</span>: <span class="string">'node22'</span>,
@@ -105,6 +106,39 @@
     <span class="type">external</span>: [<span class="string">'electron'</span>],
   },
 })</pre></div>
+
+    <h2>Vue Renderer</h2>
+    <p>
+      Vue 只运行在 Electron renderer。Nasti 会根据 <code>.vue</code> 源文件或
+      package.json 中的 Vue 依赖解析 <code>framework: 'auto'</code>，复用标准 Vue
+      SFC、scoped CSS 和 HMR；main/preload 仍按 Node/Electron 目标单独构建。
+    </p>
+    <div class="code-block"><pre>my-electron-vue-app/
+├── src/
+│   ├── renderer/
+│   │   ├── index.html
+│   │   ├── main.ts
+│   │   └── App.vue
+│   └── electron/
+│       ├── main.ts
+│       └── preload.ts
+└── nasti.config.ts</pre></div>
+    <div class="code-block"><pre><span class="comment">// src/renderer/main.ts</span>
+<span class="keyword">import</span> { createApp } <span class="keyword">from</span> <span class="string">'vue'</span>
+<span class="keyword">import</span> App <span class="keyword">from</span> <span class="string">'./App.vue'</span>
+
+<span class="func">createApp</span>(App).<span class="func">mount</span>(<span class="string">'#app'</span>)</pre></div>
+    <p>
+      完整可运行结构见仓库中的
+      <a href="https://github.com/zixiao-labs/Nasti/tree/main/playground/electron-vue" target="_blank">
+        playground/electron-vue
+      </a>。
+    </p>
+    <div class="tip">
+      <strong>本地资源路径：</strong>Electron 生产 renderer 默认把根路径
+      <code>/</code> 转换为 <code>./</code>，确保 <code>BrowserWindow.loadFile()</code>
+      能加载 hashed JS、CSS 和静态资源。显式配置其他 <code>base</code> 时会保留用户值。
+    </div>
 
     <h2>主进程示例</h2>
     <div class="code-block"><pre><span class="comment">// src/electron/main.ts</span>
@@ -195,7 +229,7 @@ npx nasti build --target electron</pre></div>
       <tbody>
         <tr><td><code>main</code></td><td><code>string</code></td><td><code>'src/electron/main.ts'</code></td><td>主进程入口</td></tr>
         <tr><td><code>preload</code></td><td><code>string | string[]</code></td><td><code>'src/electron/preload.ts'</code></td><td>Preload 脚本，可多入口</td></tr>
-        <tr><td><code>renderer</code></td><td><code>string</code></td><td><code>'index.html'</code></td><td>渲染进程入口 HTML</td></tr>
+        <tr><td><code>renderer</code></td><td><code>string</code></td><td><code>'index.html'</code></td><td>渲染进程入口 HTML；支持嵌套路径，dev URL 会自动匹配</td></tr>
         <tr><td><code>mainFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>主进程输出格式</td></tr>
         <tr><td><code>preloadFormat</code></td><td><code>'cjs' | 'esm'</code></td><td><code>'cjs'</code></td><td>Preload 输出格式</td></tr>
         <tr><td><code>nodeTarget</code></td><td><code>string</code></td><td><code>'node22'</code></td><td>主/preload 的 Node 目标版本</td></tr>

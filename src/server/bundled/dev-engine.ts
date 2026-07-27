@@ -114,7 +114,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     )
   }
 
-  const html = await readHtmlFile(config.root)
+  const html = await readHtmlFile(config.root, config.environments.client?.html)
   const entryPoints = resolveClientEntries(config, html)
   if (entryPoints.length === 0) {
     throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
@@ -361,7 +361,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
 
       // index.html：注入 React preamble（unbundled 同款）+ 入口改写到内存产物
       if (pathname === '/' || pathname.endsWith('.html')) {
-        const rawHtml = await readHtmlFile(config.root)
+        const rawHtml = await readHtmlFile(config.root, config.environments.client?.html)
         if (rawHtml) {
           res.setHeader('Content-Type', 'text/html')
           res.setHeader('Cache-Control', 'no-store')
@@ -581,11 +581,25 @@ async function renderBundledIndexHtml(
   }
   // 入口 script src → 内存产物 URL
   for (const [facadeModuleId, fileName] of entryFileNames) {
-    const originalEntry = path.relative(config.root, facadeModuleId)
-    processed = processed.replace(
-      new RegExp(`(src=["'])/?(${originalEntry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(["'])`, 'g'),
-      `$1/${fileName}$3`,
-    )
+    const originalEntry = path.relative(config.root, facadeModuleId).split(path.sep).join('/')
+    const htmlFile = config.environments.client?.html
+    const htmlRelative = htmlFile
+      ? path.relative(path.dirname(htmlFile), facadeModuleId).split(path.sep).join('/')
+      : originalEntry
+    for (const candidate of new Set([
+      originalEntry,
+      `/${originalEntry}`,
+      htmlRelative,
+      `./${htmlRelative}`,
+    ])) {
+      processed = processed.replace(
+        new RegExp(
+          `(src=["'])${candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([?#][^"']*)?(["'])`,
+          'g',
+        ),
+        `$1/${fileName}$3`,
+      )
+    }
   }
   return processed
 }

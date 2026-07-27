@@ -60,7 +60,7 @@
 
   <main class="doc-content">
     <h1>插件 API</h1>
-    <p>Nasti 的插件接口与 Vite 完全兼容。现有的 Vite / Rollup 插件可以直接使用。</p>
+    <p>Nasti 兼容 Vite / Rollup 的核心模块钩子，并提供 Environment Driver API 接入 Rspeedy 等外部工具链。</p>
 
     <h2>基本结构</h2>
     <div class="code-block"><pre><span class="keyword">import type</span> { <span class="type">NastiPlugin</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
@@ -125,6 +125,79 @@
     <div class="code-block"><pre><span class="func">handleHotUpdate</span>(<span class="type">ctx</span>: HmrContext): void | ModuleNode[]</pre></div>
     <p>自定义 HMR 更新处理。</p>
 
+    <h2>插件 setup 与跨插件 API</h2>
+    <p>
+      <code>setup(api)</code> 每次配置解析只执行一次。插件可通过
+      <code>api.expose()</code> / <code>api.useExposed()</code> 共享能力，
+      并通过 <code>pre</code> / <code>post</code> 声明 setup 依赖顺序。
+    </p>
+    <div class="code-block"><pre><span class="keyword">const</span> key = <span class="type">Symbol</span>.<span class="func">for</span>(<span class="string">'example.config'</span>)
+
+<span class="keyword">const</span> provider = {
+  <span class="type">name</span>: <span class="string">'example:provider'</span>,
+  <span class="func">setup</span>(api) {
+    api.<span class="func">expose</span>(key, { <span class="type">enabled</span>: <span class="orange">true</span> })
+  },
+}
+
+<span class="keyword">const</span> consumer = {
+  <span class="type">name</span>: <span class="string">'example:consumer'</span>,
+  <span class="type">pre</span>: [<span class="string">'example:provider'</span>],
+  <span class="func">setup</span>(api) {
+    <span class="keyword">const</span> config = api.<span class="func">useExposed</span>(key)
+  },
+}</pre></div>
+
+    <h2>Environment Driver：Rspeedy bridge</h2>
+    <p>
+      环境声明 <code>driver</code> 后不进入 Nasti 的 Rolldown 流水线，而由插件提供
+      <code>build</code> / <code>serve</code> / <code>watchChange</code> /
+      <code>close</code>。这适合 Vue Lynx：插件可以调用
+      <code>@lynx-js/rspeedy</code> 的 <code>createRspeedy()</code>，保留其
+      Rspack layer、CSS extractor、HMR 与 Lynx bundle encoder。
+    </p>
+    <div class="code-block"><pre><span class="keyword">import</span> { <span class="func">defineConfig</span> } <span class="keyword">from</span> <span class="string">'@nasti-toolchain/nasti'</span>
+<span class="keyword">import</span> { <span class="func">pluginRspeedyBridge</span> } <span class="keyword">from</span> <span class="string">'nasti-plugin-rspeedy'</span>
+
+<span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">environments</span>: {
+    <span class="type">lynx</span>: {
+      <span class="type">consumer</span>: <span class="string">'client'</span>,
+      <span class="type">driver</span>: <span class="string">'rspeedy'</span>,
+    },
+  },
+  <span class="type">plugins</span>: [<span class="func">pluginRspeedyBridge</span>()],
+})</pre></div>
+
+    <p>bridge 插件的最小形态：</p>
+    <div class="code-block"><pre><span class="keyword">const</span> pluginRspeedyBridge = () =&gt; ({
+  <span class="type">name</span>: <span class="string">'nasti:rspeedy'</span>,
+  <span class="keyword">async</span> <span class="func">createEnvironmentDriver</span>(environment) {
+    <span class="keyword">if</span> (environment.options.driver !== <span class="string">'rspeedy'</span>) <span class="keyword">return</span>
+
+    <span class="keyword">const</span> { <span class="func">createRspeedy</span> } = <span class="keyword">await import</span>(<span class="string">'@lynx-js/rspeedy'</span>)
+    <span class="keyword">let</span> instance
+
+    <span class="keyword">return</span> {
+      <span class="type">name</span>: <span class="string">'rspeedy'</span>,
+      <span class="keyword">async</span> <span class="func">build</span>({ config }) {
+        instance = <span class="keyword">await</span> <span class="func">createRspeedy</span>({ <span class="type">cwd</span>: config.root })
+        <span class="comment">// 调用 Rspeedy build，并把产物归一为 EnvironmentBuildResult</span>
+        <span class="keyword">return</span> { <span class="type">output</span>: [] }
+      },
+      <span class="keyword">async</span> <span class="func">serve</span>({ config }) {
+        <span class="comment">// 启动 Rspeedy dev server，返回 localUrls / networkUrls</span>
+        <span class="keyword">return</span> { <span class="type">localUrls</span>: [] }
+      },
+      <span class="func">watchChange</span>(file, event) {},
+      <span class="keyword">async</span> <span class="func">close</span>() {},
+    }
+  },
+  <span class="func">afterBuildApp</span>(results, api) {
+    <span class="comment">// 可跨环境读取 entries / manifest / stats 并聚合产物</span>
+  },
+})</pre></div>
+
     <h2>插件顺序</h2>
     <p>插件按以下顺序执行：</p>
     <ol>
@@ -132,6 +205,10 @@
       <li>没有 enforce 的普通插件</li>
       <li><code>enforce: 'post'</code> 的插件</li>
     </ol>
+    <p>
+      在上述稳定顺序之上，<code>pre: ['plugin-name']</code> 表示列出的插件必须先完成
+      setup，<code>post</code> 表示列出的插件必须后完成 setup。检测到依赖环时配置解析会失败。
+    </p>
 
     <h2>条件应用</h2>
     <p>使用 <code>apply</code> 让插件只在特定模式下生效：</p>

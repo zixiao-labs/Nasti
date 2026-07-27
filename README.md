@@ -23,7 +23,8 @@
 - **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform）
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR（可选依赖 `@vue/compiler-sfc`）
-- **Electron 41+ 支持** - 一键构建主进程 / Preload / 渲染进程，支持 ESM 主进程
+- **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
+- **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
 - **Monaco Editor 集成** - 内置 `monacoEditorPlugin`，预打包 Web Worker，修复 HMR 期间的 EMFILE
 - **Dev Server + HMR** - 开发服务器 + WebSocket 热模块替换
 - **TypeScript 优先** - 原生 TS 支持，零配置
@@ -210,9 +211,11 @@ import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
   target: 'electron',
+  framework: 'auto',                    // 自动识别 React / Vue
   electron: {
     main: 'src/electron/main.ts',        // 主进程入口
     preload: 'src/electron/preload.ts',  // Preload 脚本（可传数组）
+    renderer: 'src/renderer/index.html', // React / Vue renderer HTML
     mainFormat: 'cjs',                   // 主进程输出格式：'cjs' | 'esm'
     preloadFormat: 'cjs',                // Preload 输出格式
     nodeTarget: 'node22',                // Electron 41 捆绑 Node 22
@@ -221,6 +224,19 @@ export default defineConfig({
   },
 })
 ```
+
+Vue renderer 直接使用标准 SFC：
+
+```ts
+// src/renderer/main.ts
+import { createApp } from 'vue'
+import App from './App.vue'
+
+createApp(App).mount('#app')
+```
+
+生产 renderer 默认使用 `base: './'`，因此 `BrowserWindow.loadFile()` 可以正确加载
+hashed JS/CSS；显式配置其他 `base` 时保留用户值。
 
 开发：
 
@@ -268,6 +284,26 @@ app.whenReady().then(createWindow)
 ```
 
 > 详细说明见 [Electron 指南](https://nasti.zixiaolabs.com/pages/electron.html)。
+
+## External Environment Driver
+
+Rspeedy 等外部工具链可以接管单个环境，同时保留 Nasti 的 CLI、日志与多环境编排：
+
+```ts
+export default defineConfig({
+  environments: {
+    lynx: {
+      consumer: 'client',
+      driver: 'rspeedy',
+    },
+  },
+  plugins: [pluginRspeedyBridge()],
+})
+```
+
+bridge 插件通过 `createEnvironmentDriver()` 提供 `build`、`serve`、`watchChange`
+和 `close`，并可使用 `setup(api)`、`api.expose/useExposed` 与
+`afterBuildApp()` 协调多个插件或环境。
 
 ## Monaco Editor 支持
 

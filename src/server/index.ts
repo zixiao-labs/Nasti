@@ -6,7 +6,12 @@ import connect from 'connect'
 import sirv from 'sirv'
 import { watch } from 'chokidar'
 import pc from 'picocolors'
-import type { NastiConfig, ResolvedConfig, DevServer } from '../types.js'
+import type {
+  EnvironmentServeResult,
+  NastiConfig,
+  ResolvedConfig,
+  DevServer,
+} from '../types.js'
 import { resolveConfig } from '../config/index.js'
 import { NastiEnvironment } from '../core/environment.js'
 import { createWsHotChannel } from '../core/hot-channel.js'
@@ -15,6 +20,7 @@ import { createWebSocketServer } from './ws.js'
 import { transformMiddleware } from './middleware.js'
 import { handleFileChange } from './hmr.js'
 import { resolvePluginList } from '../plugins/builtins.js'
+import { getPluginApi } from '../core/plugin-api.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
@@ -33,10 +39,12 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   // ── Environment API：client 环境承载 dev 运行时（per-env 容器/图/热通道）──
   // ssr 等其余环境：server consumer 的插件列表带 consumer 标记（css 无 DOM stub），
   // 容器在首次使用（ssrLoadModule）时初始化 —— 生命周期钩子默认 client 单次触发。
-  const clientEnv = new NastiEnvironment('client', configWithPlugins, {
+  const pluginApi = getPluginApi(config)
+  const clientEnv = new NastiEnvironment('client', config, {
     hot: createWsHotChannel(ws),
     mode: 'dev',
     plugins: allPlugins,
+    pluginApi,
   })
   await clientEnv.init()
   const environments: Record<string, NastiEnvironment> = { client: clientEnv }
@@ -44,10 +52,14 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     if (name === 'client') continue
     const consumer = config.environments[name].consumer
     const envPlugins = resolvePluginList(config, config.plugins, { consumer })
-    environments[name] = new NastiEnvironment(name, { ...config, plugins: envPlugins }, {
+    environments[name] = new NastiEnvironment(name, config, {
       mode: 'dev',
       plugins: envPlugins,
+      pluginApi,
     })
+  }
+  for (const [name, environment] of Object.entries(environments)) {
+    if (name !== 'client' && environment.options.driver) await environment.init()
   }
 
   // SSR module runner（懒初始化：仅在 ssrLoadModule 首次调用时建容器/runner）
@@ -118,15 +130,57 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
 
   // 先声明 server 变量，再赋值
   let server: DevServer
+  const environmentServices: Record<string, EnvironmentServeResult> = {}
+  let environmentDriversStarted = false
+
+  const startEnvironmentDrivers = async () => {
+    if (environmentDriversStarted) return
+    environmentDriversStarted = true
+    for (const [name, environment] of Object.entries(environments)) {
+      if (!environment.driver?.serve) continue
+      const result = await environment.driver.serve({
+        ...environment.getDriverContext(),
+        server,
+      })
+      const service = result ?? {}
+      environmentServices[name] = service
+      if (service.middleware) app.use(service.middleware)
+    }
+  }
+
+  const notifyEnvironmentDrivers = (
+    file: string,
+    event: 'add' | 'change' | 'unlink',
+  ) => {
+    for (const environment of Object.values(environments)) {
+      if (!environment.driver?.watchChange) continue
+      void Promise.resolve(
+        environment.driver.watchChange(file, event, environment.getDriverContext()),
+      )
+        .catch((error) => {
+          logger.error(
+            `[nasti] environment driver "${environment.driver!.name}" watchChange failed`,
+            { error },
+          )
+        })
+    }
+  }
 
   watcher.on('change', (file: string) => {
     ssrRunner?.invalidateFile(file)
     handleFileChange(file, server)
+    notifyEnvironmentDrivers(file, 'change')
   })
 
   watcher.on('add', (file: string) => {
     ssrRunner?.invalidateFile(file)
     handleFileChange(file, server)
+    notifyEnvironmentDrivers(file, 'add')
+  })
+
+  watcher.on('unlink', (file: string) => {
+    ssrRunner?.invalidateFile(file)
+    notifyEnvironmentDrivers(file, 'unlink')
   })
 
   server = {
@@ -136,12 +190,14 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     watcher,
     ws,
     environments,
+    environmentServices,
 
     async listen(port?: number) {
       const finalPort = port ?? config.server.port
       const host = config.server.host === true ? '0.0.0.0' : (config.server.host as string)
 
       await pluginContainer.buildStart()
+      await startEnvironmentDrivers()
 
       return new Promise((resolve, reject) => {
         let currentPort = finalPort
@@ -151,6 +207,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
           config.server.port = actualPort
           const localUrl = `http://localhost:${actualPort}/`
           const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}/` : null
+          const driverLocalUrls = Object.values(environmentServices)
+            .flatMap((service) => service.localUrls ?? [])
+          const driverNetworkUrls = Object.values(environmentServices)
+            .flatMap((service) => service.networkUrls ?? [])
 
           logger.clearScreen('info')
           const readyIn = Math.ceil(performance.now() - startTime)
@@ -158,7 +218,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
             `\n  ${pc.cyan(pc.bold('NASTI'))} ${pc.cyan(`v${__NASTI_VERSION__}`)}  ${pc.dim('ready in')} ${pc.bold(readyIn)} ${pc.dim('ms')}\n`,
           )
           printServerUrls(
-            { local: [localUrl], network: networkUrl ? [networkUrl] : [] },
+            {
+              local: [localUrl, ...driverLocalUrls],
+              network: [...(networkUrl ? [networkUrl] : []), ...driverNetworkUrls],
+            },
             logger.info,
           )
           logger.info('')
@@ -194,6 +257,11 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     async close() {
       await pluginContainer.buildEnd()
       await bundledServer?.close()
+      for (const environment of Object.values(environments).reverse()) {
+        if (environment.driver) {
+          await environment.driver.close?.(environment.getDriverContext())
+        }
+      }
       watcher.close()
       ws.close()
       httpServer.close()

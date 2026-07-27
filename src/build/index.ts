@@ -11,7 +11,14 @@ import fs from 'node:fs'
 import { builtinModules } from 'node:module'
 import { rolldown } from 'rolldown'
 import type { InputOptions, OutputOptions } from 'rolldown'
-import type { NastiConfig, HtmlTagDescriptor, ResolvedConfig, NastiPlugin } from '../types.js'
+import type {
+  EnvironmentBuildOutput,
+  EnvironmentBuildResult,
+  NastiConfig,
+  HtmlTagDescriptor,
+  ResolvedConfig,
+  NastiPlugin,
+} from '../types.js'
 import { resolveConfig } from '../config/index.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { NastiEnvironment } from '../core/environment.js'
@@ -21,6 +28,7 @@ import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
+import { getPluginApi } from '../core/plugin-api.js'
 import pc from 'picocolors'
 
 const debug = createDebugger('nasti:build')
@@ -29,9 +37,16 @@ const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `
 
 export interface BuildResult {
   /** client 环境的产物（back-compat：1.x 的 BuildResult 形态） */
-  output: Array<{ fileName: string; type: string; code?: string; source?: Uint8Array | string }>
+  output: EnvironmentBuildOutput[]
   /** 全部已构建环境的产物（2.0 多环境 builder） */
   environments?: Record<string, BuildResult['output']>
+  /** 环境驱动返回的完整结果（entries / manifest / stats 等） */
+  environmentResults?: Record<string, EnvironmentBuildResult>
+}
+
+interface BuiltEnvironment {
+  environment: NastiEnvironment
+  result: EnvironmentBuildResult
 }
 
 /**
@@ -143,13 +158,23 @@ export function toRolldownPlugins(plugins: NastiPlugin[]): unknown[] {
 
 /** 从 index.html 提取 client 入口（含常见路径回退） */
 export function resolveClientEntries(config: ResolvedConfig, html: string | null): string[] {
+  const configuredEntries = config.environments.client?.entry ?? []
+  if (configuredEntries.length > 0) return configuredEntries
+
   const entryPoints: string[] = []
+  const htmlFile = config.environments.client?.html
+  const htmlDir = htmlFile ? path.dirname(htmlFile) : config.root
   if (html) {
     const scriptMatches = html.matchAll(/<script[^>]+src=["']([^"']+)["'][^>]*>/gi)
     for (const match of scriptMatches) {
       const src = match[1]
       if (src && !src.startsWith('http')) {
-        entryPoints.push(path.resolve(config.root, src.replace(/^\//, '')))
+        const cleanSrc = src.split(/[?#]/, 1)[0]
+        entryPoints.push(
+          cleanSrc.startsWith('/')
+            ? path.resolve(config.root, cleanSrc.replace(/^\//, ''))
+            : path.resolve(htmlDir, cleanSrc),
+        )
       }
     }
   }
@@ -194,23 +219,41 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
 
   // 待构建环境：client 恒在；非 client 仅当显式声明 entry（默认注入的裸 ssr 不构建）
   const buildableNames = Object.keys(config.environments).filter(
-    (name) => name === 'client' || config.environments[name].entry.length > 0,
+    (name) =>
+      name === 'client' ||
+      config.environments[name].entry.length > 0 ||
+      !!config.environments[name].driver,
   )
   // client 先行（主产物 / HTML），其余按声明顺序串行（同 Vite buildApp 默认）
   buildableNames.sort((a, b) => (a === 'client' ? -1 : b === 'client' ? 1 : 0))
 
   const environments: Record<string, BuildResult['output']> = {}
+  const environmentResults: Record<string, EnvironmentBuildResult> = {}
+  const initializedEnvironments: NastiEnvironment[] = []
   let clientOutput: BuildResult['output'] = []
 
-  for (const name of buildableNames) {
-    const output =
-      name === 'client'
-        ? await buildClientEnvironment(config)
-        : await buildServerEnvironment(config, name)
-    environments[name] = output
-    if (name === 'client') clientOutput = output
-    if (buildableNames.length > 1) {
-      debug?.(`environment "${name}" built (${output.length} files)`)
+  try {
+    for (const name of buildableNames) {
+      const built =
+        name === 'client'
+          ? await buildClientEnvironment(config)
+          : await buildServerEnvironment(config, name)
+      initializedEnvironments.push(built.environment)
+      environments[name] = built.result.output
+      environmentResults[name] = built.result
+      if (name === 'client') clientOutput = built.result.output
+      if (buildableNames.length > 1) {
+        debug?.(`environment "${name}" built (${built.result.output.length} files)`)
+      }
+    }
+
+    const pluginApi = getPluginApi(config)
+    for (const plugin of config.plugins) {
+      await plugin.afterBuildApp?.(environmentResults, pluginApi)
+    }
+  } finally {
+    for (const environment of initializedEnvironments.reverse()) {
+      await environment.close()
     }
   }
 
@@ -229,13 +272,39 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   logger.info(pc.green(`✓ built in ${elapsed}s`) + pc.dim(envSuffix))
   logger.info(pc.dim(`  ${fileCount} files, ${displaySize(totalSize)} total → ${config.build.outDir}/`))
 
-  return { output: clientOutput, environments }
+  return { output: clientOutput, environments, environmentResults }
 }
 
 /** client 环境构建：HTML 入口 + CSS 抽取 + 体积表 + index.html 改写 */
-async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResult['output']> {
+async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvironment> {
   const logger = config.logger
   const outDir = path.resolve(config.root, config.build.outDir)
+
+  // per-env 插件列表 + applyToEnvironment 过滤。外部 driver 在任何 Nasti
+  // HTML/CSS/Rolldown 副作用前接管环境。
+  const cssEngine = createCssEngine()
+  const pluginList = resolvePluginList(config, config.plugins, { cssEngine })
+  const clientEnv = new NastiEnvironment('client', config, {
+    mode: 'build',
+    plugins: pluginList,
+    pluginApi: getPluginApi(config),
+  })
+  await clientEnv.init()
+  if (clientEnv.driver) {
+    if (!clientEnv.driver.build) {
+      await clientEnv.close()
+      throw new Error(
+        `[nasti] environment "client" driver "${clientEnv.driver.name}" does not implement build()`,
+      )
+    }
+    try {
+      const result = await clientEnv.driver.build(clientEnv.getDriverContext())
+      return { environment: clientEnv, result }
+    } catch (error) {
+      await clientEnv.close()
+      throw error
+    }
+  }
 
   // 清空输出目录
   if (config.build.emptyOutDir && fs.existsSync(outDir)) {
@@ -243,20 +312,13 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResu
   }
   fs.mkdirSync(outDir, { recursive: true })
 
-  const html = await readHtmlFile(config.root)
+  const htmlFile = config.environments.client.html ?? path.resolve(config.root, 'index.html')
+  const html = await readHtmlFile(config.root, htmlFile)
   const entryPoints = resolveClientEntries(config, html)
   if (entryPoints.length === 0) {
     throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
   }
 
-  // per-env 插件列表 + applyToEnvironment 过滤
-  const cssEngine = createCssEngine()
-  const pluginList = resolvePluginList(config, config.plugins, { cssEngine })
-  const clientEnv = new NastiEnvironment('client', { ...config, plugins: pluginList }, {
-    mode: 'build',
-    plugins: pluginList,
-  })
-  await clientEnv.init()
   const allPlugins = clientEnv.plugins
 
   // 原生体积报告插件（守卫导入；不可用时走 JS 表格 fallback）
@@ -298,10 +360,12 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResu
     // 替换 script src 为打包后的路径（支持多入口）
     for (const chunk of output) {
       if (chunk.type === 'chunk' && chunk.isEntry && chunk.facadeModuleId) {
-        const originalEntry = path.relative(config.root, chunk.facadeModuleId)
-        processedHtml = processedHtml.replace(
-          new RegExp(`(src=["'])/?(${escapeRegExp(originalEntry)})(["'])`, 'g'),
-          `$1${config.base}${chunk.fileName}$3`,
+        processedHtml = replaceEntryScript(
+          processedHtml,
+          chunk.facadeModuleId,
+          chunk.fileName,
+          config,
+          htmlFile,
         )
       }
     }
@@ -316,29 +380,46 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuildResu
   // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
   warnLargeChunks(output as any, config, logger)
 
-  return output as any
+  return { environment: clientEnv, result: { output: output as any } }
 }
 
 /** 非 client 环境构建（SSR / worker / main / preload …）：entry 显式声明 */
 async function buildServerEnvironment(
   config: ResolvedConfig,
   name: string,
-): Promise<BuildResult['output']> {
+): Promise<BuiltEnvironment> {
   const envOptions = config.environments[name]
   const logger = config.logger
 
-  for (const entry of envOptions.entry) {
-    if (!fs.existsSync(entry)) {
-      throw new Error(`[nasti] environment "${name}" entry not found: ${entry}`)
+  const pluginList = resolvePluginList(config, config.plugins, { consumer: envOptions.consumer })
+  const environment = new NastiEnvironment(name, config, {
+    mode: 'build',
+    plugins: pluginList,
+    pluginApi: getPluginApi(config),
+  })
+  await environment.init()
+  if (environment.driver) {
+    if (!environment.driver.build) {
+      await environment.close()
+      throw new Error(
+        `[nasti] environment "${name}" driver "${environment.driver.name}" does not implement build()`,
+      )
+    }
+    try {
+      const result = await environment.driver.build(environment.getDriverContext())
+      return { environment, result }
+    } catch (error) {
+      await environment.close()
+      throw error
     }
   }
 
-  const pluginList = resolvePluginList(config, config.plugins, { consumer: envOptions.consumer })
-  const environment = new NastiEnvironment(name, { ...config, plugins: pluginList }, {
-    mode: 'build',
-    plugins: pluginList,
-  })
-  await environment.init()
+  for (const entry of envOptions.entry) {
+    if (!fs.existsSync(entry)) {
+      await environment.close()
+      throw new Error(`[nasti] environment "${name}" entry not found: ${entry}`)
+    }
+  }
 
   const rolldownPlugins = [
     createOxcTransformPlugin(config, environment),
@@ -363,7 +444,7 @@ async function buildServerEnvironment(
     pc.dim(`  [${name}] `) +
       output.map((o) => path.join(envOptions.build.outDir, o.fileName)).join(pc.dim(', ')),
   )
-  return output as any
+  return { environment, result: { output: output as any } }
 }
 
 /** 注入抽取出的 CSS link 标签（entry css 或单文件模式） */
@@ -391,4 +472,29 @@ function injectCssLinks(html: string, cssEngine: CssEngine, config: ResolvedConf
 
 function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function replaceEntryScript(
+  html: string,
+  facadeModuleId: string,
+  fileName: string,
+  config: ResolvedConfig,
+  htmlFile: string,
+): string {
+  const rootRelative = path.relative(config.root, facadeModuleId).split(path.sep).join('/')
+  const htmlRelative = path.relative(path.dirname(htmlFile), facadeModuleId).split(path.sep).join('/')
+  const candidates = new Set([
+    rootRelative,
+    `/${rootRelative}`,
+    htmlRelative,
+    `./${htmlRelative}`,
+  ])
+  let processed = html
+  for (const candidate of candidates) {
+    processed = processed.replace(
+      new RegExp(`(src=["'])${escapeRegExp(candidate)}([?#][^"']*)?(["'])`, 'g'),
+      `$1${config.base}${fileName}$3`,
+    )
+  }
+  return processed
 }

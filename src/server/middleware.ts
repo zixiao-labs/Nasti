@@ -174,7 +174,10 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
 
     // 处理 HTML 请求
     if (url === '/' || url.endsWith('.html')) {
-      const html = await readHtmlFile(ctx.config.root)
+      const html = await readHtmlFile(
+        ctx.config.root,
+        ctx.config.environments.client?.html,
+      )
       if (html) {
         let processedHtml = html
 

@@ -8,9 +8,12 @@
 // 2.0 特性共同依赖的主干。Phase 1 仅 client 环境有完整运行时，行为与
 // 1.x 逐字节一致（环境过滤默认全通过、容器构造仅多带 environment 引用）。
 import type {
+  EnvironmentDriver,
+  EnvironmentDriverContext,
   EnvironmentInstance,
   HotChannel,
   NastiPlugin,
+  PluginApi,
   ResolvedConfig,
   ResolvedEnvironmentOptions,
 } from '../types.js'
@@ -18,6 +21,7 @@ import { PluginContainer } from './plugin-container.js'
 import { ModuleGraph } from './module-graph.js'
 import { createNoopHotChannel } from './hot-channel.js'
 import { createDebugger } from './debug.js'
+import { getPluginApi } from './plugin-api.js'
 
 const debug = createDebugger('nasti:environment')
 
@@ -26,6 +30,8 @@ export interface NastiEnvironmentInit {
   mode?: 'dev' | 'build'
   /** 环境的候选插件（init 时经 applyToEnvironment 过滤） */
   plugins?: NastiPlugin[]
+  /** 配置解析阶段创建的共享插件 API；通常自动从 ResolvedConfig 获取 */
+  pluginApi?: PluginApi
 }
 
 export class NastiEnvironment implements EnvironmentInstance {
@@ -35,6 +41,7 @@ export class NastiEnvironment implements EnvironmentInstance {
   readonly config: ResolvedConfig
   readonly options: ResolvedEnvironmentOptions
   readonly hot: HotChannel
+  driver?: EnvironmentDriver
 
   /** applyToEnvironment 过滤后的插件（init() 后可用） */
   plugins: NastiPlugin[] = []
@@ -44,6 +51,7 @@ export class NastiEnvironment implements EnvironmentInstance {
   moduleGraph: ModuleGraph
 
   private candidatePlugins: NastiPlugin[]
+  private pluginApi: PluginApi
   private initialized = false
 
   constructor(name: string, config: ResolvedConfig, init: NastiEnvironmentInit = {}) {
@@ -61,6 +69,7 @@ export class NastiEnvironment implements EnvironmentInstance {
     this.hot = init.hot ?? createNoopHotChannel()
     this.moduleGraph = new ModuleGraph()
     this.candidatePlugins = init.plugins ?? config.plugins
+    this.pluginApi = init.pluginApi ?? getPluginApi(config)
   }
 
   /** 过滤插件并建 per-env PluginContainer */
@@ -72,10 +81,41 @@ export class NastiEnvironment implements EnvironmentInstance {
       { ...this.config, plugins: this.plugins },
       this,
     )
+    if (this.options.driver) {
+      const claimed: Array<{ plugin: NastiPlugin; driver: EnvironmentDriver }> = []
+      for (const plugin of this.plugins) {
+        const driver = await plugin.createEnvironmentDriver?.(this, this.pluginApi)
+        if (driver) claimed.push({ plugin, driver })
+      }
+      if (claimed.length === 0) {
+        throw new Error(
+          `[nasti] environment "${this.name}" requested driver ` +
+            `"${this.options.driver}", but no plugin provided it`,
+        )
+      }
+      if (claimed.length > 1) {
+        throw new Error(
+          `[nasti] environment "${this.name}" was claimed by multiple drivers: ` +
+            claimed.map(({ plugin, driver }) => `${plugin.name} (${driver.name})`).join(', '),
+        )
+      }
+      this.driver = claimed[0].driver
+      debug?.(`env "${this.name}" uses driver "${this.driver.name}"`)
+    }
     debug?.(`env "${this.name}" initialized (${this.plugins.length} plugins)`)
   }
 
+  getDriverContext(): EnvironmentDriverContext {
+    return {
+      environment: this,
+      config: this.config,
+      api: this.pluginApi,
+      logger: this.config.logger,
+    }
+  }
+
   async close(): Promise<void> {
+    await this.driver?.close?.(this.getDriverContext())
     await this.hot.close?.()
   }
 }

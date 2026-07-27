@@ -1,0 +1,8 @@
+{
+  "name": "nasti-electron-vue-playground",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "vue": "^3.5.0"
+  }
+}

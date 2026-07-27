@@ -56,15 +56,13 @@ export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<Ele
   // ---- 1. 渲染进程（复用 Web 构建）----
   const rendererOutDir = path.join(outDir, 'renderer')
   const { build } = await import('./index.js')
-  await build({
-    ...inlineConfig,
-    target: 'web',
+  await build(createElectronRendererConfig(config, inlineConfig, {
     build: {
       ...inlineConfig.build,
       outDir: rendererOutDir,
       emptyOutDir: false,
     },
-  })
+  }))
 
   // ---- 2. 主进程 ----
   const mainEntry = path.resolve(config.root, config.electron.main)
@@ -144,6 +142,7 @@ async function bundleNode(
         sourcemap: !!config.build.sourcemap,
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
+        target: config.electron.nodeTarget,
       })
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },
@@ -160,7 +159,11 @@ async function bundleNode(
     ...restInputOptions,
     input: entry,
     platform: 'node',
-    transform: { ...userTransform, define: mergedDefine },
+    transform: {
+      ...userTransform,
+      target: config.electron.nodeTarget,
+      define: mergedDefine,
+    },
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
   })
 
@@ -180,6 +183,36 @@ async function bundleNode(
 
   console.log(pc.dim(`  ✓ ${opts.label} → ${path.relative(config.root, opts.outFile)}`))
   return opts.outFile
+}
+
+/**
+ * 从 Electron 配置派生 renderer 的普通 Web 构建配置。
+ *
+ * renderer 使用指定 HTML 入口；本地文件加载场景默认把 `/` base 收敛为
+ * `./`，避免产物中的 `/assets/*` 被解析到文件系统根目录。
+ */
+export function createElectronRendererConfig(
+  config: ResolvedConfig,
+  inlineConfig: NastiConfig = {},
+  overrides: Pick<NastiConfig, 'build'> = {},
+): NastiConfig {
+  const inlineClient = inlineConfig.environments?.client ?? {}
+  return {
+    ...inlineConfig,
+    ...overrides,
+    root: config.root,
+    mode: config.mode,
+    target: 'web',
+    framework: config.framework,
+    base: config.base === '/' ? './' : config.base,
+    environments: {
+      ...(inlineConfig.environments ?? {}),
+      client: {
+        ...inlineClient,
+        html: config.electron.renderer,
+      },
+    },
+  }
 }
 
 /**

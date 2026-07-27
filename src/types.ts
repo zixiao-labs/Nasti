@@ -65,10 +65,20 @@ export interface EnvironmentOptions {
    */
   consumer?: 'client' | 'server'
   /**
-   * 该环境的构建入口（相对 root）。client 环境忽略此项（入口从 index.html
-   * 提取）；非 client 环境**只有声明了 entry 才会被 `nasti build` 构建**。
+   * 该环境的构建入口（相对 root）。client 默认从 HTML 提取；显式配置后可覆盖。
+   * 非 client 环境只有声明 entry 或 driver 才会被 `nasti build` 构建。
    */
   entry?: string | string[]
+  /**
+   * HTML 入口（相对 root），仅 client consumer 使用。默认 `index.html`。
+   * Electron renderer 会把 `electron.renderer` 映射到这里。
+   */
+  html?: string
+  /**
+   * 外部环境编译驱动标识。声明后由插件的 `createEnvironmentDriver` 提供实际实现，
+   * 可用于接入 Rspeedy 等不基于 Rolldown 的构建系统。
+   */
+  driver?: string
   /** per-env 路径解析（client 默认含 'browser' condition；server 走 node conditions） */
   resolve?: ResolveConfig
   /** per-env 构建覆盖（未设置的字段回退 top-level build） */
@@ -78,8 +88,12 @@ export interface EnvironmentOptions {
 /** 解析后的环境配置 */
 export interface ResolvedEnvironmentOptions {
   consumer: 'client' | 'server'
-  /** 非 client 环境的构建入口（绝对路径）；client 恒为 [] */
+  /** 环境构建入口（绝对路径）；client 未显式配置时为空并从 HTML 提取 */
   entry: string[]
+  /** HTML 入口绝对路径（仅 client consumer 有值） */
+  html?: string
+  /** 外部环境编译驱动标识 */
+  driver?: string
   resolve: Required<ResolveConfig>
   build: Required<BuildConfig>
 }
@@ -198,9 +212,15 @@ export interface CssConfig {
 export interface NastiPlugin {
   name: string
   enforce?: 'pre' | 'post'
+  /** 必须在当前插件 setup 前完成 setup 的插件名 */
+  pre?: string[]
+  /** 必须在当前插件 setup 后完成 setup 的插件名 */
+  post?: string[]
   apply?: 'build' | 'serve' | ((config: ResolvedConfig, env: { mode: string; command: string }) => boolean)
 
   // 通用钩子
+  /** 插件初始化与跨插件 API 注册；每次 resolveConfig 只执行一次 */
+  setup?: (api: PluginApi) => void | Promise<void>
   buildStart?: (this: PluginContext) => void | Promise<void>
   buildEnd?: (this: PluginContext, error?: Error) => void | Promise<void>
   /**
@@ -257,6 +277,26 @@ export interface NastiPlugin {
    * 插件管线。未声明时插件应用于所有环境（与 Vite 默认一致）。
    */
   applyToEnvironment?: (environment: EnvironmentInstance) => boolean
+  /**
+   * 为声明了 `environment.options.driver` 的环境提供外部编译驱动。
+   * 一个环境只能被一个插件接管；返回多个驱动会报错。
+   */
+  createEnvironmentDriver?: (
+    environment: EnvironmentInstance,
+    api: PluginApi,
+  ) =>
+    | EnvironmentDriver
+    | null
+    | undefined
+    | Promise<EnvironmentDriver | null | undefined>
+  /**
+   * 所有环境构建完成后的 app 级收尾钩子，用于跨环境聚合产物。
+   * Vue Lynx 原生后端可在这里组合 background/main-thread bundle。
+   */
+  afterBuildApp?: (
+    results: Record<string, EnvironmentBuildResult>,
+    api: PluginApi,
+  ) => void | Promise<void>
   configureServer?: (server: DevServer) => void | (() => void) | Promise<void | (() => void)>
   transformIndexHtml?: (html: string) => string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] } | Promise<string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }>
   handleHotUpdate?: (ctx: HmrContext) => void | ModuleNode[] | Promise<void | ModuleNode[]>
@@ -273,6 +313,66 @@ export interface PluginContext {
   environment?: EnvironmentInstance
 }
 
+export type PluginApiKey = string | symbol
+
+/** 插件 setup 与环境驱动共享的跨插件 API。 */
+export interface PluginApi {
+  readonly config: ResolvedConfig
+  readonly logger: Logger
+  expose: <T>(key: PluginApiKey, value: T) => void
+  useExposed: <T>(key: PluginApiKey) => T | undefined
+}
+
+export interface EnvironmentBuildOutput {
+  fileName: string
+  type: string
+  code?: string
+  source?: Uint8Array | string
+}
+
+/** 外部环境驱动返回的标准构建结果。 */
+export interface EnvironmentBuildResult {
+  output: EnvironmentBuildOutput[]
+  entries?: Record<string, string>
+  publicPath?: string
+  manifest?: unknown
+  stats?: unknown
+}
+
+/** 外部环境驱动返回的开发服务信息。 */
+export interface EnvironmentServeResult {
+  localUrls?: string[]
+  networkUrls?: string[]
+  middleware?: any
+}
+
+export interface EnvironmentDriverContext {
+  environment: EnvironmentInstance
+  config: ResolvedConfig
+  api: PluginApi
+  logger: Logger
+}
+
+export interface EnvironmentDriverServeContext extends EnvironmentDriverContext {
+  server: DevServer
+}
+
+export interface EnvironmentDriver {
+  name: string
+  build?: (
+    context: EnvironmentDriverContext,
+  ) => EnvironmentBuildResult | Promise<EnvironmentBuildResult>
+  serve?: (
+    context: EnvironmentDriverServeContext,
+  ) => EnvironmentServeResult | void | Promise<EnvironmentServeResult | void>
+  watchChange?: (
+    file: string,
+    event: 'add' | 'change' | 'unlink',
+    context: EnvironmentDriverContext,
+  ) => void | Promise<void>
+  close?: (context: EnvironmentDriverContext) => void | Promise<void>
+}
+
 /**
  * 环境实例的公共面（核心实现见 core/environment.ts 的 NastiEnvironment）。
  * 插件经 `this.environment` / `applyToEnvironment(env)` 感知环境。
@@ -284,6 +384,8 @@ export interface EnvironmentInstance {
   config: ResolvedConfig
   options: ResolvedEnvironmentOptions
   hot: HotChannel
+  /** 声明 driver 后，由插件提供的外部环境编译驱动 */
+  driver?: EnvironmentDriver
 }
 
 /**
@@ -357,7 +459,8 @@ export interface ResolvedConfig {
   base: string
   mode: 'development' | 'production'
   target: 'web' | 'electron'
-  framework: 'react' | 'vue' | 'auto'
+  /** `auto` 在配置解析阶段已收敛为具体框架 */
+  framework: 'react' | 'vue'
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
   plugins: NastiPlugin[]
@@ -391,6 +494,8 @@ export interface DevServer {
   ws: WebSocketServer
   /** Environment API：per-env 环境实例（Phase 1 仅 client 有完整运行时） */
   environments: Record<string, EnvironmentInstance>
+  /** 外部环境驱动启动后返回的服务 URL / middleware 信息 */
+  environmentServices: Record<string, EnvironmentServeResult>
   listen: (port?: number) => Promise<DevServer>
   close: () => Promise<void>
   transformRequest: (url: string) => Promise<TransformResult>
