@@ -38,7 +38,12 @@ import pc from 'picocolors'
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from 'node:http'
 import type { ResolvedConfig } from '../../types.js'
 import type { NastiEnvironment } from '../../core/environment.js'
-import { getRolldownOptions, toRolldownPlugins, resolveClientEntries } from '../../build/index.js'
+import {
+  getRolldownOptions,
+  replaceEntryScript,
+  resolveClientEntries,
+  toRolldownPlugins,
+} from '../../build/index.js'
 import { readHtmlFile, processHtml } from '../../plugins/html.js'
 import { transformCode } from '../../core/transformer.js'
 import { getReactRefreshRuntimeEsm } from '../middleware.js'
@@ -114,7 +119,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     )
   }
 
-  const html = await readHtmlFile(config.root)
+  const html = await readHtmlFile(config.root, config.environments.client?.html)
   const entryPoints = resolveClientEntries(config, html)
   if (entryPoints.length === 0) {
     throw new Error('No entry point found. Add a <script> tag to index.html or create src/main.ts')
@@ -188,9 +193,13 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
         needsLatestOutput = true
         continue
       }
-      // Patch：存内存 + 通知该 client 拉取（XSSI 加固：尾部 export {}）
+      // Patch：存内存 + 通知该 client 拉取。浏览器完成 patch 求值后刷新页面，
+      // 与 unbundled 客户端保持一致；尾部 export {} 同时用于 XSSI 加固。
       const patchPath = `__nasti_patch/${update.filename}`
-      patches.set(patchPath, update.code + '\n;export {}')
+      patches.set(
+        patchPath,
+        update.code + '\n;globalThis.location?.reload();\n;export {}',
+      )
       if (update.sourcemap && update.sourcemapFilename) {
         patches.set(`__nasti_patch/${update.sourcemapFilename}`, update.sourcemap)
       }
@@ -357,7 +366,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
 
       // index.html：注入 React preamble（unbundled 同款）+ 入口改写到内存产物
       if (pathname === '/' || pathname.endsWith('.html')) {
-        const rawHtml = await readHtmlFile(config.root)
+        const rawHtml = await readHtmlFile(config.root, config.environments.client?.html)
         if (rawHtml) {
           res.setHeader('Content-Type', 'text/html')
           res.setHeader('Cache-Control', 'no-store')
@@ -577,10 +586,13 @@ async function renderBundledIndexHtml(
   }
   // 入口 script src → 内存产物 URL
   for (const [facadeModuleId, fileName] of entryFileNames) {
-    const originalEntry = path.relative(config.root, facadeModuleId)
-    processed = processed.replace(
-      new RegExp(`(src=["'])/?(${originalEntry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(["'])`, 'g'),
-      `$1/${fileName}$3`,
+    processed = replaceEntryScript(
+      processed,
+      facadeModuleId,
+      fileName,
+      config,
+      config.environments.client?.html ?? 'index.html',
+      '/',
     )
   }
   return processed

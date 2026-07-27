@@ -21,7 +21,7 @@ export function htmlPlugin(config: ResolvedConfig): NastiPlugin {
       const tags: HtmlTagDescriptor[] = []
 
       if (config.command === 'serve') {
-        const isReactLike = config.framework === 'react' || config.framework === 'auto'
+        const isReactLike = config.framework === 'react'
 
         // 先装 Fast Refresh 钩子（必须在任何用户模块之前，因为 JSX 模块 wrapper
         // 会校验 window.__vite_plugin_react_preamble_installed__）
@@ -98,9 +98,12 @@ function serializeTag(tag: HtmlTagDescriptor): string {
   return `  <${tag.tag}${attrs}>${children}</${tag.tag}>`
 }
 
-/** 读取并处理 HTML 入口文件 */
-export async function readHtmlFile(root: string): Promise<string | null> {
-  const htmlPath = path.resolve(root, 'index.html')
+/** 读取 HTML 入口文件；htmlFile 可为相对 root 或绝对路径。 */
+export async function readHtmlFile(
+  root: string,
+  htmlFile: string = 'index.html',
+): Promise<string | null> {
+  const htmlPath = path.isAbsolute(htmlFile) ? htmlFile : path.resolve(root, htmlFile)
   if (!fs.existsSync(htmlPath)) return null
   return fs.readFileSync(htmlPath, 'utf-8')
 }

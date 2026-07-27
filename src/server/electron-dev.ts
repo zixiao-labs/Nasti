@@ -42,10 +42,16 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
 
   // 1. 启动 dev server（渲染进程）
   const { createServer } = await import('./index.js')
-  const server = await createServer({ ...rest, target: 'electron' })
+  const server = await createServer({
+    ...rest,
+    target: 'electron',
+    framework: config.framework,
+  })
   await server.listen()
 
-  const devUrl = `http://localhost:${server.config.server.port}/`
+  const devUrl =
+    `http://localhost:${server.config.server.port}` +
+    electronRendererDevPath(config.electron.renderer)
   console.log(pc.dim(`  renderer: ${devUrl}`))
 
   // 2. 编译主进程 + preload 到 .nasti/
@@ -208,9 +214,10 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
     transform(code: string, id: string) {
       if (!shouldTransform(id)) return null
       const result = transformCode(id, code, {
-        sourcemap: !!config.build.sourcemap,
+        sourcemap: true,
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
+        target: config.electron.nodeTarget,
       })
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },
@@ -218,7 +225,10 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
 
   const bundle = await rolldown({
     input: entry,
-    transform: { define: envDefine },
+    transform: {
+      target: config.electron.nodeTarget,
+      define: envDefine,
+    },
     platform: 'node',
     plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
   })
@@ -226,13 +236,22 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
   await bundle.write({
     file: opts.outFile,
     format: opts.format === 'cjs' ? 'cjs' : 'esm',
-    sourcemap: false,
+    sourcemap: true,
     minify: false,
     // rolldown 已弃用 inlineDynamicImports，改用 codeSplitting:false 表达
     // 同样语义（单 chunk、内联 dynamic import）
     codeSplitting: false,
   })
   await bundle.close()
+}
+
+/** 将 renderer HTML 路径转换为 Electron 开发服务器 URL path。 */
+export function electronRendererDevPath(renderer: string): string {
+  const normalized = renderer
+    .split(path.sep)
+    .join('/')
+    .replace(/^\.?\//, '')
+  return normalized === 'index.html' ? '/' : `/${normalized}`
 }
 
 /**

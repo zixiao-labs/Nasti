@@ -1,6 +1,6 @@
 {
   "name": "@nasti-toolchain/nasti",
-  "version": "2.0.2",
+  "version": "2.3.0",
   "publishConfig": {
     "access": "public"
   },
@@ -45,7 +45,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm run build && node --test \"test/*.test.mjs\""
   },
   "dependencies": {
     "cac": "^6.7.14",
@@ -67,7 +67,8 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vue": "3.5.40"
   },
   "optionalDependencies": {
     "@vue/compiler-sfc": "^3.5.0",
