@@ -8,7 +8,7 @@ export class ModuleGraph {
   private fileToModulesMap = new Map<string, Set<ModuleNode>>()
 
   getModuleByUrl(url: string): ModuleNode | undefined {
-    return this.urlToModuleMap.get(url)
+    return this.urlToModuleMap.get(removeTimestampQuery(url))
   }
 
   getModuleById(id: string): ModuleNode | undefined {
@@ -20,11 +20,12 @@ export class ModuleGraph {
   }
 
   async ensureEntryFromUrl(url: string): Promise<ModuleNode> {
-    let mod = this.urlToModuleMap.get(url)
+    const normalizedUrl = removeTimestampQuery(url)
+    let mod = this.urlToModuleMap.get(normalizedUrl)
     if (mod) return mod
 
-    mod = this.createModule(url)
-    this.urlToModuleMap.set(url, mod)
+    mod = this.createModule(normalizedUrl)
+    this.urlToModuleMap.set(normalizedUrl, mod)
     return mod
   }
 
@@ -39,6 +40,7 @@ export class ModuleGraph {
       acceptedHmrDeps: new Set(),
       transformResult: null,
       lastHMRTimestamp: 0,
+      invalidationVersion: 0,
       isSelfAccepting: false,
     }
     this.idToModuleMap.set(mod.id, mod)
@@ -88,10 +90,84 @@ export class ModuleGraph {
     }
   }
 
+  /**
+   * 用一次转换得到的信息原子更新 import 与 HMR accept 关系。
+   * 依赖节点会在真正被浏览器请求前预先创建，这样入口模块先转换时也能建立完整图。
+   */
+  async updateModuleInfo(
+    mod: ModuleNode,
+    importedUrls: Set<string>,
+    acceptedUrls: Set<string>,
+    isSelfAccepting: boolean,
+    expectedInvalidationVersion?: number,
+  ): Promise<Set<ModuleNode> | null> {
+    const importedModules = await Promise.all(
+      [...importedUrls].map((url) => this.ensureEntryFromUrl(url)),
+    )
+    const acceptedModules = await Promise.all(
+      [...acceptedUrls].map((url) => this.ensureEntryFromUrl(url)),
+    )
+
+    // 异步插件转换期间若又发生文件变更，旧结果不能覆盖新模块图或转换缓存。
+    if (
+      expectedInvalidationVersion !== undefined &&
+      mod.invalidationVersion !== expectedInvalidationVersion
+    ) {
+      return null
+    }
+
+    const previousImports = new Set(mod.importedModules)
+    for (const imported of previousImports) {
+      imported.importers.delete(mod)
+    }
+    mod.importedModules.clear()
+    mod.acceptedHmrDeps.clear()
+
+    for (const imported of importedModules) {
+      mod.importedModules.add(imported)
+      imported.importers.add(mod)
+    }
+    for (const accepted of acceptedModules) {
+      mod.acceptedHmrDeps.add(accepted)
+    }
+    mod.isSelfAccepting = isSelfAccepting
+
+    const pruned = new Set<ModuleNode>()
+    for (const imported of previousImports) {
+      if (!mod.importedModules.has(imported) && imported.importers.size === 0) {
+        pruned.add(imported)
+      }
+    }
+    return pruned
+  }
+
   /** 使模块的转换缓存失效 */
-  invalidateModule(mod: ModuleNode): void {
+  invalidateModule(mod: ModuleNode, timestamp = Date.now()): void {
     mod.transformResult = null
-    mod.lastHMRTimestamp = Date.now()
+    mod.lastHMRTimestamp = timestamp
+    mod.invalidationVersion++
+  }
+
+  /**
+   * 仅失效到 HMR 边界：显式接受依赖的模块本身不会重执行；自接受模块需要失效，
+   * 但不再继续影响其 importer。这样既能传播依赖时间戳，也不会隐式重复副作用。
+   */
+  invalidateModuleAndImporters(
+    mod: ModuleNode,
+    timestamp = Date.now(),
+    seen = new Set<ModuleNode>(),
+  ): void {
+    if (seen.has(mod)) return
+    seen.add(mod)
+    this.invalidateModule(mod, timestamp)
+    for (const importer of mod.importers) {
+      if (importer.acceptedHmrDeps.has(mod)) continue
+      if (importer.isSelfAccepting) {
+        this.invalidateModule(importer, timestamp)
+        continue
+      }
+      this.invalidateModuleAndImporters(importer, timestamp, seen)
+    }
   }
 
   /** 使所有模块缓存失效 */
@@ -104,48 +180,56 @@ export class ModuleGraph {
   /** 获取 HMR 传播边界 - 从变更模块向上遍历找到接受更新的边界 */
   getHmrBoundaries(mod: ModuleNode): { boundary: ModuleNode; acceptedVia: ModuleNode }[] {
     const boundaries: { boundary: ModuleNode; acceptedVia: ModuleNode }[] = []
-    const visited = new Set<ModuleNode>()
+    const traversed = new Set<ModuleNode>()
 
-    const propagate = (node: ModuleNode, via: ModuleNode): boolean => {
-      if (visited.has(node)) return true
-      visited.add(node)
+    const addBoundary = (boundary: ModuleNode, acceptedVia: ModuleNode): void => {
+      if (!boundaries.some((item) =>
+        item.boundary === boundary && item.acceptedVia === acceptedVia
+      )) {
+        boundaries.push({ boundary, acceptedVia })
+      }
+    }
 
-      // 如果模块自身接受热更新
+    const propagate = (node: ModuleNode): boolean => {
+      if (traversed.has(node)) return true
+      traversed.add(node)
+
+      // 自接受边界重新导入自身，而不是触发它的下游依赖。
       if (node.isSelfAccepting) {
-        boundaries.push({ boundary: node, acceptedVia: via })
+        addBoundary(node, node)
         return true
       }
-
-      // 如果模块被其他模块作为 HMR 依赖接受
-      if (node.acceptedHmrDeps.has(via)) {
-        boundaries.push({ boundary: node, acceptedVia: via })
-        return true
-      }
-
-      // 没有 importer 意味着到达了入口，需要 full reload
       if (node.importers.size === 0) return false
 
-      // 向上传播
       for (const importer of node.importers) {
-        if (!propagate(importer, node)) return false
+        // 显式 accept 在进入 importer 前判断，所以被接受的分支不会污染 traversed；
+        // 菱形图中的其他未接受分支仍会继续传播并正确发现死路。
+        if (importer.acceptedHmrDeps.has(node)) {
+          addBoundary(importer, node)
+          continue
+        }
+        if (!propagate(importer)) return false
       }
       return true
     }
 
-    // 从自身开始，如果自身接受就直接返回
-    if (mod.isSelfAccepting) {
-      boundaries.push({ boundary: mod, acceptedVia: mod })
-      return boundaries
-    }
-
-    // 否则向 importer 传播
-    for (const importer of mod.importers) {
-      if (!propagate(importer, mod)) {
-        // 传播到了根模块，需要 full reload
-        return []
-      }
-    }
-
-    return boundaries
+    return propagate(mod) ? boundaries : []
   }
+}
+
+/** 保留语义 query，仅移除浏览器为 HMR 缓存失效附加的 `t` 参数。 */
+function removeTimestampQuery(url: string): string {
+  const hashIndex = url.indexOf('#')
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+  const withoutHash = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+  const queryIndex = withoutHash.indexOf('?')
+  if (queryIndex < 0) return url
+
+  const pathname = withoutHash.slice(0, queryIndex)
+  const query = withoutHash
+    .slice(queryIndex + 1)
+    .split('&')
+    .filter((part) => !/^t=\d+$/.test(part))
+    .join('&')
+  return pathname + (query ? `?${query}` : '') + hash
 }

@@ -23,10 +23,12 @@ export async function handleFileChange(
 
   const updates: HmrUpdate[] = []
   const timestamp = Date.now()
+  const graph = moduleGraph as ModuleGraph
+  const invalidatedModules = new Set<ModuleNode>()
 
   for (const mod of mods) {
-    // 使缓存失效
-    moduleGraph.invalidateModule(mod)
+    // importer 也要失效，边界重新导入时才能把变更时间戳传播到依赖 URL。
+    graph.invalidateModuleAndImporters(mod, timestamp, invalidatedModules)
 
     // 执行插件的 handleHotUpdate 钩子
     const ctx: HmrContext = {
@@ -49,7 +51,8 @@ export async function handleFileChange(
 
     // 检查 HMR 边界
     for (const affected of affectedModules) {
-      const boundaries = (moduleGraph as ModuleGraph).getHmrBoundaries(affected)
+      graph.invalidateModuleAndImporters(affected, timestamp, invalidatedModules)
+      const boundaries = graph.getHmrBoundaries(affected)
       if (boundaries.length === 0) {
         // 无法热更新，full reload
         logger.info(pc.green('page reload ') + pc.dim(shortFile), { timestamp: true })
@@ -57,13 +60,20 @@ export async function handleFileChange(
         return
       }
 
-      for (const { boundary } of boundaries) {
-        updates.push({
+      for (const { boundary, acceptedVia } of boundaries) {
+        const update: HmrUpdate = {
           type: boundary.type === 'css' ? 'css-update' : 'js-update',
           path: boundary.url,
-          acceptedPath: affected.url,
+          acceptedPath: acceptedVia.url,
           timestamp,
-        })
+        }
+        if (!updates.some((existing) =>
+          existing.type === update.type &&
+          existing.path === update.path &&
+          existing.acceptedPath === update.acceptedPath
+        )) {
+          updates.push(update)
+        }
       }
     }
   }
