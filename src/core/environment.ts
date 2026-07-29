@@ -9,6 +9,7 @@
 // 1.x 逐字节一致（环境过滤默认全通过、容器构造仅多带 environment 引用）。
 import type {
   EnvironmentDriver,
+  EnvironmentBuildMetadata,
   EnvironmentDriverContext,
   EnvironmentInstance,
   HotChannel,
@@ -52,6 +53,7 @@ export class NastiEnvironment implements EnvironmentInstance {
 
   private candidatePlugins: NastiPlugin[]
   private pluginApi: PluginApi
+  private buildMetadata: EnvironmentBuildMetadata = {}
   private initialized = false
 
   constructor(name: string, config: ResolvedConfig, init: NastiEnvironmentInit = {}) {
@@ -111,6 +113,26 @@ export class NastiEnvironment implements EnvironmentInstance {
       config: this.config,
       api: this.pluginApi,
       logger: this.config.logger,
+    }
+  }
+
+  setBuildMetadata(metadata: EnvironmentBuildMetadata): void {
+    const { entries: currentEntries, ...currentMetadata } = this.buildMetadata
+    const { entries, ...nextMetadata } = metadata
+    this.buildMetadata = {
+      ...currentMetadata,
+      ...nextMetadata,
+      ...(currentEntries || entries
+        ? { entries: { ...currentEntries, ...entries } }
+        : {}),
+    }
+  }
+
+  getBuildMetadata(): EnvironmentBuildMetadata {
+    const { entries, ...metadata } = this.buildMetadata
+    return {
+      ...metadata,
+      ...(entries ? { entries: { ...entries } } : {}),
     }
   }
 

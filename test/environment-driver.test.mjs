@@ -4,7 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { build, createServer } from '../dist/index.js'
+import {
+  build,
+  createServer,
+  NastiEnvironment,
+  resolveConfig,
+} from '../dist/index.js'
 
 test('external environment driver receives shared plugin API and app lifecycle', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-driver-'))
@@ -101,6 +106,76 @@ test('plugin setup dependency cycles fail during config resolution', async (t) =
       }),
     /circular plugin setup dependency/,
   )
+})
+
+test('environment drivers must return an EnvironmentBuildResult array', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-driver-result-contract-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true }))
+
+  const driverPlugin = (buildResult) => ({
+    name: 'fixture:invalid-driver-result',
+    createEnvironmentDriver(environment) {
+      if (environment.options.driver !== 'fixture') return
+      return {
+        name: 'fixture',
+        build() {
+          return buildResult
+        },
+      }
+    },
+  })
+
+  await assert.rejects(
+    () =>
+      build({
+        root,
+        logLevel: 'silent',
+        plugins: [driverPlugin(undefined)],
+        environments: { client: { driver: 'fixture' } },
+      }),
+    /environment "client" driver "fixture" returned an invalid build result; expected \{ output: EnvironmentBuildOutput\[\] \}/,
+  )
+
+  await assert.rejects(
+    () =>
+      build({
+        root,
+        logLevel: 'silent',
+        plugins: [driverPlugin({ output: {} })],
+        environments: {
+          client: { buildEnabled: false },
+          native: { consumer: 'client', driver: 'fixture' },
+        },
+      }),
+    /environment "native" driver "fixture" returned an invalid build result; expected \{ output: EnvironmentBuildOutput\[\] \}/,
+  )
+})
+
+test('environment build metadata is copied without synthesizing entries', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-environment-metadata-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true }))
+
+  const config = await resolveConfig({ root, logLevel: 'silent' }, 'build')
+  const environment = new NastiEnvironment('client', config, { mode: 'build' })
+
+  assert.equal(Object.hasOwn(environment.getBuildMetadata(), 'entries'), false)
+  environment.setBuildMetadata({ manifest: { ready: true }, publicPath: '/assets/' })
+  assert.equal(Object.hasOwn(environment.getBuildMetadata(), 'entries'), false)
+
+  const entries = { main: 'entry.js' }
+  environment.setBuildMetadata({ entries })
+  entries.main = 'mutated-outside.js'
+
+  const metadata = environment.getBuildMetadata()
+  metadata.entries.main = 'mutated-snapshot.js'
+  metadata.publicPath = '/mutated/'
+  assert.deepEqual(environment.getBuildMetadata(), {
+    manifest: { ready: true },
+    publicPath: '/assets/',
+    entries: { main: 'entry.js' },
+  })
 })
 
 test('external environment driver participates in dev serve, watch, and close', async (t) => {

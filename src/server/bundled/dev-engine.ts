@@ -143,7 +143,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
           createBundledOxcRefreshPlugin(),
         ]
       : []),
-    ...stripCatchAllLoad(toRolldownPlugins(clientEnv.plugins)),
+    ...stripCatchAllLoad(toRolldownPlugins(clientEnv.plugins, clientEnv)),
     ...(useReactRefresh
       ? [
           refreshWrapperFn!({

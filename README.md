@@ -303,7 +303,70 @@ export default defineConfig({
 
 bridge 插件通过 `createEnvironmentDriver()` 提供 `build`、`serve`、`watchChange`
 和 `close`，并可使用 `setup(api)`、`api.expose/useExposed` 与
-`afterBuildApp()` 协调多个插件或环境。
+`afterBuildApp(results, api, context)` 协调多个插件或环境。
+
+## 原生多环境聚合（Lynx BG / MT）
+
+纯 Lynx 应用可以禁用默认 Web client，把同一入口交给两套独立的 client-consumer
+Rolldown 环境。每套环境都有独立 module graph、resolve conditions、插件上下文和输出目录：
+
+```ts
+export default defineConfig({
+  environments: {
+    client: { buildEnabled: false },
+    'lynx-background': {
+      consumer: 'client',
+      entry: 'src/index.ts',
+      resolve: { conditions: ['lynx-background', 'browser', 'import'] },
+    },
+    'lynx-main-thread': {
+      consumer: 'client',
+      entry: 'src/index.ts',
+      resolve: { conditions: ['lynx-main-thread', 'browser', 'import'] },
+    },
+  },
+  plugins: [pluginVueLynxNative()],
+})
+```
+
+Environment API 是 `conditionNames` 和 `mainFields` 的唯一高层配置入口：
+请使用 `environments.<name>.resolve.conditions` / `mainFields`（client 也可使用
+top-level `resolve`）。这些值会无条件覆盖
+`build.rolldownOptions.resolve.conditionNames` / `mainFields` 中的对应底层选项。
+
+在生产构建的 bundle/finalizer 相关钩子（如 `generateBundle`、`buildEnd`、
+`closeBundle`）中，`this.environment` 会准确指向当前 BG/MT 环境。unbundled
+dev 调用路径可能不提供该对象，开发期插件不得依赖 `this.environment`；应使用
+Environment API 的显式环境参数。插件可登记结构化 manifest，并在 app 级
+finalizer 中直接查询 entry/artifact，最后写出聚合 bundle：
+
+```ts
+const pluginVueLynxNative = () => ({
+  name: 'vue-lynx:native',
+
+  generateBundle() {
+    this.environment.setBuildMetadata({
+      manifest: { thread: this.environment.name },
+    })
+  },
+
+  afterBuildApp(_results, _api, app) {
+    const background = app.getEntry('lynx-background', 'index')
+    const mainThread = app.getEntry('lynx-main-thread', 'index')
+    if (!background || !mainThread) throw new Error('Missing Lynx thread entry')
+
+    app.emitFile({
+      type: 'asset',
+      fileName: 'main.native.lynx.bundle',
+      source: encodeLynxBundle({ background, mainThread }),
+    })
+  },
+})
+```
+
+`build()` 的 `environmentResults` 会包含原生环境自动推导的 `entries`、插件登记的
+`manifest/stats` 及完整 `output`；app 级产物同时出现在 `BuildResult.appOutput`。
+这些 API 只负责双线程编排与聚合，Vue SFC/worklet、Lynx CSS 和 encoder 由后续工具链插件实现。
 
 ## Monaco Editor 支持
 

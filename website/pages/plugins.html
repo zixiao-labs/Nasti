@@ -193,8 +193,8 @@
       <span class="keyword">async</span> <span class="func">close</span>() {},
     }
   },
-  <span class="func">afterBuildApp</span>(results, api) {
-    <span class="comment">// 可跨环境读取 entries / manifest / stats 并聚合产物</span>
+  <span class="func">afterBuildApp</span>(results, api, context) {
+    <span class="comment">// 通过 context 跨环境读取 entries / manifest / stats 并聚合产物</span>
   },
 })</pre></div>
 

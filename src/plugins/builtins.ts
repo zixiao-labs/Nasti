@@ -15,6 +15,8 @@ import { htmlPlugin } from './html.js'
 export interface BuiltinPluginOptions {
   /** build 期 CSS 抽取引擎（serve 不传，dev 走 <style> 注入路径） */
   cssEngine?: CssEngine
+  /** 当前环境名；内置插件据此读取 per-env resolve/build 配置。 */
+  environmentName?: string
   /** 环境 consumer：server 时 css 插件返回无 DOM 的纯 stub（SSR/main/preload） */
   consumer?: 'client' | 'server'
 }
@@ -29,15 +31,29 @@ export function resolvePluginList(
   opts: BuiltinPluginOptions = {},
 ): NastiPlugin[] {
   const isServe = config.command === 'serve'
+  let environmentOptions
+  if (opts.environmentName) {
+    environmentOptions = config.environments[opts.environmentName]
+    if (!environmentOptions) {
+      throw new Error(
+        `[nasti] unknown environment "${opts.environmentName}" — declare it in config.environments`,
+      )
+    }
+  }
+  const pluginConfig = environmentOptions
+    ? { ...config, resolve: environmentOptions.resolve, build: environmentOptions.build }
+    : config
+  const consumer = opts.consumer ?? environmentOptions?.consumer
+
   return [
     // vuePlugin 排最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道
-    ...(config.framework === 'vue' ? [vuePlugin(config)] : []),
-    resolvePlugin(config),
-    cssPlugin(config, opts.cssEngine, opts.consumer),
-    assetsPlugin(config),
-    ...(isServe ? [htmlPlugin(config)] : []),
+    ...(config.framework === 'vue' ? [vuePlugin(pluginConfig)] : []),
+    resolvePlugin(pluginConfig),
+    cssPlugin(pluginConfig, opts.cssEngine, consumer),
+    assetsPlugin(pluginConfig),
+    ...(isServe ? [htmlPlugin(pluginConfig)] : []),
     ...userPlugins,
     // cssPostPlugin 最后（enforce: 'post' 语义）：renderChunk 聚合抽取
-    ...(!isServe && opts.cssEngine ? [cssPostPlugin(config, opts.cssEngine)] : []),
+    ...(!isServe && opts.cssEngine ? [cssPostPlugin(pluginConfig, opts.cssEngine)] : []),
   ]
 }

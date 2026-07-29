@@ -254,6 +254,7 @@ export async function resolveConfig(
       if (envOptions.build) Object.assign(resolved.build, envOptions.build)
       resolved.environments.client = {
         consumer,
+        buildEnabled: envOptions.buildEnabled ?? true,
         entry: normalizeEnvironmentEntries(envOptions.entry, root),
         html: path.resolve(
           root,
@@ -270,6 +271,7 @@ export async function resolveConfig(
 
     resolved.environments[name] = {
       consumer,
+      buildEnabled: envOptions.buildEnabled ?? true,
       entry: normalizeEnvironmentEntries(envOptions.entry, root),
       html:
         envOptions.consumer === 'client' && envOptions.html

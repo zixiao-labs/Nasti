@@ -76,6 +76,11 @@ export interface EnvironmentOptions {
    */
   html?: string
   /**
+   * 是否参与生产构建。默认 true；设为 false 可跳过默认 client，构建纯多环境应用。
+   * 仅影响 `nasti build`，不影响 dev server 中环境实例的可见性。
+   */
+  buildEnabled?: boolean
+  /**
    * 外部环境编译驱动标识。声明后由插件的 `createEnvironmentDriver` 提供实际实现，
    * 可用于接入 Rspeedy 等不基于 Rolldown 的构建系统。
    */
@@ -89,6 +94,8 @@ export interface EnvironmentOptions {
 /** 解析后的环境配置 */
 export interface ResolvedEnvironmentOptions {
   consumer: 'client' | 'server'
+  /** 是否参与生产构建 */
+  buildEnabled: boolean
   /** 环境构建入口（绝对路径）；client 未显式配置时为空并从 HTML 提取 */
   entry: string[]
   /** HTML 入口绝对路径（仅 client consumer 有值） */
@@ -297,6 +304,7 @@ export interface NastiPlugin {
   afterBuildApp?: (
     results: Record<string, EnvironmentBuildResult>,
     api: PluginApi,
+    context: BuildAppContext,
   ) => void | Promise<void>
   configureServer?: (server: DevServer) => void | (() => void) | Promise<void | (() => void)>
   transformIndexHtml?: (html: string) => string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] } | Promise<string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }>
@@ -331,13 +339,45 @@ export interface EnvironmentBuildOutput {
   source?: Uint8Array | string
 }
 
-/** 外部环境驱动返回的标准构建结果。 */
-export interface EnvironmentBuildResult {
-  output: EnvironmentBuildOutput[]
+/** 单个环境附加到标准构建结果上的结构化元数据。 */
+export interface EnvironmentBuildMetadata {
   entries?: Record<string, string>
   publicPath?: string
   manifest?: unknown
   stats?: unknown
+}
+
+/** 外部环境驱动或原生 Rolldown 环境返回的标准构建结果。 */
+export interface EnvironmentBuildResult extends EnvironmentBuildMetadata {
+  output: EnvironmentBuildOutput[]
+}
+
+/** app 级 finalizer 写出的聚合产物。 */
+export interface AppBuildOutput extends EnvironmentBuildOutput {
+  type: 'asset'
+  source: Uint8Array | string
+}
+
+/**
+ * 所有环境完成后提供给 `afterBuildApp` 的只读查询与产物写出接口。
+ * Lynx 等多运行时工具链可用它聚合 background/main-thread 结果，而无需读取磁盘目录。
+ */
+export interface BuildAppContext {
+  readonly config: ResolvedConfig
+  readonly results: Readonly<Record<string, EnvironmentBuildResult>>
+  readonly output: readonly AppBuildOutput[]
+  getResult: (environmentName: string) => EnvironmentBuildResult | undefined
+  getArtifact: (
+    environmentName: string,
+    fileName: string,
+  ) => EnvironmentBuildOutput | undefined
+  getEntry: (
+    environmentName: string,
+    entryName: string,
+  ) => EnvironmentBuildOutput | undefined
+  getManifest: <T = unknown>(environmentName: string) => T | undefined
+  /** 将聚合产物安全地写入 top-level `build.outDir`，并纳入 BuildResult.appOutput。 */
+  emitFile: (file: AppBuildOutput) => string
 }
 
 /** 外部环境驱动返回的开发服务信息。 */
@@ -391,6 +431,8 @@ export interface EnvironmentInstance {
   hot: HotChannel
   /** 声明 driver 后，由插件提供的外部环境编译驱动 */
   driver?: EnvironmentDriver
+  /** 由生产插件登记 entries / manifest / stats，构建完成后合并进环境结果。 */
+  setBuildMetadata: (metadata: EnvironmentBuildMetadata) => void
 }
 
 /**
@@ -401,6 +443,8 @@ export interface EnvironmentInstance {
 export interface RenderChunkContext {
   emitFile: (file: EmittedFile) => string
   getFileName: (referenceId: string) => string
+  /** 当前生产钩子所属环境；BG/MT 同为 client consumer 时也可准确区分。 */
+  environment: EnvironmentInstance
 }
 
 export interface ResolveIdOptions {

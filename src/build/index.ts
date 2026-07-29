@@ -12,6 +12,7 @@ import { builtinModules } from 'node:module'
 import { rolldown } from 'rolldown'
 import type { InputOptions, OutputOptions } from 'rolldown'
 import type {
+  AppBuildOutput,
   EnvironmentBuildOutput,
   EnvironmentBuildResult,
   NastiConfig,
@@ -29,6 +30,12 @@ import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
 import { getPluginApi } from '../core/plugin-api.js'
+import {
+  createBuildAppContext,
+  inferEnvironmentEntries,
+  isInvalidEnvironmentFileName,
+  normalizeEnvironmentFileName,
+} from '../core/build-app-context.js'
 import pc from 'picocolors'
 
 const debug = createDebugger('nasti:build')
@@ -40,8 +47,10 @@ export interface BuildResult {
   output: EnvironmentBuildOutput[]
   /** 全部已构建环境的产物（2.0 多环境 builder） */
   environments?: Record<string, BuildResult['output']>
-  /** 环境驱动返回的完整结果（entries / manifest / stats 等） */
+  /** 全部环境的完整结果（entries / manifest / stats 等） */
   environmentResults?: Record<string, EnvironmentBuildResult>
+  /** app 级 finalizer 聚合写出的产物（如 `.lynx.bundle`） */
+  appOutput?: AppBuildOutput[]
 }
 
 interface BuiltEnvironment {
@@ -69,8 +78,12 @@ export function getRolldownOptions(
 
   // Rolldown 1.x 把 `define` 从顶层 InputOptions 移到了 `transform.define`，
   // 顶层传入会触发 "Invalid key" 警告并静默丢弃。
-  const { output: userOutput, transform: userTransform, ...restInputOptions } =
-    envOptions.build.rolldownOptions
+  const {
+    output: userOutput,
+    transform: userTransform,
+    resolve: userResolve,
+    ...restInputOptions
+  } = envOptions.build.rolldownOptions
 
   // Vue（esm-bundler 构建）的编译期常量：最低优先级，允许用户覆盖
   const vueDefine: Record<string, string> = config.framework === 'vue'
@@ -90,14 +103,17 @@ export function getRolldownOptions(
     input: entryPoints,
     transform: { ...userTransform, define: mergedDefine },
     plugins: rolldownPlugins as InputOptions['plugins'],
+    // client/server consumer 都必须使用当前环境的 conditions/mainFields；Lynx
+    // BG/MT 通常同为 client consumer，但仍可能声明不同的运行时条件。
+    resolve: {
+      ...(userResolve ?? {}),
+      // Environment API 是条件解析的唯一高层入口，优先于继承来的底层选项。
+      conditionNames: envOptions.resolve.conditions,
+      mainFields: envOptions.resolve.mainFields,
+    },
     ...(isServer
       ? {
           platform: (restInputOptions as InputOptions).platform ?? 'node',
-          resolve: {
-            conditionNames: envOptions.resolve.conditions,
-            mainFields: envOptions.resolve.mainFields,
-            ...(restInputOptions as InputOptions).resolve,
-          },
           // server 产物：node 内建恒外部化；bare specifier 默认外部化
           //（同 Vite ssr.external 默认 —— 依赖由 node_modules 运行时解析），
           // 相对/绝对/虚拟模块照常打包。需要内联依赖时经 rolldownOptions.external 覆盖。
@@ -138,22 +154,158 @@ export function getRolldownOptions(
   return { inputOptions, outputOptions, outDir }
 }
 
-/** Nasti 插件 → Rolldown 插件的转发表（output 阶段钩子直接转发，
- * this.emitFile / this.getFileName 在 renderChunk 中是真实 Rollup 兼容上下文） */
-export function toRolldownPlugins(plugins: NastiPlugin[]): unknown[] {
+/**
+ * Nasti 插件 → Rolldown 插件转发表。包装器保留 Rolldown 的真实插件上下文，
+ * 同时注入当前 Nasti environment，供同为 client consumer 的 BG/MT 管线区分彼此。
+ */
+export function toRolldownPlugins(
+  plugins: NastiPlugin[],
+  environment: NastiEnvironment,
+): unknown[] {
+  const wrap = (hook: ((this: any, ...args: any[]) => any) | undefined) => {
+    if (!hook) return hook
+    return function (this: any, ...args: any[]) {
+      return hook.apply(attachEnvironment(this, environment), args)
+    }
+  }
+
   return plugins.map((p) => ({
     name: p.name,
-    resolveId: p.resolveId as any,
-    load: p.load as any,
-    transform: p.transform as any,
-    buildStart: p.buildStart as any,
-    buildEnd: p.buildEnd as any,
+    resolveId: wrap(p.resolveId as any),
+    load: wrap(p.load as any),
+    transform: wrap(p.transform as any),
+    buildStart: wrap(p.buildStart as any),
+    buildEnd: wrap(p.buildEnd as any),
     // closeBundle 在 bundle.close() 时触发 —— PWA manifest/SW 等终态产物依赖
-    closeBundle: p.closeBundle as any,
-    renderChunk: p.renderChunk as any,
-    augmentChunkHash: p.augmentChunkHash as any,
-    generateBundle: p.generateBundle as any,
+    closeBundle: wrap(p.closeBundle as any),
+    renderChunk: wrap(p.renderChunk as any),
+    augmentChunkHash: wrap(p.augmentChunkHash as any),
+    generateBundle: wrap(p.generateBundle as any),
   }))
+}
+
+function attachEnvironment(context: any, environment: NastiEnvironment): any {
+  if (context?.environment === environment) return context
+  try {
+    Object.defineProperty(context, 'environment', {
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: environment,
+    })
+    return context
+  } catch {
+    // 极少数 host context 可能不可扩展；Proxy 保持方法 receiver 指向原上下文。
+    return new Proxy(context, {
+      get(target, property) {
+        if (property === 'environment') return environment
+        const value = Reflect.get(target, property, target)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+      set(target, property, value) {
+        return Reflect.set(target, property, value, target)
+      },
+    })
+  }
+}
+
+function finalizeEnvironmentResult(
+  environment: NastiEnvironment,
+  result: EnvironmentBuildResult,
+): EnvironmentBuildResult {
+  const metadata = environment.getBuildMetadata()
+  const inferredEntries = inferEnvironmentEntries(result.output)
+  const entries = {
+    ...inferredEntries,
+    ...metadata.entries,
+    ...result.entries,
+  }
+  const normalizedEntries = Object.fromEntries(
+    Object.entries(entries).map(([name, fileName]) => {
+      const normalized = normalizeEnvironmentFileName(fileName)
+      if (isInvalidEnvironmentFileName(normalized)) {
+        throw new Error(
+          `[nasti] environment "${environment.name}" returned invalid entry ` +
+            `"${name}": ${fileName}`,
+        )
+      }
+      return [name, normalized]
+    }),
+  )
+  return {
+    ...metadata,
+    ...result,
+    output: result.output,
+    ...(Object.keys(normalizedEntries).length > 0 ? { entries: normalizedEntries } : {}),
+  }
+}
+
+function prepareBuildOutputDirectories(
+  config: ResolvedConfig,
+  buildableNames: string[],
+): void {
+  const directories = new Set<string>()
+  const protectedPaths = new Set<string>()
+  const clientIsBuilt = buildableNames.includes('client')
+
+  // 没有 Web client 时，app finalizer 仍写入 top-level outDir；必须清理旧聚合产物。
+  if (!clientIsBuilt && config.build.emptyOutDir) {
+    directories.add(path.resolve(config.root, config.build.outDir))
+  }
+
+  for (const name of buildableNames) {
+    const environment = config.environments[name]
+    const outDir = path.resolve(config.root, environment.build.outDir)
+    if (!environment.build.emptyOutDir) {
+      protectedPaths.add(outDir)
+      continue
+    }
+    if (!environment.driver) directories.add(outDir)
+  }
+
+  const containsPath = (parent: string, child: string) => {
+    const relative = path.relative(parent, child)
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+  }
+
+  // 父目录清理一次即可覆盖其子环境目录，防止后构建环境删除前一环境产物。
+  const roots = [...directories]
+    // 显式 emptyOutDir:false 的环境目录及其内容必须避开祖先目录清理。
+    .filter((directory) =>
+      ![...protectedPaths].some((protectedPath) => containsPath(directory, protectedPath)),
+    )
+    .sort((a, b) => a.length - b.length)
+    .filter((directory, index, all) =>
+      !all.slice(0, index).some((parent) => containsPath(parent, directory)),
+    )
+
+  for (const directory of roots) {
+    if (fs.existsSync(directory)) fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function assertDriverBuildResult(
+  environment: NastiEnvironment,
+  result: unknown,
+): asserts result is EnvironmentBuildResult {
+  const output = result != null && typeof result === 'object'
+    ? (result as { output?: unknown }).output
+    : undefined
+  const hasValidOutput =
+    Array.isArray(output) &&
+    output.every(
+      (artifact) =>
+        artifact != null &&
+        typeof artifact === 'object' &&
+        typeof artifact.fileName === 'string' &&
+        typeof artifact.type === 'string',
+    )
+  if (!hasValidOutput) {
+    throw new Error(
+      `[nasti] environment "${environment.name}" driver "${environment.driver?.name}" ` +
+        'returned an invalid build result; expected { output: EnvironmentBuildOutput[] }',
+    )
+  }
 }
 
 /** 从 index.html 提取 client 入口（含常见路径回退） */
@@ -217,19 +369,21 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   )
   debug?.(`root: ${config.root}`)
 
-  // 待构建环境：client 恒在；非 client 仅当显式声明 entry（默认注入的裸 ssr 不构建）
-  const buildableNames = Object.keys(config.environments).filter(
-    (name) =>
-      name === 'client' ||
-      config.environments[name].entry.length > 0 ||
-      !!config.environments[name].driver,
-  )
+  // 待构建环境：显式禁用的环境跳过；client 默认构建，非 client 需声明 entry/driver。
+  // `client.buildEnabled:false` 允许 Lynx 等纯多环境应用不提供 index.html。
+  const buildableNames = Object.keys(config.environments).filter((name) => {
+    const environment = config.environments[name]
+    if (!environment.buildEnabled) return false
+    return name === 'client' || environment.entry.length > 0 || !!environment.driver
+  })
   // client 先行（主产物 / HTML），其余按声明顺序串行（同 Vite buildApp 默认）
   buildableNames.sort((a, b) => (a === 'client' ? -1 : b === 'client' ? 1 : 0))
+  prepareBuildOutputDirectories(config, buildableNames)
 
   const environments: Record<string, BuildResult['output']> = {}
   const environmentResults: Record<string, EnvironmentBuildResult> = {}
   const initializedEnvironments: NastiEnvironment[] = []
+  const buildAppContext = createBuildAppContext(config, environmentResults)
   let clientOutput: BuildResult['output'] = []
   let buildFailed = false
 
@@ -250,7 +404,7 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
 
     const pluginApi = getPluginApi(config)
     for (const plugin of config.plugins) {
-      await plugin.afterBuildApp?.(environmentResults, pluginApi)
+      await plugin.afterBuildApp?.(environmentResults, pluginApi, buildAppContext)
     }
   } catch (error) {
     buildFailed = true
@@ -278,21 +432,25 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
   }
 
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(2)
-  const totalSize = Object.values(environments)
-    .flat()
-    .reduce((sum, chunk) => {
-      const content = chunk.type === 'chunk' ? chunk.code : (chunk as any).source
-      if (content == null) return sum
-      return sum + (typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength)
-    }, 0)
-  const fileCount = Object.values(environments).flat().length
+  const allOutput = [...Object.values(environments).flat(), ...buildAppContext.output]
+  const totalSize = allOutput.reduce((sum, chunk) => {
+    const content = chunk.type === 'chunk' ? chunk.code : (chunk as any).source
+    if (content == null) return sum
+    return sum + (typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength)
+  }, 0)
+  const fileCount = allOutput.length
   const envSuffix =
     buildableNames.length > 1 ? ` (${buildableNames.join(' + ')})` : ''
 
   logger.info(pc.green(`✓ built in ${elapsed}s`) + pc.dim(envSuffix))
   logger.info(pc.dim(`  ${fileCount} files, ${displaySize(totalSize)} total → ${config.build.outDir}/`))
 
-  return { output: clientOutput, environments, environmentResults }
+  return {
+    output: clientOutput,
+    environments,
+    environmentResults,
+    appOutput: [...buildAppContext.output],
+  }
 }
 
 /** client 环境构建：HTML 入口 + CSS 抽取 + 体积表 + index.html 改写 */
@@ -303,7 +461,10 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
   // per-env 插件列表 + applyToEnvironment 过滤。外部 driver 在任何 Nasti
   // HTML/CSS/Rolldown 副作用前接管环境。
   const cssEngine = createCssEngine()
-  const pluginList = resolvePluginList(config, config.plugins, { cssEngine })
+  const pluginList = resolvePluginList(config, config.plugins, {
+    cssEngine,
+    environmentName: 'client',
+  })
   const clientEnv = new NastiEnvironment('client', config, {
     mode: 'build',
     plugins: pluginList,
@@ -319,13 +480,10 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
         )
       }
       const result = await clientEnv.driver.build(clientEnv.getDriverContext())
-      return { environment: clientEnv, result }
+      assertDriverBuildResult(clientEnv, result)
+      return { environment: clientEnv, result: finalizeEnvironmentResult(clientEnv, result) }
     }
 
-    // 清空输出目录
-    if (config.build.emptyOutDir && fs.existsSync(outDir)) {
-      fs.rmSync(outDir, { recursive: true, force: true })
-    }
     fs.mkdirSync(outDir, { recursive: true })
 
     const htmlFile = config.environments.client.html ?? path.resolve(config.root, 'index.html')
@@ -344,7 +502,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
 
     const rolldownPlugins = [
       createOxcTransformPlugin(config, clientEnv),
-      ...toRolldownPlugins(allPlugins),
+      ...toRolldownPlugins(allPlugins, clientEnv),
       ...(nativeReporter ? [nativeReporter as any] : []),
     ]
     const { inputOptions, outputOptions } = getRolldownOptions(
@@ -401,7 +559,10 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
     // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
     warnLargeChunks(output as any, config, logger)
 
-    return { environment: clientEnv, result: { output: output as any } }
+    return {
+      environment: clientEnv,
+      result: finalizeEnvironmentResult(clientEnv, { output: output as any }),
+    }
   } catch (error) {
     try {
       await clientEnv.close()
@@ -425,7 +586,10 @@ async function buildServerEnvironment(
   const envOptions = config.environments[name]
   const logger = config.logger
 
-  const pluginList = resolvePluginList(config, config.plugins, { consumer: envOptions.consumer })
+  const pluginList = resolvePluginList(config, config.plugins, {
+    consumer: envOptions.consumer,
+    environmentName: name,
+  })
   const environment = new NastiEnvironment(name, config, {
     mode: 'build',
     plugins: pluginList,
@@ -441,7 +605,8 @@ async function buildServerEnvironment(
     }
     try {
       const result = await environment.driver.build(environment.getDriverContext())
-      return { environment, result }
+      assertDriverBuildResult(environment, result)
+      return { environment, result: finalizeEnvironmentResult(environment, result) }
     } catch (error) {
       await environment.close()
       throw error
@@ -457,7 +622,7 @@ async function buildServerEnvironment(
 
   const rolldownPlugins = [
     createOxcTransformPlugin(config, environment),
-    ...toRolldownPlugins(environment.plugins),
+    ...toRolldownPlugins(environment.plugins, environment),
   ]
   const { inputOptions, outputOptions, outDir } = getRolldownOptions(
     environment,
@@ -465,9 +630,6 @@ async function buildServerEnvironment(
     rolldownPlugins,
   )
 
-  if (envOptions.build.emptyOutDir && fs.existsSync(outDir)) {
-    fs.rmSync(outDir, { recursive: true, force: true })
-  }
   fs.mkdirSync(outDir, { recursive: true })
 
   const bundle = await rolldown(inputOptions)
@@ -478,7 +640,10 @@ async function buildServerEnvironment(
     pc.dim(`  [${name}] `) +
       output.map((o) => path.join(envOptions.build.outDir, o.fileName)).join(pc.dim(', ')),
   )
-  return { environment, result: { output: output as any } }
+  return {
+    environment,
+    result: finalizeEnvironmentResult(environment, { output: output as any }),
+  }
 }
 
 /** 注入抽取出的 CSS link 标签（entry css 或单文件模式） */

@@ -28,7 +28,9 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const logger = config.logger
 
   // 组装内置插件 + 用户插件（per-env 统一拼装函数）
-  const allPlugins = resolvePluginList(config, config.plugins)
+  const allPlugins = resolvePluginList(config, config.plugins, {
+    environmentName: 'client',
+  })
   const configWithPlugins: ResolvedConfig = { ...config, plugins: allPlugins }
 
   // HTTP 服务
@@ -51,7 +53,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   for (const name of Object.keys(config.environments)) {
     if (name === 'client') continue
     const consumer = config.environments[name].consumer
-    const envPlugins = resolvePluginList(config, config.plugins, { consumer })
+    const envPlugins = resolvePluginList(config, config.plugins, {
+      consumer,
+      environmentName: name,
+    })
     environments[name] = new NastiEnvironment(name, config, {
       mode: 'dev',
       plugins: envPlugins,
