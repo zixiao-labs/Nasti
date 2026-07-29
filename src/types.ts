@@ -497,6 +497,8 @@ export interface ModuleNode {
   acceptedHmrDeps: Set<ModuleNode>
   transformResult: TransformResult | null
   lastHMRTimestamp: number
+  /** 每次失效递增，防止较慢的旧转换覆盖较新的缓存。 */
+  invalidationVersion: number
   isSelfAccepting: boolean
   /** Environment API：节点所属环境名（per-env 模块图，默认 'client'） */
   environment?: string
@@ -562,7 +564,11 @@ export interface ModuleGraph {
   getModuleById: (id: string) => ModuleNode | undefined
   getModulesByFile: (file: string) => Set<ModuleNode> | undefined
   ensureEntryFromUrl: (url: string) => Promise<ModuleNode>
-  invalidateModule: (mod: ModuleNode) => void
+  invalidateModule: (mod: ModuleNode, timestamp?: number) => void
+  invalidateModuleAndImporters: (mod: ModuleNode, timestamp?: number) => void
+  getHmrBoundaries: (
+    mod: ModuleNode,
+  ) => Array<{ boundary: ModuleNode; acceptedVia: ModuleNode }>
   invalidateAll: () => void
 }
 
