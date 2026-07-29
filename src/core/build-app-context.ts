@@ -15,20 +15,23 @@ export function createBuildAppContext(
   const output: AppBuildOutput[] = []
   const emitted = new Set<string>()
   const outDir = path.resolve(config.root, config.build.outDir)
+  let environmentArtifacts: Set<string> | undefined
 
   return {
     config,
     results,
-    output,
+    get output() {
+      return Object.freeze([...output])
+    },
 
     getResult(environmentName) {
       return results[environmentName]
     },
 
     getArtifact(environmentName, fileName) {
-      const normalized = normalizeArtifactFileName(fileName)
+      const normalized = normalizeEnvironmentFileName(fileName)
       return results[environmentName]?.output.find(
-        (artifact) => normalizeArtifactFileName(artifact.fileName) === normalized,
+        (artifact) => normalizeEnvironmentFileName(artifact.fileName) === normalized,
       )
     },
 
@@ -38,7 +41,8 @@ export function createBuildAppContext(
       if (!fileName) return undefined
       return result.output.find(
         (artifact) =>
-          normalizeArtifactFileName(artifact.fileName) === normalizeArtifactFileName(fileName),
+          normalizeEnvironmentFileName(artifact.fileName) ===
+          normalizeEnvironmentFileName(fileName),
       )
     },
 
@@ -52,7 +56,8 @@ export function createBuildAppContext(
       if (emitted.has(collisionKey)) {
         throw new Error(`[nasti] app artifact already emitted: ${fileName}`)
       }
-      if (collectEnvironmentArtifacts(config, results, outDir).has(collisionKey)) {
+      environmentArtifacts ??= collectEnvironmentArtifacts(config, results, outDir)
+      if (environmentArtifacts.has(collisionKey)) {
         throw new Error(`[nasti] app artifact conflicts with environment output: ${fileName}`)
       }
 
@@ -82,20 +87,20 @@ export function normalizeEnvironmentFileName(fileName: string): string {
   return path.posix.normalize(fileName.replace(/\\/g, '/').replace(/^\.\//, ''))
 }
 
-function normalizeArtifactFileName(fileName: string): string {
-  return normalizeEnvironmentFileName(fileName)
+export function isInvalidEnvironmentFileName(fileName: string): boolean {
+  return (
+    !fileName ||
+    fileName === '.' ||
+    fileName === '..' ||
+    fileName.startsWith('../') ||
+    path.posix.isAbsolute(fileName) ||
+    /^[A-Za-z]:\//.test(fileName)
+  )
 }
 
 function normalizeAppFileName(fileName: string): string {
-  const normalized = normalizeArtifactFileName(fileName)
-  if (
-    !normalized ||
-    normalized === '.' ||
-    normalized === '..' ||
-    normalized.startsWith('../') ||
-    path.posix.isAbsolute(normalized) ||
-    /^[A-Za-z]:\//.test(normalized)
-  ) {
+  const normalized = normalizeEnvironmentFileName(fileName)
+  if (isInvalidEnvironmentFileName(normalized)) {
     throw new Error(`[nasti] invalid app artifact fileName: ${fileName}`)
   }
   return normalized
@@ -103,7 +108,7 @@ function normalizeAppFileName(fileName: string): string {
 
 function artifactCollisionKey(fileName: string): string {
   // 在大小写敏感文件系统上也采取保守策略，避免产物发布到 macOS/Windows 后冲突。
-  return normalizeArtifactFileName(fileName).toLowerCase()
+  return normalizeEnvironmentFileName(fileName).toLowerCase()
 }
 
 function collectEnvironmentArtifacts(
@@ -119,7 +124,7 @@ function collectEnvironmentArtifacts(
     for (const artifact of result.output) {
       const artifactPath = path.resolve(
         environmentOutDir,
-        ...normalizeArtifactFileName(artifact.fileName).split('/'),
+        ...normalizeEnvironmentFileName(artifact.fileName).split('/'),
       )
       const relative = path.relative(appOutDir, artifactPath)
       if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
@@ -134,13 +139,16 @@ function assertNoSymlinkComponents(outDir: string, fileName: string): void {
   let current = outDir
   for (const segment of fileName.split('/')) {
     current = path.join(current, segment)
+    let stats: ReturnType<typeof fs.lstatSync>
     try {
       // lstat sees dangling symlinks while existsSync does not.
-      if (fs.lstatSync(current).isSymbolicLink()) {
-        throw new Error(`[nasti] app artifact path cannot traverse a symlink: ${fileName}`)
-      }
+      stats = fs.lstatSync(current)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`[nasti] app artifact path cannot traverse a symlink: ${fileName}`)
     }
   }
 }
@@ -151,7 +159,7 @@ export function inferEnvironmentEntries(
   const entries: Record<string, string> = {}
   for (const artifact of output as Array<EnvironmentBuildOutput & { isEntry?: boolean; name?: string }>) {
     if (artifact.type !== 'chunk' || !artifact.isEntry || !artifact.name) continue
-    entries[artifact.name] = normalizeArtifactFileName(artifact.fileName)
+    entries[artifact.name] = normalizeEnvironmentFileName(artifact.fileName)
   }
   return Object.keys(entries).length > 0 ? entries : undefined
 }

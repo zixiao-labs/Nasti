@@ -303,7 +303,7 @@ export default defineConfig({
 
 bridge 插件通过 `createEnvironmentDriver()` 提供 `build`、`serve`、`watchChange`
 和 `close`，并可使用 `setup(api)`、`api.expose/useExposed` 与
-`afterBuildApp()` 协调多个插件或环境。
+`afterBuildApp(results, api, context)` 协调多个插件或环境。
 
 ## 原生多环境聚合（Lynx BG / MT）
 
@@ -329,8 +329,16 @@ export default defineConfig({
 })
 ```
 
-生产钩子的 `this.environment` 会准确指向当前 BG/MT 环境。插件可登记结构化
-manifest，并在 app 级 finalizer 中直接查询 entry/artifact，最后写出聚合 bundle：
+Environment API 是 `conditionNames` 和 `mainFields` 的唯一高层配置入口：
+请使用 `environments.<name>.resolve.conditions` / `mainFields`（client 也可使用
+top-level `resolve`）。这些值会无条件覆盖
+`build.rolldownOptions.resolve.conditionNames` / `mainFields` 中的对应底层选项。
+
+在生产构建的 bundle/finalizer 相关钩子（如 `generateBundle`、`buildEnd`、
+`closeBundle`）中，`this.environment` 会准确指向当前 BG/MT 环境。unbundled
+dev 调用路径可能不提供该对象，开发期插件不得依赖 `this.environment`；应使用
+Environment API 的显式环境参数。插件可登记结构化 manifest，并在 app 级
+finalizer 中直接查询 entry/artifact，最后写出聚合 bundle：
 
 ```ts
 const pluginVueLynxNative = () => ({

@@ -63,6 +63,8 @@ dev 的 CSS `<style>`+HMR 注入路径逐字节不变；HMR 新增带时间戳�
 | 新增 `server.ssrLoadModule(url)`（Vite shim，底层 module runner + HotChannel invoke） | **chen 框架**：未来做 SSR 路由渲染的直接入口，API 与 Vite 同形 | 可选采用 |
 | SSR 管线中 css import 返回纯字符串导出（无 DOM 副作用），`import.meta.env.SSR === true` | 新功能 | 无 |
 | `BuildResult` 增加 `environments` 字段（`output` 保持 client 产物，1.x 形态不变） | 编程 API 用户无感 | 无 |
+| `EnvironmentInstance.setBuildMetadata(metadata)` 成为必填公开 API | 自定义 `EnvironmentInstance` 实现若缺少该方法会产生类型错误 | 实现该方法，并合并/保存环境级 `entries`、`manifest`、`stats` 等元数据 |
+| `afterBuildApp` 类型签名新增第三个 `context: BuildAppContext` 参数 | 沿用旧两参数类型声明的插件需要迁移签名 | 改为 `afterBuildApp(results, api, context)`；通过 context 查询环境产物并用 `emitFile` 写出 app 级产物 |
 | Electron main/preload 仍走 bespoke 路径（renderer 已经流经新 builder）。env 模型折叠待对拍后切换 | **logos** 无感（electron-build 实测端到端正常） | 无 |
 
 ### 实测结果
@@ -108,4 +110,3 @@ dev 的 CSS `<style>`+HMR 注入路径逐字节不变；HMR 新增带时间戳�
 - React Fast Refresh 浏览器内端到端（patch 执行→组件态保留）待真实 React 项目人工验证 —— 服务端契约（wrapper 激活/注册/preamble 单实例）已经探针验证
 - 多 tab clientId 隔离与 error overlay 行为待浏览器实测
 - bundled 模式兼容矩阵 + 关键 per-request 变换移植（计划 §2.5 Phase 3.1/3.2）随推广推进
-

@@ -117,18 +117,23 @@ export class NastiEnvironment implements EnvironmentInstance {
   }
 
   setBuildMetadata(metadata: EnvironmentBuildMetadata): void {
+    const { entries: currentEntries, ...currentMetadata } = this.buildMetadata
+    const { entries, ...nextMetadata } = metadata
     this.buildMetadata = {
-      ...this.buildMetadata,
-      ...metadata,
-      entries:
-        this.buildMetadata.entries || metadata.entries
-          ? { ...this.buildMetadata.entries, ...metadata.entries }
-          : undefined,
+      ...currentMetadata,
+      ...nextMetadata,
+      ...(currentEntries || entries
+        ? { entries: { ...currentEntries, ...entries } }
+        : {}),
     }
   }
 
   getBuildMetadata(): EnvironmentBuildMetadata {
-    return this.buildMetadata
+    const { entries, ...metadata } = this.buildMetadata
+    return {
+      ...metadata,
+      ...(entries ? { entries: { ...entries } } : {}),
+    }
   }
 
   async close(): Promise<void> {

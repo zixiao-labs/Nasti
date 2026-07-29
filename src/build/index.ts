@@ -33,6 +33,7 @@ import { getPluginApi } from '../core/plugin-api.js'
 import {
   createBuildAppContext,
   inferEnvironmentEntries,
+  isInvalidEnvironmentFileName,
   normalizeEnvironmentFileName,
 } from '../core/build-app-context.js'
 import pc from 'picocolors'
@@ -159,10 +160,10 @@ export function getRolldownOptions(
  */
 export function toRolldownPlugins(
   plugins: NastiPlugin[],
-  environment?: NastiEnvironment,
+  environment: NastiEnvironment,
 ): unknown[] {
   const wrap = (hook: ((this: any, ...args: any[]) => any) | undefined) => {
-    if (!hook || !environment) return hook
+    if (!hook) return hook
     return function (this: any, ...args: any[]) {
       return hook.apply(attachEnvironment(this, environment), args)
     }
@@ -222,14 +223,7 @@ function finalizeEnvironmentResult(
   const normalizedEntries = Object.fromEntries(
     Object.entries(entries).map(([name, fileName]) => {
       const normalized = normalizeEnvironmentFileName(fileName)
-      if (
-        !normalized ||
-        normalized === '.' ||
-        normalized === '..' ||
-        normalized.startsWith('../') ||
-        path.posix.isAbsolute(normalized) ||
-        /^[A-Za-z]:\//.test(normalized)
-      ) {
+      if (isInvalidEnvironmentFileName(normalized)) {
         throw new Error(
           `[nasti] environment "${environment.name}" returned invalid entry ` +
             `"${name}": ${fileName}`,
@@ -251,6 +245,7 @@ function prepareBuildOutputDirectories(
   buildableNames: string[],
 ): void {
   const directories = new Set<string>()
+  const protectedPaths = new Set<string>()
   const clientIsBuilt = buildableNames.includes('client')
 
   // 没有 Web client 时，app finalizer 仍写入 top-level outDir；必须清理旧聚合产物。
@@ -260,22 +255,56 @@ function prepareBuildOutputDirectories(
 
   for (const name of buildableNames) {
     const environment = config.environments[name]
-    if (environment.driver || !environment.build.emptyOutDir) continue
-    directories.add(path.resolve(config.root, environment.build.outDir))
+    const outDir = path.resolve(config.root, environment.build.outDir)
+    if (!environment.build.emptyOutDir) {
+      protectedPaths.add(outDir)
+      continue
+    }
+    if (!environment.driver) directories.add(outDir)
+  }
+
+  const containsPath = (parent: string, child: string) => {
+    const relative = path.relative(parent, child)
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
   }
 
   // 父目录清理一次即可覆盖其子环境目录，防止后构建环境删除前一环境产物。
   const roots = [...directories]
+    // 显式 emptyOutDir:false 的环境目录及其内容必须避开祖先目录清理。
+    .filter((directory) =>
+      ![...protectedPaths].some((protectedPath) => containsPath(directory, protectedPath)),
+    )
     .sort((a, b) => a.length - b.length)
     .filter((directory, index, all) =>
-      !all.slice(0, index).some((parent) => {
-        const relative = path.relative(parent, directory)
-        return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
-      }),
+      !all.slice(0, index).some((parent) => containsPath(parent, directory)),
     )
 
   for (const directory of roots) {
     if (fs.existsSync(directory)) fs.rmSync(directory, { recursive: true, force: true })
+  }
+}
+
+function assertDriverBuildResult(
+  environment: NastiEnvironment,
+  result: unknown,
+): asserts result is EnvironmentBuildResult {
+  const output = result != null && typeof result === 'object'
+    ? (result as { output?: unknown }).output
+    : undefined
+  const hasValidOutput =
+    Array.isArray(output) &&
+    output.every(
+      (artifact) =>
+        artifact != null &&
+        typeof artifact === 'object' &&
+        typeof artifact.fileName === 'string' &&
+        typeof artifact.type === 'string',
+    )
+  if (!hasValidOutput) {
+    throw new Error(
+      `[nasti] environment "${environment.name}" driver "${environment.driver?.name}" ` +
+        'returned an invalid build result; expected { output: EnvironmentBuildOutput[] }',
+    )
   }
 }
 
@@ -451,6 +480,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
         )
       }
       const result = await clientEnv.driver.build(clientEnv.getDriverContext())
+      assertDriverBuildResult(clientEnv, result)
       return { environment: clientEnv, result: finalizeEnvironmentResult(clientEnv, result) }
     }
 
@@ -575,6 +605,7 @@ async function buildServerEnvironment(
     }
     try {
       const result = await environment.driver.build(environment.getDriverContext())
+      assertDriverBuildResult(environment, result)
       return { environment, result: finalizeEnvironmentResult(environment, result) }
     } catch (error) {
       await environment.close()

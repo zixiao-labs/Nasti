@@ -31,9 +31,15 @@ export function resolvePluginList(
   opts: BuiltinPluginOptions = {},
 ): NastiPlugin[] {
   const isServe = config.command === 'serve'
-  const environmentOptions = opts.environmentName
-    ? config.environments[opts.environmentName]
-    : undefined
+  let environmentOptions
+  if (opts.environmentName) {
+    environmentOptions = config.environments[opts.environmentName]
+    if (!environmentOptions) {
+      throw new Error(
+        `[nasti] unknown environment "${opts.environmentName}" — declare it in config.environments`,
+      )
+    }
+  }
   const pluginConfig = environmentOptions
     ? { ...config, resolve: environmentOptions.resolve, build: environmentOptions.build }
     : config

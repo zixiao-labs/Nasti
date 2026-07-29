@@ -71,8 +71,8 @@ test('native Lynx background and main-thread environments build and aggregate in
       }
       this.environment.setBuildMetadata({
         manifest,
-        // final result must normalize plugin-provided entry paths before app lookup.
-        entries: { entry: 'nested/../entry.js' },
+        // This normalizes to an emitted asset that differs from the inferred entry.js.
+        entries: { entry: `nested/../metadata/${environmentName}.json` },
       })
       const fileName = `metadata/${environmentName}.json`
       const referenceId = this.emitFile({
@@ -87,19 +87,29 @@ test('native Lynx background and main-thread environments build and aggregate in
       events.push(`closeBundle:${this.environment.name}`)
     },
     afterBuildApp(results, _api, context) {
-      assert.deepEqual(Object.keys(results), [BACKGROUND, MAIN_THREAD])
+      assert.deepEqual(
+        Object.keys(results).sort(),
+        [BACKGROUND, MAIN_THREAD].sort(),
+      )
       assert.equal(context.getResult('client'), undefined)
 
       const backgroundEntry = context.getEntry(BACKGROUND, 'entry')
       const mainThreadEntry = context.getEntry(MAIN_THREAD, 'entry')
       assert.ok(backgroundEntry)
       assert.ok(mainThreadEntry)
-      assert.match(backgroundEntry.code, /lynx-background/)
-      assert.match(backgroundEntry.code, /BG_RUNTIME/)
-      assert.doesNotMatch(backgroundEntry.code, /lynx-main-thread|MT_RUNTIME|DEFAULT_RUNTIME/)
-      assert.match(mainThreadEntry.code, /lynx-main-thread/)
-      assert.match(mainThreadEntry.code, /MT_RUNTIME/)
-      assert.doesNotMatch(mainThreadEntry.code, /lynx-background|BG_RUNTIME|DEFAULT_RUNTIME/)
+      assert.equal(backgroundEntry.fileName, `metadata/${BACKGROUND}.json`)
+      assert.equal(mainThreadEntry.fileName, `metadata/${MAIN_THREAD}.json`)
+
+      const backgroundChunk = context.getArtifact(BACKGROUND, 'entry.js')
+      const mainThreadChunk = context.getArtifact(MAIN_THREAD, 'entry.js')
+      assert.ok(backgroundChunk)
+      assert.ok(mainThreadChunk)
+      assert.match(backgroundChunk.code, /lynx-background/)
+      assert.match(backgroundChunk.code, /BG_RUNTIME/)
+      assert.doesNotMatch(backgroundChunk.code, /lynx-main-thread|MT_RUNTIME|DEFAULT_RUNTIME/)
+      assert.match(mainThreadChunk.code, /lynx-main-thread/)
+      assert.match(mainThreadChunk.code, /MT_RUNTIME/)
+      assert.doesNotMatch(mainThreadChunk.code, /lynx-background|BG_RUNTIME|DEFAULT_RUNTIME/)
 
       assert.deepEqual(context.getManifest(BACKGROUND), {
         environment: BACKGROUND,
@@ -112,6 +122,11 @@ test('native Lynx background and main-thread environments build and aggregate in
       assert.ok(context.getArtifact(BACKGROUND, `metadata/${BACKGROUND}.json`))
       assert.ok(context.getArtifact(MAIN_THREAD, `metadata/${MAIN_THREAD}.json`))
 
+      assert.equal(Object.isFrozen(context.output), true)
+      assert.throws(
+        () => context.output.push({ type: 'asset', fileName: 'bypass', source: '' }),
+        TypeError,
+      )
       context.emitFile({
         type: 'asset',
         fileName: 'app.native.lynx.bundle',
@@ -120,6 +135,7 @@ test('native Lynx background and main-thread environments build and aggregate in
           mainThread: mainThreadEntry.fileName,
         }),
       })
+      assert.equal(context.output.length, 1)
       events.push('afterBuildApp')
     },
   }
@@ -156,9 +172,18 @@ test('native Lynx background and main-thread environments build and aggregate in
   })
 
   assert.deepEqual(result.output, [])
-  assert.deepEqual(Object.keys(result.environments), [BACKGROUND, MAIN_THREAD])
-  assert.equal(result.environmentResults[BACKGROUND].entries.entry, 'entry.js')
-  assert.equal(result.environmentResults[MAIN_THREAD].entries.entry, 'entry.js')
+  assert.deepEqual(
+    Object.keys(result.environments).sort(),
+    [BACKGROUND, MAIN_THREAD].sort(),
+  )
+  assert.equal(
+    result.environmentResults[BACKGROUND].entries.entry,
+    `metadata/${BACKGROUND}.json`,
+  )
+  assert.equal(
+    result.environmentResults[MAIN_THREAD].entries.entry,
+    `metadata/${MAIN_THREAD}.json`,
+  )
   assert.deepEqual(result.appOutput.map((artifact) => artifact.fileName), [
     'app.native.lynx.bundle',
   ])
@@ -171,6 +196,48 @@ test('native Lynx background and main-thread environments build and aggregate in
     assert.ok(events.includes(`closeBundle:${environmentName}`))
   }
   assert.equal(events.filter((event) => event === 'afterBuildApp').length, 1)
+})
+
+test('output cleanup preserves environments with emptyOutDir disabled', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-protected-out-dir-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true }))
+  fs.mkdirSync(path.join(root, 'src'))
+  fs.writeFileSync(path.join(root, 'src/entry.js'), 'export const ready = true;\n')
+  fs.mkdirSync(path.join(root, 'dist/protected'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'dist/eligible'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'dist/root-stale.txt'), 'must remain')
+  fs.writeFileSync(path.join(root, 'dist/protected/keep.txt'), 'must remain')
+  fs.writeFileSync(path.join(root, 'dist/eligible/stale.txt'), 'must be removed')
+
+  await build({
+    root,
+    logLevel: 'silent',
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      minify: false,
+      rolldownOptions: { output: { entryFileNames: '[name].js' } },
+    },
+    environments: {
+      client: { buildEnabled: false },
+      protected: {
+        consumer: 'client',
+        entry: 'src/entry.js',
+        build: { outDir: 'dist/protected', emptyOutDir: false },
+      },
+      eligible: {
+        consumer: 'client',
+        entry: 'src/entry.js',
+        build: { outDir: 'dist/eligible', emptyOutDir: true },
+      },
+    },
+  })
+
+  assert.equal(fs.existsSync(path.join(root, 'dist/root-stale.txt')), true)
+  assert.equal(fs.existsSync(path.join(root, 'dist/protected/keep.txt')), true)
+  assert.equal(fs.existsSync(path.join(root, 'dist/eligible/stale.txt')), false)
 })
 
 test('app finalizer rejects dangling symlink paths', { skip: process.platform === 'win32' }, async (t) => {
