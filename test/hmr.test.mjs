@@ -42,6 +42,8 @@ async function createHmrFixture(t) {
   fs.writeFileSync(path.join(root, 'src/left.ts'), "import './shared.ts'\n")
   fs.writeFileSync(path.join(root, 'src/right.ts'), "import './shared.ts'\n")
   fs.writeFileSync(path.join(root, 'src/shared.ts'), 'export const shared = true\n')
+  fs.writeFileSync(path.join(root, 'src/cycle-a.ts'), "import './cycle-b.ts'\n")
+  fs.writeFileSync(path.join(root, 'src/cycle-b.ts'), "import './cycle-a.ts'\n")
   fs.writeFileSync(
     path.join(root, 'src/docs.ts'),
     [
@@ -76,6 +78,8 @@ test('unbundled HMR records explicit accept boundaries and propagates timestamps
   await server.transformRequest('/src/left.ts')
   await server.transformRequest('/src/right.ts')
   await server.transformRequest('/src/shared.ts')
+  await server.transformRequest('/src/cycle-a.ts')
+  await server.transformRequest('/src/cycle-b.ts')
   const docsResult = await server.transformRequest('/src/docs.ts')
 
   const main = server.moduleGraph.getModuleByUrl('/src/main.ts')
@@ -104,6 +108,10 @@ test('unbundled HMR records explicit accept boundaries and propagates timestamps
   const shared = server.moduleGraph.getModuleByUrl('/src/shared.ts')
   assert.deepEqual(server.moduleGraph.getHmrBoundaries(shared), [])
 
+  // 纯循环中已遍历节点会提前返回 true，但没有 accept 边界，调用方仍须 full reload。
+  const cycleA = server.moduleGraph.getModuleByUrl('/src/cycle-a.ts')
+  assert.deepEqual(server.moduleGraph.getHmrBoundaries(cycleA), [])
+
   const docs = server.moduleGraph.getModuleByUrl('/src/docs.ts')
   assert.equal(docs.isSelfAccepting, false)
   assert.doesNotMatch(docsResult.code, /createHotContext/)
@@ -117,11 +125,46 @@ test('unbundled HMR records explicit accept boundaries and propagates timestamps
   assert.match(updatedComponent.code, /from ["']\/src\/leaf\.ts\?t=123456["']/)
   assert.equal(server.moduleGraph.getModuleByUrl('/src/Component.tsx?t=123456'), component)
 
+  const previousWindow = globalThis.window
+  globalThis.window = {}
+  const refreshRuntime = await server.transformRequest('/@react-refresh')
+  const encodedRuntime = Buffer.from(refreshRuntime.code).toString('base64')
+  const refresh = await import(`data:text/javascript;base64,${encodedRuntime}#${Date.now()}`)
+  assert.equal(
+    refresh.validateRefreshBoundaryAndEnqueueUpdate('/empty.ts', {}, {}),
+    'Could not Fast Refresh (no exports)',
+  )
+  globalThis.window.__getReactRefreshIgnoredExports = () => ['ignored']
+  assert.equal(
+    refresh.validateRefreshBoundaryAndEnqueueUpdate(
+      '/ignored.ts',
+      { ignored: 1 },
+      { ignored: 1 },
+    ),
+    'Could not Fast Refresh (no exports)',
+  )
+  globalThis.window = previousWindow
+
   // 删除 CSS import 后必须发送 prune，否则取消整页刷新会让旧 <style> 永久残留。
   await server.watcher.unwatch(root)
   const payloads = []
   const originalSend = server.ws.send
   server.ws.send = (payload) => payloads.push(payload)
+  const fullReload = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('cycle did not trigger full reload')), 1000)
+    server.ws.send = (payload) => {
+      payloads.push(payload)
+      if (payload.type === 'full-reload') {
+        clearTimeout(timeout)
+        resolve()
+      }
+    }
+  })
+  server.watcher.emit('change', path.join(root, 'src/cycle-a.ts'))
+  await fullReload
+  assert.ok(payloads.some((payload) =>
+    payload.type === 'full-reload' && payload.path === '/src/cycle-a.ts'
+  ))
   fs.writeFileSync(
     path.join(root, 'src/main.ts'),
     [

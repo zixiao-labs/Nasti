@@ -11,6 +11,7 @@ import { ModuleGraph } from '../core/module-graph.js'
 import { transformCode, shouldTransform, getModuleType } from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
 import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
+import { removeTimestampQuery } from '../core/url.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -126,7 +127,10 @@ export function validateRefreshBoundaryAndEnqueueUpdate(id, prevExports, nextExp
       __nastiIsCompoundComponent(value) ||
       prevExports[key] === value;
   });
-  if (hasExports && compatible === true) {
+  if (!hasExports) {
+    return 'Could not Fast Refresh (no exports)';
+  }
+  if (compatible === true) {
     __nastiEnqueueRefresh();
     return;
   }
@@ -1189,23 +1193,6 @@ function tryResolveDiskPath(target: string): string | null {
 function isUnderRoot(abs: string, root: string): boolean {
   const rel = path.relative(root, abs)
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
-}
-
-/** 保留 Vue 等语义 query，仅移除 HMR 缓存失效参数。 */
-function removeTimestampQuery(url: string): string {
-  const hashIndex = url.indexOf('#')
-  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
-  const withoutHash = hashIndex >= 0 ? url.slice(0, hashIndex) : url
-  const queryIndex = withoutHash.indexOf('?')
-  if (queryIndex < 0) return url
-
-  const pathname = withoutHash.slice(0, queryIndex)
-  const query = withoutHash
-    .slice(queryIndex + 1)
-    .split('&')
-    .filter((part) => !/^t=\d+$/.test(part))
-    .join('&')
-  return pathname + (query ? `?${query}` : '') + hash
 }
 
 function appendTimestampQuery(url: string, timestamp: number): string {
