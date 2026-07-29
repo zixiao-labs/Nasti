@@ -11,6 +11,7 @@ import { ModuleGraph } from '../core/module-graph.js'
 import { transformCode, shouldTransform, getModuleType } from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
 import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
+import { removeTimestampQuery } from '../core/url.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -23,8 +24,12 @@ const __require = createRequire(import.meta.url)
  * 读一次缓存一次：dev server 生命周期内不会变。
  */
 let __refreshRuntimeCache: string | null = null
-export function getReactRefreshRuntimeEsm(): string {
-  if (__refreshRuntimeCache) return __refreshRuntimeCache
+export function getReactRefreshRuntimeEsm(includeBoundaryHelpers = false): string {
+  if (__refreshRuntimeCache) {
+    return includeBoundaryHelpers
+      ? __refreshRuntimeCache + REACT_REFRESH_BOUNDARY_HELPERS
+      : __refreshRuntimeCache
+  }
   // react-refresh 的 package.json `exports` 没有暴露 ./cjs/*，Node 24 严格执行
   // exports 后 `require.resolve('react-refresh/cjs/...')` 会抛 ERR_PACKAGE_PATH_NOT_EXPORTED。
   // 改为先 resolve 受支持的 ./package.json，再手动拼 cjs 子路径，绕开 exports 校验。
@@ -64,8 +69,75 @@ export const findAffectedHostInstances = __rt.findAffectedHostInstances;
 export const collectCustomHooksForSignature = __rt.collectCustomHooksForSignature;
 export default __rt;
 `
-  return __refreshRuntimeCache
+  return includeBoundaryHelpers
+    ? __refreshRuntimeCache + REACT_REFRESH_BOUNDARY_HELPERS
+    : __refreshRuntimeCache
 }
+
+/** @vitejs/plugin-react 同类的 Refresh boundary 校验，避免非组件导出静默保持旧值。 */
+const REACT_REFRESH_BOUNDARY_HELPERS = `
+function __nastiIsPlainObject(obj) {
+  return Object.prototype.toString.call(obj) === '[object Object]' &&
+    (obj.constructor === Object || obj.constructor === undefined);
+}
+function __nastiIsCompoundComponent(type) {
+  if (!__nastiIsPlainObject(type)) return false;
+  for (const key in type) {
+    if (!isLikelyComponentType(type[key])) return false;
+  }
+  return true;
+}
+export function registerExportsForReactRefresh(filename, moduleExports) {
+  for (const key in moduleExports) {
+    if (key === '__esModule') continue;
+    const value = moduleExports[key];
+    if (isLikelyComponentType(value)) {
+      register(value, filename + ' export ' + key);
+    } else if (__nastiIsCompoundComponent(value)) {
+      for (const subKey in value) {
+        register(value[subKey], filename + ' export ' + key + '-' + subKey);
+      }
+    }
+  }
+}
+let __nastiRefreshTimer;
+function __nastiEnqueueRefresh() {
+  clearTimeout(__nastiRefreshTimer);
+  __nastiRefreshTimer = setTimeout(() => performReactRefresh(), 16);
+}
+function __nastiCheckExports(ignored, exports, predicate) {
+  for (const key in exports) {
+    if (ignored.includes(key)) continue;
+    if (!predicate(key, exports[key])) return key;
+  }
+  return true;
+}
+export function validateRefreshBoundaryAndEnqueueUpdate(id, prevExports, nextExports) {
+  const ignored = window.__getReactRefreshIgnoredExports?.({ id }) ?? [];
+  if (__nastiCheckExports(ignored, prevExports, (key) => key in nextExports) !== true) {
+    return 'Could not Fast Refresh (export removed)';
+  }
+  if (__nastiCheckExports(ignored, nextExports, (key) => key in prevExports) !== true) {
+    return 'Could not Fast Refresh (new export)';
+  }
+  let hasExports = false;
+  const compatible = __nastiCheckExports(ignored, nextExports, (key, value) => {
+    hasExports = true;
+    return isLikelyComponentType(value) ||
+      __nastiIsCompoundComponent(value) ||
+      prevExports[key] === value;
+  });
+  if (!hasExports) {
+    return 'Could not Fast Refresh (no exports)';
+  }
+  if (compatible === true) {
+    __nastiEnqueueRefresh();
+    return;
+  }
+  return 'Could not Fast Refresh ("' + compatible + '" export is incompatible)';
+}
+export const __hmr_import = (module) => import(module);
+`
 
 /**
  * React Fast Refresh 全局钩子安装脚本。
@@ -110,11 +182,23 @@ window.$RefreshReg$ = prevRefreshReg;
 window.$RefreshSig$ = prevRefreshSig;
 
 if (__nasti_hot__) {
-  __nasti_hot__.accept(() => {
-    clearTimeout(window.__nasti_refresh_timer__);
-    window.__nasti_refresh_timer__ = setTimeout(() => {
-      RefreshRuntime.performReactRefresh();
-    }, 30);
+  let __nasti_current_exports__;
+  __nasti_hot__.accept((nextExports) => {
+    if (!nextExports) return;
+    if (!__nasti_current_exports__) {
+      __nasti_hot__.invalidate('Could not Fast Refresh (previous exports unavailable)');
+      return;
+    }
+    const invalidateMessage = RefreshRuntime.validateRefreshBoundaryAndEnqueueUpdate(
+      ${urlLit},
+      __nasti_current_exports__,
+      nextExports,
+    );
+    if (invalidateMessage) __nasti_hot__.invalidate(invalidateMessage);
+  });
+  RefreshRuntime.__hmr_import(import.meta.url).then((currentExports) => {
+    __nasti_current_exports__ = currentExports;
+    RefreshRuntime.registerExportsForReactRefresh(${urlLit}, currentExports);
   });
 }
 `
@@ -124,12 +208,19 @@ if (__nasti_hot__) {
  * 非 JSX 模块里用户显式写了 import.meta.hot —— 注入一段 hot context 头部并替换属性访问为本地变量。
  */
 function injectImportMetaHot(code: string, moduleUrl: string): string {
-  if (!/\bimport\.meta\.hot\b/.test(code)) return code
+  const hotRE = /\bimport\.meta\.hot\b/g
+  const matches = [...maskStringsAndComments(code).matchAll(hotRE)]
+  if (matches.length === 0) return code
+
+  for (const match of matches.reverse()) {
+    const start = match.index
+    code = code.slice(0, start) + '__nasti_hot__' + code.slice(start + match[0].length)
+  }
   const urlLit = JSON.stringify(moduleUrl)
   const header = `import { createHotContext as __nasti_createHotContext__ } from "/@nasti/client";
 const __nasti_hot__ = __nasti_createHotContext__(${urlLit});
 `
-  return header + code.replace(/\bimport\.meta\.hot\b/g, '__nasti_hot__')
+  return header + code
 }
 
 export interface TransformMiddlewareContext {
@@ -137,6 +228,7 @@ export interface TransformMiddlewareContext {
   pluginContainer: PluginContainer
   moduleGraph: ModuleGraph
   envDefine?: Record<string, string>
+  onPrune?: (paths: string[]) => void
 }
 
 /** 主转译中间件 - 处理模块请求 */
@@ -236,6 +328,8 @@ export async function transformRequest(
 ): Promise<{ code: string; map?: unknown } | null> {
   const { config, pluginContainer, moduleGraph } = ctx
 
+  // HMR 的时间戳只用于绕过浏览器缓存，不能创建新的模块图节点或 hot context。
+  url = removeTimestampQuery(url)
   const cleanReqUrl = url.split('?')[0]
 
   // 检查缓存
@@ -246,7 +340,7 @@ export async function transformRequest(
 
   // React Refresh 真实运行时（来自 react-refresh/cjs 包装为 ESM）
   if (cleanReqUrl === '/@react-refresh') {
-    return { code: getReactRefreshRuntimeEsm() }
+    return { code: getReactRefreshRuntimeEsm(true) }
   }
 
   // `/@modules/<spec>?id=<abs>`：打包阶段已（相对 importer 真实目录）解析好的依赖文件。
@@ -314,6 +408,8 @@ export async function transformRequest(
   // `?t=`（HMR 时间戳）除外。
   const rawQuery = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
   if (rawQuery && !/^t=\d+$/.test(rawQuery)) {
+    const mod = await moduleGraph.ensureEntryFromUrl(url)
+    const transformVersion = mod.invalidationVersion
     const loaded = await pluginContainer.load(url)
     if (loaded != null) {
       let code = typeof loaded === 'string' ? loaded : loaded.code
@@ -321,17 +417,29 @@ export async function transformRequest(
       if (transformed != null) {
         code = typeof transformed === 'string' ? transformed : transformed.code
       }
-      const mod = await moduleGraph.ensureEntryFromUrl(url)
       // file 关联磁盘上的父文件：父文件变更时子模块一并失效
-      moduleGraph.registerModule(mod, cleanReqUrl)
-      code = injectImportMetaHot(code, url)
+      const parentFile = resolveUrlToFile(cleanReqUrl, config.root) ?? cleanReqUrl
+      moduleGraph.registerModule(mod, parentFile)
+      const hotInfo = rewriteHotAcceptDeps(code, config, parentFile)
+      code = injectImportMetaHot(hotInfo.code, url)
       code = replaceEnvInCode(code, ctx.envDefine ?? buildEnvDefine(
         loadEnv(config.mode, config.root, config.envPrefix),
         config.mode,
       ))
-      code = rewriteImports(code, config, cleanReqUrl)
+      const importedUrls = new Set<string>()
+      code = rewriteImports(code, config, parentFile, importedUrls, moduleGraph)
+      const pruned = await moduleGraph.updateModuleInfo(
+        mod,
+        importedUrls,
+        hotInfo.acceptedUrls,
+        hotInfo.isSelfAccepting,
+        transformVersion,
+      )
       const transformResult = { code }
-      mod.transformResult = transformResult
+      if (pruned) {
+        if (pruned.size > 0) ctx.onPrune?.([...pruned].map((item) => item.url))
+        mod.transformResult = transformResult
+      }
       return transformResult
     }
   }
@@ -343,6 +451,7 @@ export async function transformRequest(
   // 创建/获取模块节点
   const mod = await moduleGraph.ensureEntryFromUrl(url)
   moduleGraph.registerModule(mod, filePath)
+  const transformVersion = mod.invalidationVersion
 
   // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
   // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
@@ -381,10 +490,13 @@ export async function transformRequest(
       // 把模块包装起来：安装 $RefreshReg$/$RefreshSig$、建 hot context、尾部触发 performReactRefresh
       code = buildReactRefreshWrapper(stableUrl, code)
       wrappedWithRefresh = true
-      // 标记为自接受，HMR 传播到此为止，不再 full-reload
-      mod.isSelfAccepting = true
     }
   }
+
+  // 服务端与客户端必须使用同一组规范化 accept URL；否则消息里的 acceptedPath
+  // 无法命中浏览器中注册的依赖回调。
+  const hotInfo = rewriteHotAcceptDeps(code, config, filePath)
+  code = hotInfo.code
 
   // 非 Fast-Refresh 模块里用户自己写了 import.meta.hot 的，注入 hot context
   if (!wrappedWithRefresh) {
@@ -398,11 +510,23 @@ export async function transformRequest(
   )
   code = replaceEnvInCode(code, envDefine)
 
-  // 重写 import 规范：alias / 相对路径 → 解析后的绝对 URL（带扩展名），bare → /@modules/
-  code = rewriteImports(code, config, filePath)
+  // 重写 import 规范并同步模块图。变更后重新转换 importer 时，会给失效依赖追加
+  // 时间戳，使浏览器真正重新执行依赖，而不是复用旧的 ESM Module Record。
+  const importedUrls = new Set<string>()
+  code = rewriteImports(code, config, filePath, importedUrls, moduleGraph)
+  const pruned = await moduleGraph.updateModuleInfo(
+    mod,
+    importedUrls,
+    hotInfo.acceptedUrls,
+    wrappedWithRefresh || hotInfo.isSelfAccepting,
+    transformVersion,
+  )
 
   const transformResult = { code }
-  mod.transformResult = transformResult
+  if (pruned) {
+    if (pruned.size > 0) ctx.onPrune?.([...pruned].map((item) => item.url))
+    mod.transformResult = transformResult
+  }
   return transformResult
 }
 
@@ -766,55 +890,19 @@ async function injectCjsNamedExports(code: string, entryFile: string): Promise<s
  * 会按字面拼接得到 `/src/locales/en`，不会自动补 `.ts` 也不知道导入文件原先在
  * `/src/i18n/`。直接按 alias / fs 解析、回写绝对 URL，浏览器就能命中正确文件。
  */
-function rewriteImports(code: string, config: ResolvedConfig, filePath: string): string {
-  const root = config.root
-  const fileDir = path.dirname(filePath)
-  // 按 key 长度降序：避免短 alias（如 `@`）抢在更具体的（如 `@/utils`）之前命中
-  const aliasEntries = Object.entries(config.resolve.alias).sort(
-    ([a], [b]) => b.length - a.length,
-  )
-
-  const toRootUrl = (abs: string): string =>
-    '/' + path.relative(root, abs).replace(/\\/g, '/')
-
+function rewriteImports(
+  code: string,
+  config: ResolvedConfig,
+  filePath: string,
+  importedUrls?: Set<string>,
+  moduleGraph?: ModuleGraph,
+): string {
+  const resolveSpec = createModuleSpecifierResolver(config, filePath)
   const transformSpec = (spec: string): string => {
-    // 解析时剥离 ?query / #hash（如 svg?url、json?import），回写时再附加到结果 URL
-    const suffixMatch = spec.match(/[?#].*$/)
-    const suffix = suffixMatch ? suffixMatch[0] : ''
-    const baseSpec = suffix ? spec.slice(0, -suffix.length) : spec
-
-    // 1) alias —— 必须排在 bare 分支前，否则 `@/x` 会被当成 npm 包发到 /@modules/
-    for (const [key, value] of aliasEntries) {
-      if (baseSpec === key || baseSpec.startsWith(key + '/')) {
-        const aliasBase = resolveAliasTarget(value, root)
-        const sub = baseSpec.slice(key.length).replace(/^\//, '')
-        const target = sub ? path.join(aliasBase, sub) : aliasBase
-        const resolved = tryResolveDiskPath(target)
-        // 解析失败时保留原 spec：让浏览器照旧请求，由后续中间件返回 404，
-        // 而不是把 `@/x` 错误地转成 `/@modules/@/x`。
-        return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
-      }
-    }
-
-    // 2) 相对路径
-    if (baseSpec.startsWith('./') || baseSpec.startsWith('../')) {
-      const target = path.resolve(fileDir, baseSpec)
-      const resolved = tryResolveDiskPath(target)
-      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
-    }
-
-    // 3) 项目内绝对路径
-    if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
-      const target = path.join(root, baseSpec.replace(/^\//, ''))
-      const resolved = tryResolveDiskPath(target)
-      return resolved && isUnderRoot(resolved, root) ? toRootUrl(resolved) + suffix : spec
-    }
-
-    // 4) 已经被前面步骤改写过的内部 URL（/@modules/、/@react-refresh 等）原样保留
-    if (baseSpec.startsWith('/')) return spec
-
-    // 5) bare specifier
-    return `/@modules/${spec}`
+    const resolved = removeTimestampQuery(resolveSpec(spec))
+    importedUrls?.add(resolved)
+    const timestamp = moduleGraph?.getModuleByUrl(resolved)?.lastHMRTimestamp ?? 0
+    return timestamp > 0 ? appendTimestampQuery(resolved, timestamp) : resolved
   }
 
   return code
@@ -833,6 +921,244 @@ function rewriteImports(code: string, config: ResolvedConfig, filePath: string):
       /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
       (_m, q: string, s: string) => `import(${q}${transformSpec(s)}${q})`,
     )
+}
+
+function createModuleSpecifierResolver(
+  config: ResolvedConfig,
+  filePath: string,
+): (specifier: string) => string {
+  const root = config.root
+  const fileDir = path.dirname(filePath)
+  const aliasEntries = Object.entries(config.resolve.alias).sort(
+    ([a], [b]) => b.length - a.length,
+  )
+  const toRootUrl = (abs: string): string =>
+    '/' + path.relative(root, abs).replace(/\\/g, '/')
+
+  return (specifier: string): string => {
+    // 解析时剥离 ?query / #hash（如 svg?url、json?import），回写时再附加到结果 URL
+    const suffixMatch = specifier.match(/[?#].*$/)
+    const suffix = suffixMatch ? suffixMatch[0] : ''
+    const baseSpec = suffix ? specifier.slice(0, -suffix.length) : specifier
+
+    // 1) alias —— 必须排在 bare 分支前，否则 `@/x` 会被当成 npm 包发到 /@modules/
+    for (const [key, value] of aliasEntries) {
+      if (baseSpec === key || baseSpec.startsWith(key + '/')) {
+        const aliasBase = resolveAliasTarget(value, root)
+        const sub = baseSpec.slice(key.length).replace(/^\//, '')
+        const target = sub ? path.join(aliasBase, sub) : aliasBase
+        const resolved = tryResolveDiskPath(target)
+        return resolved && isUnderRoot(resolved, root)
+          ? toRootUrl(resolved) + suffix
+          : specifier
+      }
+    }
+
+    // 2) 相对路径
+    if (baseSpec.startsWith('./') || baseSpec.startsWith('../')) {
+      const resolved = tryResolveDiskPath(path.resolve(fileDir, baseSpec))
+      return resolved && isUnderRoot(resolved, root)
+        ? toRootUrl(resolved) + suffix
+        : specifier
+    }
+
+    // 3) 项目内绝对路径
+    if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
+      const resolved = tryResolveDiskPath(path.join(root, baseSpec.replace(/^\//, '')))
+      return resolved && isUnderRoot(resolved, root)
+        ? toRootUrl(resolved) + suffix
+        : specifier
+    }
+
+    // 4) 已改写的内部 URL 原样保留；其余 bare specifier 交给包中间件。
+    if (baseSpec.startsWith('/')) return specifier
+    return `/@modules/${specifier}`
+  }
+}
+
+interface HotAcceptAnalysis {
+  code: string
+  acceptedUrls: Set<string>
+  isSelfAccepting: boolean
+}
+
+/**
+ * 解析并规范化 import.meta.hot.accept() 的第一参数。
+ * HMR API 只允许字符串字面量或字面量数组，因此无需引入完整 AST。
+ */
+function rewriteHotAcceptDeps(
+  code: string,
+  config: ResolvedConfig,
+  filePath: string,
+): HotAcceptAnalysis {
+  const acceptedUrls = new Set<string>()
+  const edits: Array<{ start: number; end: number; value: string }> = []
+  const resolveSpec = createModuleSpecifierResolver(config, filePath)
+  const acceptRE = /(?:\bimport\.meta\.hot|\b__nasti_hot__)(?:(?:\?\.)|\.)accept\s*\(/g
+  const searchableCode = maskStringsAndComments(code)
+  let isSelfAccepting = false
+  let match: RegExpExecArray | null
+
+  while ((match = acceptRE.exec(searchableCode))) {
+    let cursor = match.index + match[0].length
+    const skipTrivia = (): void => {
+      while (cursor < code.length) {
+        if (/\s/.test(code[cursor])) {
+          cursor++
+          continue
+        }
+        if (code[cursor] === '/' && code[cursor + 1] === '/') {
+          cursor += 2
+          while (cursor < code.length && code[cursor] !== '\n') cursor++
+          continue
+        }
+        if (code[cursor] === '/' && code[cursor + 1] === '*') {
+          cursor += 2
+          while (cursor < code.length && !(code[cursor] === '*' && code[cursor + 1] === '/')) cursor++
+          cursor += 2
+          continue
+        }
+        break
+      }
+    }
+    skipTrivia()
+    const first = code[cursor]
+
+    if (!first || first === ')' || (first !== '[' && first !== "'" && first !== '"' && first !== '`')) {
+      isSelfAccepting = true
+      continue
+    }
+
+    const readLiteral = (): void => {
+      const quote = code[cursor]
+      if (quote !== "'" && quote !== '"' && quote !== '`') return
+      const start = cursor
+      cursor++
+      let raw = ''
+      while (cursor < code.length) {
+        const char = code[cursor]
+        if (char === '\\') {
+          raw += code[cursor + 1] ?? ''
+          cursor += 2
+          continue
+        }
+        if (char === quote) {
+          cursor++
+          const resolved = removeTimestampQuery(resolveSpec(raw))
+          acceptedUrls.add(resolved)
+          edits.push({ start, end: cursor, value: JSON.stringify(resolved) })
+          return
+        }
+        if (quote === '`' && char === '$' && code[cursor + 1] === '{') return
+        raw += char
+        cursor++
+      }
+    }
+
+    if (first === '[') {
+      cursor++
+      while (cursor < code.length) {
+        skipTrivia()
+        if (code[cursor] === ',') {
+          cursor++
+          skipTrivia()
+        }
+        if (code[cursor] === ']') break
+        const before = cursor
+        readLiteral()
+        if (cursor === before) break
+      }
+    } else {
+      readLiteral()
+    }
+  }
+
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    code = code.slice(0, edit.start) + edit.value + code.slice(edit.end)
+  }
+  return { code, acceptedUrls, isSelfAccepting }
+}
+
+/** 用等长空格遮蔽字符串、模板字面量和注释，避免把文档文本误识别为 HMR 调用。 */
+function maskStringsAndComments(code: string): string {
+  // split('') 保持 UTF-16 索引与 RegExp match.index 对齐（展开运算会合并代理对）。
+  const masked = code.split('')
+  let state:
+    | 'code'
+    | 'single'
+    | 'double'
+    | 'template'
+    | 'regex'
+    | 'regex-class'
+    | 'line-comment'
+    | 'block-comment' = 'code'
+
+  const isRegexStart = (index: number): boolean => {
+    let previous = index - 1
+    while (previous >= 0 && /\s/.test(code[previous])) previous--
+    return previous < 0 || '=(:,!&|?{};[]+-*%^~<>'.includes(code[previous])
+  }
+
+  for (let i = 0; i < code.length; i++) {
+    const char = code[i]
+    const next = code[i + 1]
+    if (state === 'code') {
+      if (char === "'") state = 'single'
+      else if (char === '"') state = 'double'
+      else if (char === '`') state = 'template'
+      else if (char === '/' && next === '/') state = 'line-comment'
+      else if (char === '/' && next === '*') state = 'block-comment'
+      else if (char === '/' && isRegexStart(i)) state = 'regex'
+      else continue
+      masked[i] = ' '
+      continue
+    }
+
+    if (state === 'line-comment') {
+      if (char === '\n') {
+        state = 'code'
+      } else {
+        masked[i] = ' '
+      }
+      continue
+    }
+    if (state === 'block-comment') {
+      masked[i] = char === '\n' ? '\n' : ' '
+      if (char === '*' && next === '/') {
+        masked[i + 1] = ' '
+        i++
+        state = 'code'
+      }
+      continue
+    }
+    if (state === 'regex' || state === 'regex-class') {
+      masked[i] = char === '\n' ? '\n' : ' '
+      if (char === '\\') {
+        if (i + 1 < code.length) masked[++i] = ' '
+      } else if (state === 'regex' && char === '[') {
+        state = 'regex-class'
+      } else if (state === 'regex-class' && char === ']') {
+        state = 'regex'
+      } else if (state === 'regex' && char === '/') {
+        state = 'code'
+      }
+      continue
+    }
+
+    masked[i] = char === '\n' ? '\n' : ' '
+    if (char === '\\') {
+      if (i + 1 < code.length) masked[++i] = ' '
+      continue
+    }
+    if (
+      (state === 'single' && char === "'") ||
+      (state === 'double' && char === '"') ||
+      (state === 'template' && char === '`')
+    ) {
+      state = 'code'
+    }
+  }
+  return masked.join('')
 }
 
 /**
@@ -867,6 +1193,13 @@ function tryResolveDiskPath(target: string): string | null {
 function isUnderRoot(abs: string, root: string): boolean {
   const rel = path.relative(root, abs)
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+}
+
+function appendTimestampQuery(url: string, timestamp: number): string {
+  const hashIndex = url.indexOf('#')
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+  const withoutHash = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+  return `${withoutHash}${withoutHash.includes('?') ? '&' : '?'}t=${timestamp}${hash}`
 }
 
 const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
@@ -1126,30 +1459,29 @@ function isModuleRequest(url: string): boolean {
 function getHmrClientCode(): string {
   return `
 // Nasti HMR Client
-const socket = new WebSocket(\`ws://\${location.host}\`, 'nasti-hmr');
+const socketProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+const socket = new WebSocket(socketProtocol + '://' + location.host, 'nasti-hmr');
 const hotModulesMap = new Map();
 const disposeMap = new Map();
 const pruneMap = new Map();
+const dataMap = new Map();
+let updateQueue = [];
+let pendingUpdateQueue = false;
 
 socket.addEventListener('message', async ({ data }) => {
   const payload = JSON.parse(data);
   switch (payload.type) {
     case 'connected':
-      console.log('[nasti] connected.');
+      console.debug('[nasti] connected.');
       clearErrorOverlay();
       break;
     case 'update':
       try {
-        await Promise.all(payload.updates.map((update) => {
-          if (update.type === 'js-update') {
-            return fetchUpdate(update);
-          } else if (update.type === 'css-update') {
-            return updateCss(update.path);
-          }
-        }));
+        // CSS 在 unbundled 模式下也是会注入 <style> 的 JS 模块，和普通 JS
+        // 一样重新 import 才能执行 dispose/accept 并保持页面状态。
+        await Promise.all(payload.updates.map(queueUpdate));
         clearErrorOverlay();
-        console.log('[nasti] HMR update complete, reloading page');
-        location.reload();
+        console.debug('[nasti] HMR update complete.');
       } catch (err) {
         console.error('[nasti] HMR update failed:', err);
         showErrorOverlay(err);
@@ -1160,10 +1492,17 @@ socket.addEventListener('message', async ({ data }) => {
       location.reload();
       break;
     case 'prune':
-      payload.paths.forEach((p) => {
-        const cb = pruneMap.get(p);
-        if (cb) cb();
-      });
+      await Promise.all(payload.paths.map(async (path) => {
+        const data = dataMap.get(path);
+        const dispose = disposeMap.get(path);
+        const prune = pruneMap.get(path);
+        if (dispose) await dispose(data);
+        if (prune) await prune(data);
+        hotModulesMap.delete(path);
+        disposeMap.delete(path);
+        pruneMap.delete(path);
+        dataMap.delete(path);
+      }));
       break;
     case 'error':
       console.error('[nasti] error:', payload.err.message);
@@ -1172,33 +1511,64 @@ socket.addEventListener('message', async ({ data }) => {
   }
 });
 
-// 自动重连（断线时指数退避）
+// 服务重启后旧模块图已失效，重连时整页刷新是必要兜底；正常 update 不再刷新。
 let reconnectTimer = 0;
 socket.addEventListener('close', () => {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(() => location.reload(), 1000);
 });
 
-async function fetchUpdate(update) {
-  const mod = hotModulesMap.get(update.path);
-  // 先跑 dispose（给模块机会清理副作用）
-  const dispose = disposeMap.get(update.path);
-  if (dispose) dispose();
+/**
+ * 同一批更新先全部拉取，再按服务端消息顺序执行 accept 回调，避免 HTTP 往返速度
+ * 改变模块应用顺序。这与 Vite HMRClient 的 fetch/apply 两阶段一致。
+ */
+async function queueUpdate(update) {
+  updateQueue.push(fetchUpdate(update));
+  if (pendingUpdateQueue) return;
 
-  const newMod = await import(update.acceptedPath + '?t=' + update.timestamp);
-  if (mod) {
-    // 复制回调数组避免回调内部又修改 hotModulesMap 造成迭代异常
-    [...mod.callbacks].forEach((cb) => cb(newMod));
+  pendingUpdateQueue = true;
+  await Promise.resolve();
+  pendingUpdateQueue = false;
+  const loading = updateQueue;
+  updateQueue = [];
+  const applyUpdates = await Promise.all(loading);
+  for (const apply of applyUpdates) {
+    if (apply) apply();
   }
 }
 
-function updateCss(path) {
-  const el = document.querySelector(\`style[data-nasti-css="\${path}"]\`);
-  if (el) {
-    return fetch(path + '?t=' + Date.now())
-      .then(r => r.text())
-      .then(css => { el.textContent = css; });
-  }
+async function fetchUpdate(update) {
+  const mod = hotModulesMap.get(update.path);
+  // 尚未在当前页面加载的动态模块不需要更新。
+  if (!mod) return;
+
+  // 必须在重新 import 前确定旧回调；新模块执行 createHotContext 时会清空并注册新回调。
+  const qualifiedCallbacks = mod.callbacks.filter(({ deps }) =>
+    deps.includes(update.acceptedPath)
+  );
+  const isSelfUpdate = update.path === update.acceptedPath;
+  if (!isSelfUpdate && qualifiedCallbacks.length === 0) return;
+
+  const dispose = disposeMap.get(update.acceptedPath);
+  if (dispose) await dispose(dataMap.get(update.acceptedPath));
+  const newMod = await import(appendTimestampQuery(update.acceptedPath, update.timestamp));
+
+  return () => {
+    for (const { deps, fn } of qualifiedCallbacks) {
+      fn(deps.map((dep) => dep === update.acceptedPath ? newMod : undefined));
+    }
+    const detail = isSelfUpdate
+      ? update.path
+      : update.acceptedPath + ' via ' + update.path;
+    console.debug('[nasti] hot updated:', detail);
+  };
+}
+
+function appendTimestampQuery(url, timestamp) {
+  const hashIndex = url.indexOf('#');
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
+  const withoutHash = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  return withoutHash + (withoutHash.includes('?') ? '&' : '?') + 't=' + timestamp + hash;
 }
 
 function clearErrorOverlay() {
@@ -1226,23 +1596,30 @@ function showErrorOverlay(err) {
   document.body.appendChild(overlay);
 }
 
-/**
- * 生成 import.meta.hot 的 hot context。
- * 关键约束：同一 ownerPath 的 accept 回调必须替换（不是 append）。
- * 每次模块重新 import 都会调用 createHotContext，旧回调会被 fetchUpdate 调用后立即被新 import
- * 里的 accept 替换。不替换的话每编辑一次就多一个回调，越跑越慢。
- */
 export function createHotContext(ownerPath) {
+  if (!dataMap.has(ownerPath)) dataMap.set(ownerPath, {});
+
+  // 模块重新执行时丢弃旧 accept 回调，但保留同一个 hot.data 对象。
+  const existing = hotModulesMap.get(ownerPath);
+  if (existing) existing.callbacks = [];
+
+  const acceptDeps = (deps, callback = () => {}) => {
+    const mod = hotModulesMap.get(ownerPath) || { id: ownerPath, callbacks: [] };
+    mod.callbacks.push({ deps, fn: callback });
+    hotModulesMap.set(ownerPath, mod);
+  };
+
   return {
     accept(deps, callback) {
-      // 自接受: hot.accept() 或 hot.accept(callback)
       if (typeof deps === 'function' || deps === undefined) {
-        hotModulesMap.set(ownerPath, { callbacks: [deps || (() => {})] });
-        return;
+        acceptDeps([ownerPath], ([mod]) => deps?.(mod));
+      } else if (typeof deps === 'string') {
+        acceptDeps([deps], ([mod]) => callback?.(mod));
+      } else if (Array.isArray(deps)) {
+        acceptDeps(deps, callback);
+      } else {
+        throw new Error('invalid hot.accept() usage');
       }
-      // 依赖接受: hot.accept(deps, callback)，多次调用追加
-      const existing = hotModulesMap.get(ownerPath)?.callbacks ?? [];
-      hotModulesMap.set(ownerPath, { callbacks: [...existing, callback] });
     },
     prune(callback) {
       pruneMap.set(ownerPath, callback);
@@ -1253,7 +1630,7 @@ export function createHotContext(ownerPath) {
     invalidate() {
       location.reload();
     },
-    data: {},
+    data: dataMap.get(ownerPath),
   };
 }
 `

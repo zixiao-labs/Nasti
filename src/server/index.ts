@@ -263,7 +263,12 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
 
     async transformRequest(url: string) {
       const { transformRequest } = await import('./middleware.js')
-      return transformRequest(url, { config: configWithPlugins, pluginContainer, moduleGraph })
+      return transformRequest(url, {
+        config: configWithPlugins,
+        pluginContainer,
+        moduleGraph,
+        onPrune: (paths) => ws.send({ type: 'prune', paths }),
+      })
     },
 
     async ssrLoadModule(url: string) {
@@ -329,6 +334,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     config: configWithPlugins,
     pluginContainer,
     moduleGraph,
+    onPrune: (paths) => ws.send({ type: 'prune', paths }),
   }))
 
   const publicDir = path.resolve(config.root, 'public')
