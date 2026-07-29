@@ -305,6 +305,61 @@ bridge 插件通过 `createEnvironmentDriver()` 提供 `build`、`serve`、`watc
 和 `close`，并可使用 `setup(api)`、`api.expose/useExposed` 与
 `afterBuildApp()` 协调多个插件或环境。
 
+## 原生多环境聚合（Lynx BG / MT）
+
+纯 Lynx 应用可以禁用默认 Web client，把同一入口交给两套独立的 client-consumer
+Rolldown 环境。每套环境都有独立 module graph、resolve conditions、插件上下文和输出目录：
+
+```ts
+export default defineConfig({
+  environments: {
+    client: { buildEnabled: false },
+    'lynx-background': {
+      consumer: 'client',
+      entry: 'src/index.ts',
+      resolve: { conditions: ['lynx-background', 'browser', 'import'] },
+    },
+    'lynx-main-thread': {
+      consumer: 'client',
+      entry: 'src/index.ts',
+      resolve: { conditions: ['lynx-main-thread', 'browser', 'import'] },
+    },
+  },
+  plugins: [pluginVueLynxNative()],
+})
+```
+
+生产钩子的 `this.environment` 会准确指向当前 BG/MT 环境。插件可登记结构化
+manifest，并在 app 级 finalizer 中直接查询 entry/artifact，最后写出聚合 bundle：
+
+```ts
+const pluginVueLynxNative = () => ({
+  name: 'vue-lynx:native',
+
+  generateBundle() {
+    this.environment.setBuildMetadata({
+      manifest: { thread: this.environment.name },
+    })
+  },
+
+  afterBuildApp(_results, _api, app) {
+    const background = app.getEntry('lynx-background', 'index')
+    const mainThread = app.getEntry('lynx-main-thread', 'index')
+    if (!background || !mainThread) throw new Error('Missing Lynx thread entry')
+
+    app.emitFile({
+      type: 'asset',
+      fileName: 'main.native.lynx.bundle',
+      source: encodeLynxBundle({ background, mainThread }),
+    })
+  },
+})
+```
+
+`build()` 的 `environmentResults` 会包含原生环境自动推导的 `entries`、插件登记的
+`manifest/stats` 及完整 `output`；app 级产物同时出现在 `BuildResult.appOutput`。
+这些 API 只负责双线程编排与聚合，Vue SFC/worklet、Lynx CSS 和 encoder 由后续工具链插件实现。
+
 ## Monaco Editor 支持
 
 内置 `monacoEditorPlugin`（对标 `vite-plugin-monaco-editor`），解决两个老大难问题：

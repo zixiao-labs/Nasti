@@ -3,6 +3,7 @@
 
 export { defineConfig, resolveConfig, detectFramework } from './config/index.js'
 export { build } from './build/index.js'
+export type { BuildResult } from './build/index.js'
 export { buildElectron, createElectronRendererConfig } from './build/electron.js'
 export { createServer } from './server/index.js'
 export { startElectronDev, electronRendererDevPath } from './server/electron-dev.js'
@@ -32,7 +33,10 @@ export type {
   ResolvedEnvironmentOptions,
   EnvironmentInstance,
   EnvironmentBuildOutput,
+  EnvironmentBuildMetadata,
   EnvironmentBuildResult,
+  AppBuildOutput,
+  BuildAppContext,
   EnvironmentServeResult,
   EnvironmentDriver,
   EnvironmentDriverContext,

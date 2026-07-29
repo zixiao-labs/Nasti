@@ -75,6 +75,12 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
       if (!source.startsWith('/') && !source.startsWith('.')) {
         // Vue runtime-only 重定向（见上方说明）
         if (vueRuntimeEntry && source === 'vue') return vueRuntimeEntry
+
+        // build 必须交给 Rolldown 原生 resolver：它会使用当前 environment 的
+        // conditionNames/mainFields。若在这里用 require.resolve 抢先解析，Lynx
+        // BG/MT 等双 client-consumer 环境会错误命中同一套 Node 条件导出。
+        if (config.command === 'build') return null
+
         try {
           const resolved = require.resolve(source, {
             paths: [importer ? path.dirname(importer) : config.root],
