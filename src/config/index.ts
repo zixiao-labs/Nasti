@@ -230,11 +230,17 @@ export async function resolveConfig(
   // ── Environment API：解析 environments map（默认 client + ssr）──────────
   // client 与 top-level resolve/build 精确镜像（同引用）；其余环境按 consumer
   // 取 per-consumer resolve 默认值。configEnvironment 钩子在最终化前调用。
-  const userEnvironments: Record<string, EnvironmentOptions> = {
+  const rawUserEnvironments: Record<string, EnvironmentOptions> = {
     client: {},
     ssr: {},
     ...(merged.environments ?? {}),
   }
+  const userEnvironments = Object.fromEntries(
+    Object.entries(rawUserEnvironments).map(([name, options]) => [
+      name,
+      deepMerge({}, options),
+    ]),
+  ) as Record<string, EnvironmentOptions>
   for (const [name, envOptions] of Object.entries(userEnvironments)) {
     for (const plugin of rawPlugins) {
       if (plugin.configEnvironment) {
@@ -246,6 +252,7 @@ export async function resolveConfig(
   for (const [name, envOptions] of Object.entries(userEnvironments)) {
     const consumer: 'client' | 'server' =
       envOptions.consumer ?? (name === 'client' ? 'client' : 'server')
+    const vueOptions = deepMerge({}, envOptions.vue ?? {})
 
     if (name === 'client') {
       // 用户对 environments.client 的覆盖写回 top-level（镜像语义：二者是同一份）
@@ -273,7 +280,7 @@ export async function resolveConfig(
         // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
         resolve: resolved.resolve,
         build: resolved.build,
-        vue: { ...envOptions.vue },
+        vue: vueOptions,
       }
       continue
     }
@@ -287,7 +294,7 @@ export async function resolveConfig(
           ? path.resolve(root, envOptions.html)
           : undefined,
       driver: envOptions.driver,
-      vue: { ...envOptions.vue },
+      vue: vueOptions,
       resolve: {
         alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
         extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],

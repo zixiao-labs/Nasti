@@ -17,6 +17,7 @@ import {
   ssrDefineOverrides,
 } from '../core/env.js'
 import { removeTimestampQuery } from '../core/url.js'
+import { isAssetFile } from '../plugins/assets.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -301,7 +302,7 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
     }
 
     // 处理模块请求（.ts, .tsx, .jsx, .vue, .css 等）
-    if (isModuleRequest(url)) {
+    if (isModuleRequest(url, req.headers['sec-fetch-dest'])) {
       try {
         const result = await transformRequest(url, ctx)
         if (result) {
@@ -1471,14 +1472,18 @@ function resolveUrlToFile(url: string, root: string): string | null {
   return null
 }
 
-function isModuleRequest(url: string): boolean {
+function isModuleRequest(
+  url: string,
+  destination?: string | string[],
+): boolean {
   const cleanUrl = url.split('?')[0]
-  if (
-    /\.(ts|tsx|jsx|js|mjs|vue|css|json|png|jpe?g|gif|svg|ico|webp|avif|mp4|webm|ogg|mp3|wav|flac|aac|woff2?|eot|ttf|otf|pdf|txt)$/.test(
-      cleanUrl,
-    )
-  ) return true
+  if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.startsWith('/@modules/')) return true
+  if (isAssetFile(cleanUrl)) {
+    const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+    const isExplicitAssetModule = /(?:^|&)(?:url|raw)(?:&|$)/.test(query)
+    return isExplicitAssetModule || destination === 'script'
+  }
   // 无扩展名路径可能是省略扩展名的模块导入（如 /src/App）
   if (!path.extname(cleanUrl)) return true
   return false
@@ -1493,6 +1498,7 @@ const hotModulesMap = new Map();
 const disposeMap = new Map();
 const pruneMap = new Map();
 const dataMap = new Map();
+const customListenersMap = new Map();
 let updateQueue = [];
 let pendingUpdateQueue = false;
 
@@ -1533,8 +1539,24 @@ socket.addEventListener('message', async ({ data }) => {
         disposeMap.delete(path);
         pruneMap.delete(path);
         dataMap.delete(path);
+        clearCustomListeners(path);
       }));
       break;
+    case 'custom': {
+      const listenersByOwner = customListenersMap.get(payload.event);
+      if (!listenersByOwner) break;
+      const results = await Promise.allSettled(
+        [...listenersByOwner.values()]
+          .flatMap((listeners) => [...listeners])
+          .map((listener) => Promise.resolve().then(() => listener(payload.data)))
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('[nasti] custom HMR event listener failed:', result.reason);
+        }
+      }
+      break;
+    }
     case 'error':
       console.error('[nasti] error:', payload.err.message);
       showErrorOverlay(payload.err);
@@ -1633,6 +1655,7 @@ export function createHotContext(ownerPath) {
   // 模块重新执行时丢弃旧 accept 回调，但保留同一个 hot.data 对象。
   const existing = hotModulesMap.get(ownerPath);
   if (existing) existing.callbacks = [];
+  clearCustomListeners(ownerPath);
 
   const acceptDeps = (deps, callback = () => {}) => {
     const mod = hotModulesMap.get(ownerPath) || { id: ownerPath, callbacks: [] };
@@ -1658,11 +1681,38 @@ export function createHotContext(ownerPath) {
     dispose(callback) {
       disposeMap.set(ownerPath, callback);
     },
+    on(event, callback) {
+      let listenersByOwner = customListenersMap.get(event);
+      if (!listenersByOwner) {
+        listenersByOwner = new Map();
+        customListenersMap.set(event, listenersByOwner);
+      }
+      let listeners = listenersByOwner.get(ownerPath);
+      if (!listeners) {
+        listeners = new Set();
+        listenersByOwner.set(ownerPath, listeners);
+      }
+      listeners.add(callback);
+    },
+    off(event, callback) {
+      const listenersByOwner = customListenersMap.get(event);
+      const listeners = listenersByOwner?.get(ownerPath);
+      listeners?.delete(callback);
+      if (listeners?.size === 0) listenersByOwner.delete(ownerPath);
+      if (listenersByOwner?.size === 0) customListenersMap.delete(event);
+    },
     invalidate() {
       location.reload();
     },
     data: dataMap.get(ownerPath),
   };
+}
+
+function clearCustomListeners(ownerPath) {
+  for (const [event, listenersByOwner] of customListenersMap) {
+    listenersByOwner.delete(ownerPath);
+    if (listenersByOwner.size === 0) customListenersMap.delete(event);
+  }
 }
 `
 }

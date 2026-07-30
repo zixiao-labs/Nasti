@@ -7,6 +7,7 @@
 //        里供 css-post 的 renderChunk 聚合）。真正的 .css 产物由
 //        plugins/css-post.ts 在 renderChunk 期 per-chunk 抽取。
 import path from 'node:path'
+import { SourceMapGenerator } from 'source-map-js'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import type { CssEngine } from '../core/css-engine.js'
 import { normalizeCssModuleId } from '../core/css-engine.js'
@@ -51,13 +52,7 @@ export function cssPlugin(
       const normalizedId = normalizeCssModuleId(id)
       const cssModule = { id: normalizedId, source: code, code: rewritten }
       const map = config.build.sourcemap
-        ? {
-            version: 3,
-            sources: [id],
-            sourcesContent: [code],
-            names: [],
-            mappings: '',
-          }
+        ? createIdentitySourceMap(code, id)
         : undefined
       engine?.modules.set(normalizedId, cssModule)
       this.environment?.setCssModule?.(cssModule)
@@ -149,6 +144,22 @@ export default css;
       }
     },
   }
+}
+
+function createIdentitySourceMap(code: string, id: string) {
+  const map = new SourceMapGenerator({ file: id })
+  const lines = code.split('\n')
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    for (let column = 0; column <= lines[lineIndex].length; column++) {
+      map.addMapping({
+        generated: { line: lineIndex + 1, column },
+        original: { line: lineIndex + 1, column },
+        source: id,
+      })
+    }
+  }
+  map.setSourceContent(id, code)
+  return map.toJSON()
 }
 
 /** CSS URL 重写（将相对路径转为绝对路径） */

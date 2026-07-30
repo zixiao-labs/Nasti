@@ -68,6 +68,8 @@ test('non-default client environments expose independent Vue/CSS dev pipelines a
 
   const background = await server.transformEnvironmentRequest(BACKGROUND, '/src/App.vue')
   const mainThread = await server.environments[MAIN_THREAD].transformRequest('/src/App.vue')
+  assert.ok(background)
+  assert.ok(mainThread)
   assert.match(background.code, /lynx-background/)
   assert.match(mainThread.code, /lynx-main-thread/)
 
@@ -87,8 +89,12 @@ test('non-default client environments expose independent Vue/CSS dev pipelines a
   const backgroundGraph = server.environments[BACKGROUND].moduleGraph
   const mainThreadGraph = server.environments[MAIN_THREAD].moduleGraph
   assert.notEqual(backgroundGraph, mainThreadGraph)
-  assert.equal(backgroundGraph.getModuleByUrl('/src/App.vue').environment, BACKGROUND)
-  assert.equal(mainThreadGraph.getModuleByUrl('/src/App.vue').environment, MAIN_THREAD)
+  const backgroundModule = backgroundGraph.getModuleByUrl('/src/App.vue')
+  const mainThreadModule = mainThreadGraph.getModuleByUrl('/src/App.vue')
+  assert.ok(backgroundModule)
+  assert.ok(mainThreadModule)
+  assert.equal(backgroundModule.environment, BACKGROUND)
+  assert.equal(mainThreadModule.environment, MAIN_THREAD)
   assert.match(
     server.environments[BACKGROUND].getCssModule(styleRequest).source,
     /\.root \{ color: red\s*\}/,
@@ -106,12 +112,21 @@ test('non-default client environments expose independent Vue/CSS dev pipelines a
   )
   server.watcher.emit('change', path.join(root, 'src/App.vue'))
 
-  const update = await Promise.race([
-    appUpdate,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('app-level HMR did not run')), 2000),
-    ),
-  ])
+  let updateTimeout
+  let update
+  try {
+    update = await Promise.race([
+      appUpdate,
+      new Promise((_, reject) => {
+        updateTimeout = setTimeout(
+          () => reject(new Error('app-level HMR did not run')),
+          2000,
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(updateTimeout)
+  }
   assert.deepEqual(
     Object.keys(update.environments).sort(),
     [BACKGROUND, MAIN_THREAD].sort(),

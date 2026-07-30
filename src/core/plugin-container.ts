@@ -110,6 +110,7 @@ export class PluginContainer {
       if (result == null) continue
       if (typeof result === 'string') {
         currentCode = result
+        lastResult = undefined
       } else {
         currentCode = result.code
         lastResult = result

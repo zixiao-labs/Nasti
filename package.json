@@ -61,6 +61,7 @@
     "react-refresh": "^0.14.2",
     "rolldown": "1.2.1",
     "sirv": "^3.0.0",
+    "source-map-js": "^1.2.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

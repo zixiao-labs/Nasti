@@ -38,6 +38,7 @@ import {
   createBuildAppContext,
   inferEnvironmentEntries,
   isInvalidEnvironmentFileName,
+  joinPublicPath,
   normalizeEnvironmentFileName,
 } from '../core/build-app-context.js'
 import pc from 'picocolors'
@@ -308,10 +309,6 @@ function inferOutputMetadata(
     }
   }
   return { chunks, assets, sourceMaps }
-}
-
-function joinPublicPath(base: string, fileName: string): string {
-  return `${base.endsWith('/') ? base : `${base}/`}${fileName.replace(/^\//, '')}`
 }
 
 function prepareBuildOutputDirectories(

@@ -69,7 +69,7 @@ export function createBuildAppContext(
       if (!result) return undefined
       const normalized = normalizeEnvironmentFileName(fileName)
       const base = result.publicPath ?? config.base
-      return `${base.endsWith('/') ? base : `${base}/`}${normalized.replace(/^\//, '')}`
+      return joinPublicPath(base, normalized)
     },
 
     emitFile(file) {
@@ -103,6 +103,10 @@ export function createBuildAppContext(
       return fileName
     },
   }
+}
+
+export function joinPublicPath(base: string, fileName: string): string {
+  return `${base.endsWith('/') ? base : `${base}/`}${fileName.replace(/^\//, '')}`
 }
 
 export function normalizeEnvironmentFileName(fileName: string): string {

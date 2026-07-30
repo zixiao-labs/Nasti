@@ -25,6 +25,7 @@ import {
 import { handleFileChange } from './hmr.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { getPluginApi } from '../core/plugin-api.js'
+import { buildEnvDefine, loadEnv, ssrDefineOverrides } from '../core/env.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
@@ -95,6 +96,11 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       pluginContainer: environment.pluginContainer!,
       moduleGraph: environment.moduleGraph,
       environment,
+      envDefine: buildEnvDefine(
+        loadEnv(environmentConfig.mode, environmentConfig.root, environmentConfig.envPrefix),
+        environmentConfig.mode,
+        ssrDefineOverrides(environment.consumer),
+      ),
       onPrune: (paths) => environment.hot.send({ type: 'prune', paths }),
     }
     transformContexts.set(environment.name, context)
@@ -236,8 +242,31 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     const results: Record<string, NonNullable<Awaited<ReturnType<typeof handleFileChange>>>> = {}
     for (const environment of Object.values(environments)) {
       if (environment.consumer !== 'client' || environment.driver) continue
-      const result = await handleFileChange(file, server, environment.name, timestamp)
-      if (result) results[environment.name] = result
+      try {
+        const result = await handleFileChange(file, server, environment.name, timestamp)
+        if (result) results[environment.name] = result
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error))
+        logger.error(
+          `[nasti] HMR failed for environment "${environment.name}": ${normalized.message}`,
+          { error: normalized },
+        )
+        try {
+          environment.hot.send({
+            type: 'error',
+            err: { message: normalized.message, stack: normalized.stack },
+          })
+        } catch (channelError) {
+          const channelFailure =
+            channelError instanceof Error
+              ? channelError
+              : new Error(String(channelError))
+          logger.error(
+            `[nasti] failed to deliver HMR error to environment "${environment.name}"`,
+            { error: channelFailure },
+          )
+        }
+      }
     }
     if (Object.keys(results).length === 0) return
     const context = {
@@ -256,10 +285,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       const normalized = error instanceof Error ? error : new Error(String(error))
       logger.error(`[nasti] multi-environment HMR failed: ${normalized.message}`, {
         error: normalized,
-      })
-      clientEnv.hot.send({
-        type: 'error',
-        err: { message: normalized.message, stack: normalized.stack },
       })
     })
   }

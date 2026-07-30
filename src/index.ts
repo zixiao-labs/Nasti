@@ -53,6 +53,7 @@ export type {
   HotChannelClient,
   HotChannelInvokeHandlers,
   EnvironmentHotUpdateResult,
+  HmrUpdate,
   EnvironmentTransformedModule,
   AppHmrContext,
   PluginContext,

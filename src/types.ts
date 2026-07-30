@@ -3,6 +3,12 @@
 
 import type { InputOptions, OutputOptions, RenderedChunk } from 'rolldown'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type {
+  SFCAsyncStyleCompileOptions,
+  SFCParseOptions,
+  SFCScriptCompileOptions,
+  SFCTemplateCompileOptions,
+} from '@vue/compiler-sfc'
 import type { Logger } from './core/logger.js'
 
 export interface NastiConfig {
@@ -108,15 +114,19 @@ export type VueSfcSourceTransform = (
   context: VueSfcTransformContext,
 ) =>
   | string
+  /**
+   * Object results may provide a source map from `code` back to `source`.
+   * Nasti composes it with compiler-sfc maps where that stage supports chaining.
+   */
   | { code: string; map?: unknown }
   | Promise<string | { code: string; map?: unknown }>
 
 /** 直接透传给 `@vue/compiler-sfc` 对应阶段的 per-environment 选项。 */
 export interface VueEnvironmentOptions {
-  parse?: Record<string, unknown>
-  script?: Record<string, unknown>
-  template?: Record<string, unknown>
-  style?: Record<string, unknown>
+  parse?: SFCParseOptions
+  script?: Partial<SFCScriptCompileOptions>
+  template?: Partial<SFCTemplateCompileOptions>
+  style?: Partial<SFCAsyncStyleCompileOptions>
   transformSfc?: VueSfcSourceTransform
   transformTemplate?: VueSfcSourceTransform
   transformStyle?: VueSfcSourceTransform
@@ -242,8 +252,8 @@ export interface CssConfig {
   /** CSP nonce to add to inline <style> tags (dev only since 2.0 — build emits real .css files) */
   nonce?: string
   /**
-   * @deprecated 2.0 起 build 始终抽取真实 .css 文件（per-chunk hash + <link> 注入），
-   * 该开关不再生效。控制拆分用 `build.cssCodeSplit`，控制压缩用 `build.cssMinify`。
+   * @deprecated 请改用 `css.emit` 控制是否写出 CSS 文件。控制拆分用
+   * `build.cssCodeSplit`，控制压缩用 `build.cssMinify`。
    */
   emitCssFile?: boolean
   /**
@@ -668,7 +678,7 @@ export interface DevServer {
   transformEnvironmentRequest: (
     environmentName: string,
     url: string,
-  ) => Promise<{ code: string; map?: unknown } | null>
+  ) => Promise<TransformResult>
   /**
    * SSR：在 server consumer 环境（默认 `ssr`）中加载并执行模块，返回其导出。
    * Vite `server.ssrLoadModule` 的 back-compat shim（底层是 module runner +

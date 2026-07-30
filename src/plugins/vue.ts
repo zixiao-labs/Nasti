@@ -6,12 +6,20 @@ import type {
   VueSfcSourceTransform,
   VueSfcTransformContext,
 } from '../types.js'
+import {
+  SourceMapConsumer,
+  SourceMapGenerator,
+  SourceNode,
+  type RawSourceMap,
+} from 'source-map-js'
 import { transformCode } from '../core/transformer.js'
+import { createDebugger } from '../core/debug.js'
 
 const VUE_FILE_RE = /\.vue$/
 // 同时接受 2.0 的 `&lang.css`（Vite 约定，id 以 .css 结尾可被 css 插件接管）
 // 与 1.x 的 `&lang=css`（向后兼容已缓存的 URL）
 const VUE_QUERY_RE = /\.vue\?vue&type=(script|template|style)(&index=\d+)?(&lang[.=]\w+)?/
+const debug = createDebugger('nasti:vue')
 
 interface VueCompilerSfc {
   parse: (source: string, options?: any) => any
@@ -37,7 +45,10 @@ export function vuePlugin(
   environmentName = 'client',
 ): NastiPlugin {
   const isDev = config.command === 'serve'
-  const descriptorCache = new Map<string, any>()
+  const descriptorCache = new Map<
+    string,
+    { descriptor: any; sourceMap?: unknown }
+  >()
   const vueOptions = config.environments[environmentName]?.vue ?? {}
 
   return {
@@ -64,49 +75,73 @@ export function vuePlugin(
       if (!sfc) return null
 
       const [, filePath, indexStr] = match
-      let descriptor = descriptorCache.get(filePath)
-      if (!descriptor) {
+      let cached = descriptorCache.get(filePath)
+      if (!cached) {
         // 直接请求子模块（如 dev 冷启动 / 缓存失效）时按需重新解析父 SFC
         try {
           const fs = await import('node:fs')
           const rawSource = fs.readFileSync(filePath, 'utf-8')
-          const source = await applySourceTransform(
+          const transformedSfc = await applySourceTransform(
             vueOptions.transformSfc,
             rawSource,
             { filename: filePath, environmentName, type: 'sfc' },
           )
-          const parsed = sfc.parse(source, {
+          const parsed = sfc.parse(transformedSfc.code, {
             ...vueOptions.parse,
             filename: filePath,
+            sourceMap: true,
           })
           if (parsed.errors.length) return null
-          descriptor = parsed.descriptor
-          descriptorCache.set(filePath, descriptor)
+          cached = {
+            descriptor: parsed.descriptor,
+            sourceMap: transformedSfc.map,
+          }
+          descriptorCache.set(filePath, cached)
         } catch {
           return null
         }
       }
 
+      const { descriptor, sourceMap: sfcSourceMap } = cached
       const index = parseInt(indexStr ?? '0', 10)
       const style = descriptor.styles[index]
       if (!style) return null
 
       const scopeId = hashId(filePath)
-      const styleSource = await applySourceTransform(
+      const transformedStyle = await applySourceTransform(
         vueOptions.transformStyle,
         style.content,
         { filename: filePath, environmentName, type: 'style', index },
       )
+      const wantsStyleSourceMap =
+        !!config.build.sourcemap ||
+        transformedStyle.map != null ||
+        sfcSourceMap != null
+      const styleInputMap = wantsStyleSourceMap
+        ? composeSourceMapChain(
+            [transformedStyle.map, style.map, sfcSourceMap],
+            { filename: filePath, environmentName, type: 'style', index },
+          )
+        : undefined
       const result = await sfc.compileStyleAsync({
         ...vueOptions.style,
-        source: styleSource,
+        source: transformedStyle.code,
         filename: filePath,
         id: `data-v-${scopeId}`,
         scoped: style.scoped ?? false,
+        inMap: styleInputMap,
         // <style lang="scss|less|stylus"> 需经对应预处理器（缺省 undefined = 纯 CSS）
         preprocessLang: style.lang,
       })
-      return result.code as string
+      if (transformedStyle.map != null && result.map == null) {
+        warnUnchainableMap(
+          { filename: filePath, environmentName, type: 'style', index },
+          'compiler-sfc did not return a style map',
+        )
+      }
+      return wantsStyleSourceMap
+        ? { code: result.code as string, map: result.map }
+        : result.code as string
     },
 
     async transform(code, id) {
@@ -126,25 +161,37 @@ export function vuePlugin(
       }
 
       // 解析 SFC
-      code = await applySourceTransform(
+      const transformedSfc = await applySourceTransform(
         vueOptions.transformSfc,
         code,
         { filename: id, environmentName, type: 'sfc' },
       )
+      code = transformedSfc.code
       const { descriptor, errors } = sfc.parse(code, {
         ...vueOptions.parse,
         filename: id,
+        sourceMap: true,
       })
       if (errors.length) {
-        console.error(`[nasti:vue] Parse error in ${id}:`, errors[0].message)
+        const firstError = errors[0]
+        console.error(
+          `[nasti:vue] Parse error in ${id}:`,
+          typeof firstError === 'string' ? firstError : firstError.message,
+        )
         return null
       }
 
-      descriptorCache.set(id, descriptor)
+      descriptorCache.set(id, {
+        descriptor,
+        sourceMap: transformedSfc.map,
+      })
       const scopeId = hashId(id)
+      const wantsSourceMap =
+        !!config.build.sourcemap || transformedSfc.map != null
 
       // 编译 script
       let scriptCode = ''
+      let scriptMap: unknown
       if (descriptor.script || descriptor.scriptSetup) {
         const inlineTemplate = vueOptions.script?.inlineTemplate !== false
         const compiled = sfc.compileScript(descriptor, {
@@ -152,61 +199,125 @@ export function vuePlugin(
           id: scopeId,
           isProd: !isDev,
           inlineTemplate,
+          sourceMap: wantsSourceMap,
           // 让 compileScript 产出 `const __sfc__ = ...`（而非默认的 `export default {...}`）。
           // 否则下方追加的 `__sfc__.render` / `__sfc__.__scopeId` / HMR 记录会引用一个
           // 不存在的 `__sfc__`，并与 compileScript 自带的 `export default` 形成双重默认导出。
           genDefaultAs: '__sfc__',
         })
         scriptCode = compiled.content
+        scriptMap = composeSourceMapChain(
+          [compiled.map, transformedSfc.map],
+          { filename: id, environmentName, type: 'sfc' },
+        )
+        if (transformedSfc.map != null && scriptMap == null) {
+          warnUnchainableMap(
+            { filename: id, environmentName, type: 'sfc' },
+            'compiler-sfc did not return a script map',
+          )
+        }
       }
 
       // 编译 template（如果没有 inline）
       let templateCode = ''
+      let templateMap: unknown
       const scriptSetupIsInline =
         !!descriptor.scriptSetup && vueOptions.script?.inlineTemplate !== false
       if (descriptor.template && !scriptSetupIsInline) {
-        const templateSource = await applySourceTransform(
+        const transformedTemplate = await applySourceTransform(
           vueOptions.transformTemplate,
           descriptor.template.content,
           { filename: id, environmentName, type: 'template' },
         )
+        const templateInputMap = composeSourceMapChain(
+          [
+            transformedTemplate.map,
+            descriptor.template.map,
+            transformedSfc.map,
+          ],
+          { filename: id, environmentName, type: 'template' },
+        )
         const customCompilerOptions =
-          (vueOptions.template?.compilerOptions as Record<string, unknown> | undefined) ?? {}
+          vueOptions.template?.compilerOptions ?? {}
         const compiled = sfc.compileTemplate({
           ...vueOptions.template,
-          source: templateSource,
+          source: transformedTemplate.code,
           filename: id,
           id: scopeId,
+          inMap: templateInputMap,
           compilerOptions: {
             ...customCompilerOptions,
             scopeId: `data-v-${scopeId}`,
           },
         })
         templateCode = compiled.code
+        if (
+          wantsSourceMap ||
+          transformedTemplate.map != null
+        ) {
+          templateMap = compiled.map
+        }
+        if (transformedTemplate.map != null && templateMap == null) {
+          warnUnchainableMap(
+            { filename: id, environmentName, type: 'template' },
+            'compiler-sfc did not return a template map',
+          )
+        }
       }
 
       // 组装输出。若 SFC 只有 <template> 而无任何 <script>，scriptCode 为空，
       // 兜底一个空组件对象，保证后续 `__sfc__.render` / `__scopeId` 赋值成立。
-      let output = scriptCode || 'const __sfc__ = {}'
+      const outputNode = new SourceNode()
+      let hasMappedOutput = false
+      const append = (fragment: string, map?: unknown) => {
+        const normalizedMap = normalizeSourceMap(
+          map,
+          { filename: id, environmentName, type: 'sfc' },
+        )
+        if (!normalizedMap) {
+          outputNode.add(fragment)
+          return
+        }
+        try {
+          outputNode.add(
+            SourceNode.fromStringWithSourceMap(
+              fragment,
+              new SourceMapConsumer(normalizedMap),
+            ),
+          )
+          hasMappedOutput = true
+        } catch (error) {
+          warnUnchainableMap(
+            { filename: id, environmentName, type: 'sfc' },
+            `source-map assembly failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+          outputNode.add(fragment)
+        }
+      }
+      append(scriptCode || 'const __sfc__ = {}', scriptMap)
 
       if (templateCode) {
-        output += `\n${templateCode}\n`
-        output += `\n__sfc__.render = render\n`
+        append('\n')
+        append(templateCode, templateMap)
+        append('\n')
+        append('\n__sfc__.render = render\n')
       }
 
       // style 导入（&lang.css 结尾 —— css 插件按 .css 后缀接管该虚拟模块）
       if (descriptor.styles.length > 0) {
         for (let i = 0; i < descriptor.styles.length; i++) {
-          output += `\nimport "${id}?vue&type=style&index=${i}&lang.css"\n`
+          append(`\nimport "${id}?vue&type=style&index=${i}&lang.css"\n`)
         }
       }
 
       // scoped 标记
-      output += `\n__sfc__.__scopeId = "data-v-${scopeId}"\n`
+      append(`\n__sfc__.__scopeId = "data-v-${scopeId}"\n`)
 
       // HMR
       if (isDev) {
-        output += `
+        append(`
 __sfc__.__hmrId = ${JSON.stringify(scopeId)}
 if (typeof __VUE_HMR_RUNTIME__ !== 'undefined') {
   __VUE_HMR_RUNTIME__.createRecord(__sfc__.__hmrId, __sfc__)
@@ -220,10 +331,21 @@ if (import.meta.hot) {
     }
   })
 }
-`
+`)
       }
 
-      output += `\nexport default __sfc__\n`
+      append('\nexport default __sfc__\n')
+      const renderedOutput = outputNode.toStringWithSourceMap({ file: id })
+      const output = renderedOutput.code
+      const outputMap = hasMappedOutput
+        ? renderedOutput.map.toJSON()
+        : undefined
+      if (transformedSfc.map != null && outputMap == null) {
+        warnUnchainableMap(
+          { filename: id, environmentName, type: 'sfc' },
+          'the compiled SFC output contained no chainable mappings',
+        )
+      }
 
       // compileScript 对 lang="ts" 的 SFC 会在产物里保留 TS 注解 —— 不仅是用户脚本，
       // 连内联 render 也带（如 `(_ctx: any, _cache: any) =>`、`($event: any) => ...`）。
@@ -233,16 +355,22 @@ if (import.meta.hot) {
       const lang = descriptor.scriptSetup?.lang ?? descriptor.script?.lang
       if (lang === 'ts') {
         const transpiled = transformCode(`${id}.ts`, output, {
-          sourcemap: !!config.build.sourcemap,
+          sourcemap: wantsSourceMap,
           target: config.build.target,
         })
+        const transpiledMap = transpiled.map
+          ? JSON.parse(transpiled.map)
+          : undefined
         return {
           code: transpiled.code,
-          map: transpiled.map ? JSON.parse(transpiled.map) : undefined,
+          map: composeSourceMapChain(
+            [transpiledMap, outputMap],
+            { filename: id, environmentName, type: 'sfc' },
+          ),
         }
       }
 
-      return { code: output }
+      return { code: output, map: outputMap }
     },
 
     handleHotUpdate(ctx) {
@@ -264,10 +392,83 @@ async function applySourceTransform(
   transform: VueSfcSourceTransform | undefined,
   source: string,
   context: VueSfcTransformContext,
-): Promise<string> {
-  if (!transform) return source
+): Promise<{ code: string; map?: unknown }> {
+  if (!transform) return { code: source }
   const result = await transform(source, context)
-  return typeof result === 'string' ? result : result.code
+  return typeof result === 'string' ? { code: result } : result
+}
+
+function normalizeSourceMap(
+  map: unknown,
+  context: VueSfcTransformContext,
+): RawSourceMap | undefined {
+  if (map == null) return undefined
+  try {
+    const value = typeof map === 'string' ? JSON.parse(map) : map
+    if (
+      value &&
+      typeof value === 'object' &&
+      Array.isArray((value as RawSourceMap).sources) &&
+      Array.isArray((value as RawSourceMap).names) &&
+      typeof (value as RawSourceMap).mappings === 'string'
+    ) {
+      return value as RawSourceMap
+    }
+  } catch {
+    // Report through the debug channel below.
+  }
+  warnUnchainableMap(context, 'the provided map is not a valid source map')
+  return undefined
+}
+
+function composeSourceMapChain(
+  maps: unknown[],
+  context: VueSfcTransformContext,
+): RawSourceMap | undefined {
+  const pending = maps.filter((map) => map != null)
+  if (pending.length === 0) return undefined
+  let composed = normalizeSourceMap(pending.shift(), context)
+  for (const map of pending) {
+    const input = normalizeSourceMap(map, context)
+    if (!input) continue
+    if (!composed) {
+      composed = input
+      continue
+    }
+    try {
+      const consumer = new SourceMapConsumer(composed)
+      if (consumer.sources.length !== 1) {
+        warnUnchainableMap(
+          context,
+          'a generated map has multiple sources and cannot be chained safely',
+        )
+        continue
+      }
+      const generator = SourceMapGenerator.fromSourceMap(consumer)
+      generator.applySourceMap(
+        new SourceMapConsumer(input),
+        consumer.sources[0],
+      )
+      composed = generator.toJSON()
+    } catch (error) {
+      warnUnchainableMap(
+        context,
+        `source-map composition failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+  return composed
+}
+
+function warnUnchainableMap(
+  context: VueSfcTransformContext,
+  reason: string,
+): void {
+  debug?.(
+    `source map warning for ${context.filename} (${context.type}, ${context.environmentName}): ${reason}`,
+  )
 }
 
 function hashId(filename: string): string {
