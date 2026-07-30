@@ -279,11 +279,13 @@ export function vuePlugin(
           return
         }
         try {
+          // source-map-js accepts nested SourceNodes at runtime, but its bundled
+          // declaration incorrectly narrows SourceNode#add to string only.
           outputNode.add(
             SourceNode.fromStringWithSourceMap(
               fragment,
               new SourceMapConsumer(normalizedMap),
-            ),
+            ) as unknown as string,
           )
           hasMappedOutput = true
         } catch (error) {
