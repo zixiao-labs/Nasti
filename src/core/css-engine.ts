@@ -11,7 +11,11 @@
 // 压缩器是 Lightning CSS（守卫导入，可选依赖）—— 这是相对 Vite 默认
 // （PostCSS 转换器 + Lightning 压缩器）的有意分歧：纯 Rust、依赖更小。
 // 不可用时回退到保守的正则压缩。
-import type { ResolvedConfig } from '../types.js'
+import type {
+  EnvironmentCssMetadata,
+  EnvironmentCssModule,
+  ResolvedConfig,
+} from '../types.js'
 import { createDebugger } from './debug.js'
 
 const debug = createDebugger('nasti:css')
@@ -19,6 +23,10 @@ const debug = createDebugger('nasti:css')
 export interface CssEngine {
   /** 规范化模块 id → 编译后的 CSS 字符串 */
   styles: Map<string, string>
+  /** 规范化模块 id → 原始与编译后 CSS，供工具链直接消费。 */
+  modules: Map<string, EnvironmentCssModule>
+  /** chunk fileName → CSS 模块与最终文件所有权。 */
+  chunks: Map<string, { moduleIds: string[]; cssFileNames: string[] }>
   /** entry chunk 的 facadeModuleId → 抽出的 css 文件名（用于 HTML <link> 注入） */
   entryCss: Map<string, string[]>
   /** 全部已 emit 的 css 文件名（按 render 顺序） */
@@ -32,10 +40,30 @@ export interface CssEngine {
 export function createCssEngine(): CssEngine {
   return {
     styles: new Map(),
+    modules: new Map(),
+    chunks: new Map(),
     entryCss: new Map(),
     allCss: [],
     pendingSingle: [],
     singleFileName: null,
+  }
+}
+
+export function getCssMetadata(engine: CssEngine): EnvironmentCssMetadata {
+  return {
+    modules: Object.fromEntries(
+      [...engine.modules].map(([id, module]) => [id, { ...module }]),
+    ),
+    chunks: Object.fromEntries(
+      [...engine.chunks].map(([fileName, chunk]) => [
+        fileName,
+        {
+          fileName,
+          moduleIds: [...chunk.moduleIds],
+          cssFileNames: [...chunk.cssFileNames],
+        },
+      ]),
+    ),
   }
 }
 

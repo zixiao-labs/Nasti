@@ -48,19 +48,40 @@ export function cssPlugin(
       // 将 CSS 中的相对 url() 路径重写为绝对路径，确保打包后资源路径正确
       const rewritten = rewriteCssUrls(cssSource, file, config.root)
       const escaped = JSON.stringify(rewritten)
+      const normalizedId = normalizeCssModuleId(id)
+      const cssModule = { id: normalizedId, source: code, code: rewritten }
+      const map = config.build.sourcemap
+        ? {
+            version: 3,
+            sources: [id],
+            sourcesContent: [code],
+            names: [],
+            mappings: '',
+          }
+        : undefined
+      engine?.modules.set(normalizedId, cssModule)
+      this.environment?.setCssModule?.(cssModule)
 
       // ?inline：只要编译后的字符串，不注入、不抽取（dev/build 行为一致）
       if (query === 'inline') {
-        return { code: `export default ${escaped};\n`, moduleType: 'js' }
+        return { code: `export default ${escaped};\n`, map, moduleType: 'js' }
       }
 
       // server consumer（SSR dev/build、Electron main/preload）：无 DOM 环境，
       // 返回 CSS 字符串导出（SSR 可收集），真实 .css 产物由 client 环境负责
       if (consumer === 'server') {
-        return { code: `export default ${escaped};\n`, moduleType: 'js' }
+        return { code: `export default ${escaped};\n`, map, moduleType: 'js' }
       }
 
       if (config.command === 'serve') {
+        if (config.build.css.inject === false) {
+          return {
+            code: `export default ${escaped};\n`,
+            map,
+            moduleType: 'js',
+            moduleSideEffects: 'no-treeshake',
+          }
+        }
         // Dev 模式: 注入可热更新的 <style> 标签
         return {
           code: `
@@ -85,6 +106,7 @@ if (import.meta.hot) {
 
 export default css;
 `,
+          map,
           // bundled dev（DevEngine）下该模块会进 Rolldown：不标 js 会按 .css
           // 扩展名走 CSS 管线触发 #4271 报错；unbundled 中间件忽略此字段
           moduleType: 'js',
@@ -97,9 +119,10 @@ export default css;
       // 体积双份；`import css from './x.css'` 现在得到 ''，需要字符串请用
       // `?inline`，与 Vite 语义一致）。
       if (engine) {
-        engine.styles.set(normalizeCssModuleId(id), rewritten)
+        engine.styles.set(normalizedId, rewritten)
         return {
           code: `export default '';\n`,
+          map,
           moduleType: 'js',
           // 防止空 stub 被 tree-shake 出 chunk.moduleIds（css-post 靠它定位）
           moduleSideEffects: 'no-treeshake',
@@ -121,6 +144,7 @@ document.head.appendChild(style);
 
 export default css;
 `,
+        map,
         moduleType: 'js',
       }
     },

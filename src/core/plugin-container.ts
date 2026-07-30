@@ -103,6 +103,7 @@ export class PluginContainer {
 
   async transform(code: string, id: string): Promise<TransformResult> {
     let currentCode = code
+    let lastResult: Exclude<TransformResult, string | null | undefined> | undefined
     for (const plugin of this.plugins) {
       if (!plugin.transform) continue
       const result = await plugin.transform.call(this.ctx, currentCode, id)
@@ -111,9 +112,15 @@ export class PluginContainer {
         currentCode = result
       } else {
         currentCode = result.code
+        lastResult = result
       }
     }
-    return currentCode === code ? null : { code: currentCode }
+    return currentCode === code
+      ? null
+      : {
+          ...lastResult,
+          code: currentCode,
+        }
   }
 
   /** 完整的模块处理管道: resolveId → load → transform */

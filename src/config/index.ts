@@ -183,7 +183,11 @@ export async function resolveConfig(
     allowClearScreen: clearScreen,
     customLogger: merged.customLogger,
   })
-  const mergedBuild = { ...defaults.build, ...merged.build } as ResolvedConfig['build']
+  const mergedBuild = {
+    ...defaults.build,
+    ...merged.build,
+    css: { ...defaults.build.css, ...merged.build?.css },
+  } as ResolvedConfig['build']
   // cssMinify 未显式配置时跟随 minify
   if (merged.build?.cssMinify === undefined) {
     mergedBuild.cssMinify = !!mergedBuild.minify
@@ -251,7 +255,11 @@ export async function resolveConfig(
           alias: { ...resolved.resolve.alias, ...envOptions.resolve.alias },
         })
       }
-      if (envOptions.build) Object.assign(resolved.build, envOptions.build)
+      if (envOptions.build) {
+        const { css, ...environmentBuild } = envOptions.build
+        Object.assign(resolved.build, environmentBuild)
+        if (css) resolved.build.css = { ...resolved.build.css, ...css }
+      }
       resolved.environments.client = {
         consumer,
         buildEnabled: envOptions.buildEnabled ?? true,
@@ -265,6 +273,7 @@ export async function resolveConfig(
         // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
         resolve: resolved.resolve,
         build: resolved.build,
+        vue: { ...envOptions.vue },
       }
       continue
     }
@@ -278,6 +287,7 @@ export async function resolveConfig(
           ? path.resolve(root, envOptions.html)
           : undefined,
       driver: envOptions.driver,
+      vue: { ...envOptions.vue },
       resolve: {
         alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
         extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],
@@ -294,6 +304,7 @@ export async function resolveConfig(
       build: {
         ...resolved.build,
         ...envOptions.build,
+        css: { ...resolved.build.css, ...envOptions.build?.css },
         // 非 client 环境默认产出到 <outDir>/<envName>（如 dist/ssr），可显式覆盖
         outDir: envOptions.build?.outDir ?? path.join(resolved.build.outDir, name),
         // server 产物默认不压缩（可调试性优先，与 Vite SSR 默认一致），可显式覆盖

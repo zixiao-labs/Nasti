@@ -5,12 +5,14 @@
 // 过滤后的插件列表/PluginContainer/ModuleGraph/HotChannel。
 //
 // SSR、完整打包模式、多端/Electron 全部表达为 environment —— 这是其余
-// 2.0 特性共同依赖的主干。Phase 1 仅 client 环境有完整运行时，行为与
-// 1.x 逐字节一致（环境过滤默认全通过、容器构造仅多带 environment 引用）。
+// 2.0 特性共同依赖的主干。每个 client-consumer 环境拥有独立的 dev
+// transform/module graph/HMR 管线；server consumer 可由 module runner 或
+// 外部 driver 接管。
 import type {
   EnvironmentDriver,
   EnvironmentBuildMetadata,
   EnvironmentDriverContext,
+  EnvironmentCssModule,
   EnvironmentInstance,
   HotChannel,
   NastiPlugin,
@@ -54,6 +56,11 @@ export class NastiEnvironment implements EnvironmentInstance {
   private candidatePlugins: NastiPlugin[]
   private pluginApi: PluginApi
   private buildMetadata: EnvironmentBuildMetadata = {}
+  private cssModules = new Map<string, EnvironmentCssModule>()
+  private assetModules = new Map<string, string>()
+  private transformRequestHandler?: (
+    url: string,
+  ) => Promise<{ code: string; map?: unknown } | null>
   private initialized = false
 
   constructor(name: string, config: ResolvedConfig, init: NastiEnvironmentInit = {}) {
@@ -69,7 +76,7 @@ export class NastiEnvironment implements EnvironmentInstance {
     this.config = config
     this.options = options
     this.hot = init.hot ?? createNoopHotChannel()
-    this.moduleGraph = new ModuleGraph()
+    this.moduleGraph = new ModuleGraph(name)
     this.candidatePlugins = init.plugins ?? config.plugins
     this.pluginApi = init.pluginApi ?? getPluginApi(config)
   }
@@ -114,6 +121,46 @@ export class NastiEnvironment implements EnvironmentInstance {
       api: this.pluginApi,
       logger: this.config.logger,
     }
+  }
+
+  configureDevPipeline(
+    transformRequest: (url: string) => Promise<{ code: string; map?: unknown } | null>,
+  ): void {
+    this.transformRequestHandler = transformRequest
+  }
+
+  async transformRequest(url: string): Promise<{ code: string; map?: unknown } | null> {
+    if (!this.transformRequestHandler) {
+      throw new Error(
+        `[nasti] environment "${this.name}" does not have an initialized dev transform pipeline`,
+      )
+    }
+    return this.transformRequestHandler(url)
+  }
+
+  setCssModule(module: EnvironmentCssModule): void {
+    this.cssModules.set(module.id, { ...module })
+  }
+
+  getCssModule(id: string): EnvironmentCssModule | undefined {
+    const module = this.cssModules.get(id)
+    return module ? { ...module } : undefined
+  }
+
+  getCssModules(): Readonly<Record<string, EnvironmentCssModule>> {
+    return Object.freeze(
+      Object.fromEntries(
+        [...this.cssModules].map(([id, module]) => [id, { ...module }]),
+      ),
+    )
+  }
+
+  setAssetModule(id: string, fileName: string): void {
+    this.assetModules.set(id, fileName)
+  }
+
+  getAssetModules(): Readonly<Record<string, string>> {
+    return Object.freeze(Object.fromEntries(this.assetModules))
   }
 
   setBuildMetadata(metadata: EnvironmentBuildMetadata): void {

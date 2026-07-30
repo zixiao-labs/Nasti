@@ -23,7 +23,11 @@ import type {
 import { resolveConfig } from '../config/index.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { NastiEnvironment } from '../core/environment.js'
-import { createCssEngine, type CssEngine } from '../core/css-engine.js'
+import {
+  createCssEngine,
+  getCssMetadata,
+  type CssEngine,
+} from '../core/css-engine.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
@@ -101,7 +105,11 @@ export function getRolldownOptions(
   const inputOptions: InputOptions = {
     ...restInputOptions,
     input: entryPoints,
-    transform: { ...userTransform, define: mergedDefine },
+    transform: {
+      ...userTransform,
+      target: userTransform?.target ?? envOptions.build.target,
+      define: mergedDefine,
+    },
     plugins: rolldownPlugins as InputOptions['plugins'],
     // client/server consumer 都必须使用当前环境的 conditions/mainFields；Lynx
     // BG/MT 通常同为 client consumer，但仍可能声明不同的运行时条件。
@@ -130,7 +138,7 @@ export function getRolldownOptions(
   const outputOptions: OutputOptions = isServer
     ? {
         format: 'esm',
-        sourcemap: !!envOptions.build.sourcemap,
+        sourcemap: envOptions.build.sourcemap,
         minify: !!envOptions.build.minify,
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
@@ -140,7 +148,7 @@ export function getRolldownOptions(
       }
     : {
         format: 'esm',
-        sourcemap: !!envOptions.build.sourcemap,
+        sourcemap: envOptions.build.sourcemap,
         minify: !!envOptions.build.minify,
         entryFileNames: `${assetsDir}/[name].[hash].js`,
         chunkFileNames: `${assetsDir}/[name].[hash].js`,
@@ -232,12 +240,78 @@ function finalizeEnvironmentResult(
       return [name, normalized]
     }),
   )
+  const inferredMetadata = inferOutputMetadata(environment, result.output)
   return {
+    publicPath: environment.config.base,
+    ...inferredMetadata,
     ...metadata,
     ...result,
     output: result.output,
+    chunks: {
+      ...inferredMetadata.chunks,
+      ...metadata.chunks,
+      ...result.chunks,
+    },
+    assets: {
+      ...inferredMetadata.assets,
+      ...metadata.assets,
+      ...result.assets,
+    },
+    sourceMaps: {
+      ...inferredMetadata.sourceMaps,
+      ...metadata.sourceMaps,
+      ...result.sourceMaps,
+    },
     ...(Object.keys(normalizedEntries).length > 0 ? { entries: normalizedEntries } : {}),
   }
+}
+
+function inferOutputMetadata(
+  environment: NastiEnvironment,
+  output: EnvironmentBuildOutput[],
+): Pick<EnvironmentBuildResult, 'chunks' | 'assets' | 'sourceMaps'> {
+  const chunks: NonNullable<EnvironmentBuildResult['chunks']> = {}
+  const assets: NonNullable<EnvironmentBuildResult['assets']> = {}
+  const sourceMaps: NonNullable<EnvironmentBuildResult['sourceMaps']> = {}
+  const cssChunks = environment.getBuildMetadata().css?.chunks ?? {}
+  const assetModules = environment.getAssetModules()
+  const publicPath = environment.config.base
+
+  for (const artifact of output) {
+    const fileName = normalizeEnvironmentFileName(artifact.fileName)
+    if (artifact.map != null) sourceMaps[fileName] = artifact.map
+    if (artifact.type === 'chunk') {
+      const moduleIds = [...(artifact.moduleIds ?? [])]
+      chunks[fileName] = {
+        fileName,
+        name: artifact.name ?? fileName,
+        isEntry: !!artifact.isEntry,
+        isDynamicEntry: !!artifact.isDynamicEntry,
+        imports: [...(artifact.imports ?? [])],
+        dynamicImports: [...(artifact.dynamicImports ?? [])],
+        moduleIds,
+        css: [...(cssChunks[fileName]?.cssFileNames ?? [])],
+        assets: [
+          ...new Set(
+            moduleIds
+              .map((id) => assetModules[id])
+              .filter((asset): asset is string => !!asset),
+          ),
+        ],
+      }
+    } else if (artifact.type === 'asset') {
+      assets[fileName] = {
+        fileName,
+        names: [...(artifact.names ?? (artifact.name ? [artifact.name] : []))],
+        publicPath: joinPublicPath(publicPath, fileName),
+      }
+    }
+  }
+  return { chunks, assets, sourceMaps }
+}
+
+function joinPublicPath(base: string, fileName: string): string {
+  return `${base.endsWith('/') ? base : `${base}/`}${fileName.replace(/^\//, '')}`
 }
 
 function prepareBuildOutputDirectories(
@@ -351,6 +425,7 @@ function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvi
       if (!shouldTransform(id)) return null
       const result = transformCode(id, code, {
         sourcemap: !!environment.options.build.sourcemap,
+        target: environment.options.build.target,
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })
@@ -514,6 +589,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
     const bundle = await rolldown(inputOptions)
     const { output } = await bundle.write(outputOptions)
     await bundle.close()
+    clientEnv.setBuildMetadata({ css: getCssMetadata(cssEngine) })
 
     // 处理 HTML
     if (html) {
@@ -533,7 +609,9 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
       }
 
       // 注入抽取出的 CSS：entry chunk 的 css → 静态 <link rel="stylesheet">
-      processedHtml = injectCssLinks(processedHtml, cssEngine, config)
+      if (clientEnv.options.build.css.inject !== false) {
+        processedHtml = injectCssLinks(processedHtml, cssEngine, config)
+      }
 
       // 替换 script src 为打包后的路径（支持多入口）
       for (const chunk of output) {
@@ -586,9 +664,11 @@ async function buildServerEnvironment(
   const envOptions = config.environments[name]
   const logger = config.logger
 
+  const cssEngine = envOptions.consumer === 'client' ? createCssEngine() : undefined
   const pluginList = resolvePluginList(config, config.plugins, {
     consumer: envOptions.consumer,
     environmentName: name,
+    cssEngine,
   })
   const environment = new NastiEnvironment(name, config, {
     mode: 'build',
@@ -635,6 +715,7 @@ async function buildServerEnvironment(
   const bundle = await rolldown(inputOptions)
   const { output } = await bundle.write(outputOptions)
   await bundle.close()
+  if (cssEngine) environment.setBuildMetadata({ css: getCssMetadata(cssEngine) })
 
   logger.info(
     pc.dim(`  [${name}] `) +

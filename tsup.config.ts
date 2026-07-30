@@ -11,7 +11,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
-  target: 'node18',
+  target: 'node20',
   splitting: false,
   external: ['@vue/compiler-sfc'],
   define: {

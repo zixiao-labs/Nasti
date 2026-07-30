@@ -4,9 +4,14 @@ import type { ModuleNode, TransformResult } from '../types.js'
 import { removeTimestampQuery } from './url.js'
 
 export class ModuleGraph {
+  readonly environmentName: string
   private urlToModuleMap = new Map<string, ModuleNode>()
   private idToModuleMap = new Map<string, ModuleNode>()
   private fileToModulesMap = new Map<string, Set<ModuleNode>>()
+
+  constructor(environmentName = 'client') {
+    this.environmentName = environmentName
+  }
 
   getModuleByUrl(url: string): ModuleNode | undefined {
     return this.urlToModuleMap.get(removeTimestampQuery(url))
@@ -43,6 +48,7 @@ export class ModuleGraph {
       lastHMRTimestamp: 0,
       invalidationVersion: 0,
       isSelfAccepting: false,
+      environment: this.environmentName,
     }
     this.idToModuleMap.set(mod.id, mod)
     return mod

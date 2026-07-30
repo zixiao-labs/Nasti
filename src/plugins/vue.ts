@@ -1,6 +1,11 @@
 // 内置 Vue 插件 - SFC 编译 + Vue HMR
 import crypto from 'node:crypto'
-import type { NastiPlugin, ResolvedConfig } from '../types.js'
+import type {
+  NastiPlugin,
+  ResolvedConfig,
+  VueSfcSourceTransform,
+  VueSfcTransformContext,
+} from '../types.js'
 import { transformCode } from '../core/transformer.js'
 
 const VUE_FILE_RE = /\.vue$/
@@ -27,9 +32,13 @@ async function loadVueCompiler(): Promise<VueCompilerSfc | null> {
   }
 }
 
-export function vuePlugin(config: ResolvedConfig): NastiPlugin {
+export function vuePlugin(
+  config: ResolvedConfig,
+  environmentName = 'client',
+): NastiPlugin {
   const isDev = config.command === 'serve'
   const descriptorCache = new Map<string, any>()
+  const vueOptions = config.environments[environmentName]?.vue ?? {}
 
   return {
     name: 'nasti:vue',
@@ -60,8 +69,16 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
         // 直接请求子模块（如 dev 冷启动 / 缓存失效）时按需重新解析父 SFC
         try {
           const fs = await import('node:fs')
-          const source = fs.readFileSync(filePath, 'utf-8')
-          const parsed = sfc.parse(source, { filename: filePath })
+          const rawSource = fs.readFileSync(filePath, 'utf-8')
+          const source = await applySourceTransform(
+            vueOptions.transformSfc,
+            rawSource,
+            { filename: filePath, environmentName, type: 'sfc' },
+          )
+          const parsed = sfc.parse(source, {
+            ...vueOptions.parse,
+            filename: filePath,
+          })
           if (parsed.errors.length) return null
           descriptor = parsed.descriptor
           descriptorCache.set(filePath, descriptor)
@@ -75,8 +92,14 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
       if (!style) return null
 
       const scopeId = hashId(filePath)
+      const styleSource = await applySourceTransform(
+        vueOptions.transformStyle,
+        style.content,
+        { filename: filePath, environmentName, type: 'style', index },
+      )
       const result = await sfc.compileStyleAsync({
-        source: style.content,
+        ...vueOptions.style,
+        source: styleSource,
         filename: filePath,
         id: `data-v-${scopeId}`,
         scoped: style.scoped ?? false,
@@ -103,7 +126,15 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
       }
 
       // 解析 SFC
-      const { descriptor, errors } = sfc.parse(code, { filename: id })
+      code = await applySourceTransform(
+        vueOptions.transformSfc,
+        code,
+        { filename: id, environmentName, type: 'sfc' },
+      )
+      const { descriptor, errors } = sfc.parse(code, {
+        ...vueOptions.parse,
+        filename: id,
+      })
       if (errors.length) {
         console.error(`[nasti:vue] Parse error in ${id}:`, errors[0].message)
         return null
@@ -115,10 +146,12 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
       // 编译 script
       let scriptCode = ''
       if (descriptor.script || descriptor.scriptSetup) {
+        const inlineTemplate = vueOptions.script?.inlineTemplate !== false
         const compiled = sfc.compileScript(descriptor, {
+          ...vueOptions.script,
           id: scopeId,
           isProd: !isDev,
-          inlineTemplate: true,
+          inlineTemplate,
           // 让 compileScript 产出 `const __sfc__ = ...`（而非默认的 `export default {...}`）。
           // 否则下方追加的 `__sfc__.render` / `__sfc__.__scopeId` / HMR 记录会引用一个
           // 不存在的 `__sfc__`，并与 compileScript 自带的 `export default` 形成双重默认导出。
@@ -129,12 +162,25 @@ export function vuePlugin(config: ResolvedConfig): NastiPlugin {
 
       // 编译 template（如果没有 inline）
       let templateCode = ''
-      if (descriptor.template && !descriptor.scriptSetup) {
+      const scriptSetupIsInline =
+        !!descriptor.scriptSetup && vueOptions.script?.inlineTemplate !== false
+      if (descriptor.template && !scriptSetupIsInline) {
+        const templateSource = await applySourceTransform(
+          vueOptions.transformTemplate,
+          descriptor.template.content,
+          { filename: id, environmentName, type: 'template' },
+        )
+        const customCompilerOptions =
+          (vueOptions.template?.compilerOptions as Record<string, unknown> | undefined) ?? {}
         const compiled = sfc.compileTemplate({
-          source: descriptor.template.content,
+          ...vueOptions.template,
+          source: templateSource,
           filename: id,
           id: scopeId,
-          compilerOptions: { scopeId: `data-v-${scopeId}` },
+          compilerOptions: {
+            ...customCompilerOptions,
+            scopeId: `data-v-${scopeId}`,
+          },
         })
         templateCode = compiled.code
       }
@@ -186,8 +232,14 @@ if (import.meta.hot) {
       // （Rolldown 解析）都需要这一步，否则裸 TS 会直接触发解析错误。
       const lang = descriptor.scriptSetup?.lang ?? descriptor.script?.lang
       if (lang === 'ts') {
-        const transpiled = transformCode(`${id}.ts`, output, { sourcemap: false })
-        return { code: transpiled.code }
+        const transpiled = transformCode(`${id}.ts`, output, {
+          sourcemap: !!config.build.sourcemap,
+          target: config.build.target,
+        })
+        return {
+          code: transpiled.code,
+          map: transpiled.map ? JSON.parse(transpiled.map) : undefined,
+        }
       }
 
       return { code: output }
@@ -208,6 +260,15 @@ if (import.meta.hot) {
   }
 }
 
+async function applySourceTransform(
+  transform: VueSfcSourceTransform | undefined,
+  source: string,
+  context: VueSfcTransformContext,
+): Promise<string> {
+  if (!transform) return source
+  const result = await transform(source, context)
+  return typeof result === 'string' ? result : result.code
+}
 
 function hashId(filename: string): string {
   return crypto.createHash('sha256').update(filename).digest('hex').slice(0, 8)

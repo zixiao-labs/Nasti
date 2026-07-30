@@ -1,8 +1,8 @@
 // HotChannel - per-environment 热更通道（Environment API）
 //
 // 接口契约定义在 types.ts（含 invoke：fetchModule/getBuiltins/_skipFsCheck）。
-// Phase 1 实现面：client = 包装现有 ws 服务器；非 client = noop。
-// Phase 2 的 SSR module runner 经 setInvokeHandler 注册 RPC，不需要再改接口。
+// client-consumer 环境使用带环境名的共享 ws transport；非 client = noop。
+// SSR module runner 可经 setInvokeHandler 注册 RPC，不需要再改接口。
 import type {
   HotChannel,
   HotChannelInvokeHandlers,
@@ -11,7 +11,7 @@ import type {
   WebSocketServer,
 } from '../types.js'
 
-/** 非 client 环境的占位通道（SSR/edge 在 Phase 2 接上真实 transport） */
+/** 非 client 环境的占位通道（SSR/edge 可由 runner/driver 接上真实 transport） */
 export function createNoopHotChannel(): HotChannel {
   return {
     send() {},
@@ -24,16 +24,19 @@ export function createNoopHotChannel(): HotChannel {
 }
 
 /**
- * client 环境的 ws 通道：包装 server/ws.ts 的 WebSocketServer。
- * 事件监听与 invoke 在现有 ws 协议上预留（custom event 协议 Phase 2 扩展）。
+ * client-consumer 环境的 ws 通道：包装 server/ws.ts 的 WebSocketServer。
+ * 事件监听与 invoke 在现有 ws 协议上预留，payload 以 environment 字段分流。
  */
-export function createWsHotChannel(ws: WebSocketServer): HotChannel {
+export function createWsHotChannel(
+  ws: WebSocketServer,
+  environmentName = 'client',
+): HotChannel {
   const listeners = new Map<string, Set<HotChannelListener>>()
   let invokeHandlers: HotChannelInvokeHandlers | undefined
 
   return {
     send(payload: HmrPayload) {
-      ws.send(payload)
+      ws.send({ ...payload, environment: payload.environment ?? environmentName })
     },
     on(event, listener) {
       let set = listeners.get(event)
@@ -44,9 +47,8 @@ export function createWsHotChannel(ws: WebSocketServer): HotChannel {
       listeners.get(event)?.delete(listener)
     },
     listen() {},
-    close() {
-      ws.close()
-    },
+    // 多个 environment 共享底层 WebSocket server；它由 DevServer.close() 统一关闭。
+    close() {},
     setInvokeHandler(handlers) {
       invokeHandlers = handlers
       void invokeHandlers

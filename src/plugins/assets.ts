@@ -51,6 +51,12 @@ export function assetsPlugin(config: ResolvedConfig): NastiPlugin {
         const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 8)
         const basename = path.basename(file, ext)
         const hashedName = `${config.build.assetsDir}/${basename}.${hash}${ext}`
+        this.emitFile({
+          type: 'asset',
+          fileName: hashedName,
+          source: content,
+        })
+        this.environment?.setAssetModule(file, hashedName)
         return `export default ${JSON.stringify(config.base + hashedName)}`
       }
 

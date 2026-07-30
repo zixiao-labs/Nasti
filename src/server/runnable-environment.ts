@@ -127,6 +127,7 @@ export class NastiModuleRunner {
     if (shouldTransform(cleanId)) {
       const result = transformCode(cleanId, code, {
         sourcemap: false,
+        target: this.environment.options.build.target,
         jsxRuntime: 'automatic',
         jsxImportSource: this.config.framework === 'vue' ? 'vue' : 'react',
       })
@@ -135,8 +136,8 @@ export class NastiModuleRunner {
 
     code = replaceEnvInCode(code, this.envDefine)
 
-    // 实验 API 守卫（rc.13 标注 @deprecated "Only works for Vite" —— 即
-    // Vite 形态的 runner 约定，正是我们实现的形态；锁版本 + 守卫导入）
+    // 实验 API 守卫：module runner 契约无 semver 保证，精确锁定 Rolldown
+    // 版本并在运行时给出明确的兼容错误。
     let moduleRunnerTransform: typeof import('rolldown/experimental').moduleRunnerTransform
     try {
       ;({ moduleRunnerTransform } = await import('rolldown/experimental'))
