@@ -16,14 +16,22 @@ import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { type CssEngine, normalizeCssModuleId, minifyCss } from '../core/css-engine.js'
 
 /** 按 chunk 模块执行顺序聚合该 chunk 的 CSS（id 两侧都已规范化） */
-function collectChunkCss(chunk: RenderedChunk, engine: CssEngine): string {
+function collectChunkCss(
+  chunk: RenderedChunk,
+  engine: CssEngine,
+): { css: string; moduleIds: string[] } {
   const ids = chunk.moduleIds ?? Object.keys(chunk.modules)
   let css = ''
+  const moduleIds: string[] = []
   for (const id of ids) {
-    const styles = engine.styles.get(normalizeCssModuleId(id))
-    if (styles) css += styles + '\n'
+    const normalizedId = normalizeCssModuleId(id)
+    const styles = engine.styles.get(normalizedId)
+    if (styles) {
+      css += styles + '\n'
+      moduleIds.push(normalizedId)
+    }
   }
-  return css
+  return { css, moduleIds }
 }
 
 export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiPlugin {
@@ -32,8 +40,12 @@ export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiP
     enforce: 'post',
 
     async renderChunk(code, chunk) {
-      const css = collectChunkCss(chunk, engine)
+      const { css, moduleIds } = collectChunkCss(chunk, engine)
       if (!css) return null
+      const ownership = { moduleIds, cssFileNames: [] as string[] }
+      engine.chunks.set(chunk.fileName, ownership)
+
+      if (config.build.css.emit === false) return null
 
       // 单文件模式：跨 chunk 累积，generateBundle 一次性 emit
       if (!config.build.cssCodeSplit) {
@@ -49,6 +61,7 @@ export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiP
       })
       const fileName = this.getFileName(ref)
       engine.allCss.push(fileName)
+      ownership.cssFileNames.push(fileName)
 
       if (chunk.isEntry) {
         const key = chunk.facadeModuleId ?? chunk.name
@@ -59,6 +72,8 @@ export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiP
       }
 
       // 动态 chunk：运行时注入 <link>（幂等，data-nasti-css 标记去重）
+      if (config.build.css.inject === false) return null
+
       const href = JSON.stringify(config.base + fileName)
       const snippet =
         `\n;(function(){try{var d=document,h=${href};` +
@@ -70,7 +85,7 @@ export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiP
 
     augmentChunkHash(chunk) {
       // CSS 内容变 → JS chunk hash 变（动态 chunk 的注入 URL、缓存失效正确性）
-      const css = collectChunkCss(chunk, engine)
+      const { css } = collectChunkCss(chunk, engine)
       return css || undefined
     },
 
@@ -82,6 +97,9 @@ export function cssPostPlugin(config: ResolvedConfig, engine: CssEngine): NastiP
       const fileName = this.getFileName(ref)
       engine.singleFileName = fileName
       engine.allCss.push(fileName)
+      for (const ownership of engine.chunks.values()) {
+        if (ownership.moduleIds.length > 0) ownership.cssFileNames.push(fileName)
+      }
     },
   }
 }

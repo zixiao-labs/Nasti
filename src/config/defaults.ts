@@ -25,7 +25,10 @@ const defaultBuild: Required<BuildConfig> = {
   target: 'es2022',
   rolldownOptions: {},
   emptyOutDir: true,
-  css: {},
+  css: {
+    inject: true,
+    emit: true,
+  },
   reportCompressedSize: true,
   chunkSizeWarningLimit: 500,
   cssCodeSplit: true,

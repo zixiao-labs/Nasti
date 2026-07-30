@@ -47,7 +47,9 @@ export function resolvePluginList(
 
   return [
     // vuePlugin 排最前（enforce: 'pre' 语义）：.vue 先编译成 JS 再走后续管道
-    ...(config.framework === 'vue' ? [vuePlugin(pluginConfig)] : []),
+    ...(config.framework === 'vue'
+      ? [vuePlugin(pluginConfig, opts.environmentName ?? 'client')]
+      : []),
     resolvePlugin(pluginConfig),
     cssPlugin(pluginConfig, opts.cssEngine, consumer),
     assetsPlugin(pluginConfig),

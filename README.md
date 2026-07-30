@@ -31,6 +31,8 @@
 
 ## Quick Start
 
+Requires Node.js `^20.19.0` or `>=22.12.0`.
+
 ```bash
 # 安装
 npm install -D @nasti-toolchain/nasti
@@ -323,6 +325,17 @@ export default defineConfig({
       consumer: 'client',
       entry: 'src/index.ts',
       resolve: { conditions: ['lynx-main-thread', 'browser', 'import'] },
+      build: {
+        target: 'es2019',
+        // 保留 CSS 模块图与 chunk 所有权，但不生成浏览器副作用/文件。
+        css: { inject: false, emit: false },
+      },
+      vue: {
+        template: { compilerOptions: { whitespace: 'condense' } },
+        transformTemplate(source, context) {
+          return transformLynxTemplate(source, context.environmentName)
+        },
+      },
     },
   },
   plugins: [pluginVueLynxNative()],
@@ -334,11 +347,28 @@ Environment API 是 `conditionNames` 和 `mainFields` 的唯一高层配置入�
 top-level `resolve`）。这些值会无条件覆盖
 `build.rolldownOptions.resolve.conditionNames` / `mainFields` 中的对应底层选项。
 
-在生产构建的 bundle/finalizer 相关钩子（如 `generateBundle`、`buildEnd`、
-`closeBundle`）中，`this.environment` 会准确指向当前 BG/MT 环境。unbundled
-dev 调用路径可能不提供该对象，开发期插件不得依赖 `this.environment`；应使用
-Environment API 的显式环境参数。插件可登记结构化 manifest，并在 app 级
-finalizer 中直接查询 entry/artifact，最后写出聚合 bundle：
+生产与 dev 插件钩子的 `this.environment` 都会准确指向当前 BG/MT 环境。
+每个 client-consumer 环境拥有独立的 module graph、transform 缓存和命名 HMR
+通道；工具链可以调用 `server.transformEnvironmentRequest(name, url)`（或
+`server.environments[name].transformRequest(url)`）取得特定环境的转换结果。
+`handleHotUpdateApp` 在一个文件完成所有环境的失效与重转后只调用一次：
+
+```ts
+const pluginVueLynxNative = () => ({
+  name: 'vue-lynx:native',
+
+  async handleHotUpdateApp({ environments }) {
+    for (const [name, update] of Object.entries(environments)) {
+      await reencodeAffectedSections(name, update.transformed)
+    }
+  },
+})
+```
+
+CSS 原文/转换结果可从 `environment.getCssModule(id)` /
+`environment.getCssModules()` 读取，无需解析浏览器 `<style>` 注入代码。
+生产插件还可登记结构化 manifest，并在 app 级 finalizer 中直接查询
+entry、chunk、CSS、asset 和 source map，最后写出聚合 bundle：
 
 ```ts
 const pluginVueLynxNative = () => ({
@@ -365,8 +395,11 @@ const pluginVueLynxNative = () => ({
 ```
 
 `build()` 的 `environmentResults` 会包含原生环境自动推导的 `entries`、插件登记的
-`manifest/stats` 及完整 `output`；app 级产物同时出现在 `BuildResult.appOutput`。
-这些 API 只负责双线程编排与聚合，Vue SFC/worklet、Lynx CSS 和 encoder 由后续工具链插件实现。
+`manifest/stats`、`chunks/assets/css/sourceMaps` 及完整 `output`；对应的
+`BuildAppContext.getChunk/getCss/getSourceMap/resolvePublicPath` 可跨环境关联初始与
+lazy chunk。app 级产物同时出现在 `BuildResult.appOutput`。高层
+`environments.<name>.build.target` 会同时应用于 OXC 的 TS/JSX 转换和 Rolldown
+的最终输出，无需再设置底层 `rolldownOptions.transform.target`。
 
 ## Monaco Editor 支持
 

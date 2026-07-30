@@ -103,7 +103,9 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
         const content = fs.readFileSync(id, 'utf-8')
         return `export default ${content}`
       }
-      return fs.readFileSync(id, 'utf-8')
+      // 其余真实文件留给后续专用 load 插件（assets / Vue virtual blocks）；
+      // 无插件接管时由 Rolldown 或 dev middleware 的文件系统 loader 读取。
+      return null
     },
   }
 }

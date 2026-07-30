@@ -12,6 +12,8 @@ const ASSET_EXTENSIONS = new Set([
 ])
 
 export function assetsPlugin(config: ResolvedConfig): NastiPlugin {
+  const emittedAssets = new Set<string>()
+
   return {
     name: 'nasti:assets',
 
@@ -51,6 +53,19 @@ export function assetsPlugin(config: ResolvedConfig): NastiPlugin {
         const hash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 8)
         const basename = path.basename(file, ext)
         const hashedName = `${config.build.assetsDir}/${basename}.${hash}${ext}`
+        const environment = this.environment
+        if (!environment) {
+          throw new Error('[nasti:assets] build environment is not initialized')
+        }
+        if (!emittedAssets.has(hashedName)) {
+          this.emitFile({
+            type: 'asset',
+            fileName: hashedName,
+            source: content,
+          })
+          emittedAssets.add(hashedName)
+        }
+        environment.setAssetModule(file, hashedName)
         return `export default ${JSON.stringify(config.base + hashedName)}`
       }
 

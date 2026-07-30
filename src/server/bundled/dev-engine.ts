@@ -2,23 +2,22 @@
 //
 // `experimental.bundledDev`（CLI `--bundle`）把 unbundled 的 transform+sirv
 // 管线换成长驻 Rolldown DevEngine：整体打包 client 环境，产物存内存 Map
-//（**非 memfs** —— rc.13 native 构建下 memfs 运行时为 undefined），经
+//（**非 memfs**，避免 native / WASM binding 行为差异），经
 // memory-files 中间件服务；HMR 由 onHmrUpdates 的 Patch/FullReload 驱动。
 //
 // 客户端运行时：**复用 rolldown 内置的 DefaultDevRuntime**（不传
-// devMode.implement —— rc.13 下 implement 会替换整个 runtime 模块，包括
+// devMode.implement 会替换整个 runtime 模块，包括
 // __toESM 等 scope-hoist helper，自带成本远高于收益）。服务端讲它的协议：
 //   server→client: {type:'connected'} / {type:'hmr:update', path, url} /
 //                  {type:'hmr:reload'}
-//   client→server: {type:'hmr:module-registered', modules} /
-//                  {type:'hmr:invalidate', moduleId}
+//   client→server: {type:'hmr:invalidate', moduleId}
 //   ws 连接带 ?clientId=<uuid>（runtime 生成，多 tab 各自独立）
 //
-// 懒编译端点：rc.13 的 lazy stub **硬编码** `/@vite/lazy?id=&clientId=`
+// 懒编译端点：DevEngine 的 lazy stub 使用 `/@vite/lazy?id=&clientId=`
 //（Vite 专属约定）—— 按已安装版本编码，同时也接受 /@nasti/lazy。
 //
 // React Fast Refresh：复用 rolldown 原生 `viteReactRefreshWrapperPlugin`
-//（计划 §2.5 ✓核实）。契约（经 rc.13 探针验证）：
+//（计划 §2.5 ✓核实）。契约（由版本锁定与 smoke test 保护）：
 //   1. wrapper 在插件 transform 阶段看到 **已含 `$RefreshReg$(` 的代码**才激活
 //      → refresh 注册转换必须在它之前的 JS 插件里完成（input 级 transform.jsx
 //      在插件链之后才跑，wrapper 看不到）—— createBundledOxcRefreshPlugin。
@@ -36,6 +35,7 @@ import crypto from 'node:crypto'
 import { WebSocketServer as WsServer, type WebSocket } from 'ws'
 import pc from 'picocolors'
 import type { IncomingMessage, ServerResponse, Server as HttpServer } from 'node:http'
+import type { BindingClientHmrUpdate } from 'rolldown/experimental'
 import type { ResolvedConfig } from '../../types.js'
 import type { NastiEnvironment } from '../../core/environment.js'
 import {
@@ -64,7 +64,7 @@ const MIME_TYPES: Record<string, string> = {
   '.wasm': 'application/wasm',
 }
 
-/** 内存产物存储（普通 Map —— rc.13 native 构建无 memfs，Vite MemoryFiles 同款做法） */
+/** 内存产物存储（普通 Map，Vite MemoryFiles 同款做法） */
 class MemoryFiles {
   private files = new Map<string, { content: string | Uint8Array; etag: string }>()
 
@@ -114,7 +114,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
   } catch (err: any) {
     throw new Error(
       `[nasti] experimental.bundledDev requires rolldown's experimental dev() API ` +
-        `(locked to the installed rc; got: ${err.message}). ` +
+        `(locked version is incompatible; got: ${err.message}). ` +
         `Remove --bundle / experimental.bundledDev to use the default unbundled dev server.`,
     )
   }
@@ -178,13 +178,11 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
   }
 
   // HMR 由 DevEngine 内置 watcher 独占驱动（onHmrUpdates）。
-  // ⚠️ 不要用 engine.invalidate(file) 显式失效：rc.13 下一旦有客户端
-  // registerModules 过，invalidate 必定 panic（hmr_stage.rs:100
-  // "Not found modules for file"，任意路径格式、纯 rolldown 最小复现同样炸），
-  // 且 panic 杀死 tokio worker 后内置 watcher 的更新处理也会被毒化 ——
-  // 这正是早期版本误判"内置 watcher 嵌入后不触发"的原因。
-  type ClientUpdates = Awaited<ReturnType<import('rolldown/experimental').DevEngine['invalidate']>>
-  async function processUpdates(updates: ClientUpdates, changedFiles: string[]): Promise<void> {
+  // DevEngine 1.2+ 由内置 watcher 驱动，手动 invalidate API 已移除。
+  async function processUpdates(
+    updates: BindingClientHmrUpdate[],
+    changedFiles: string[],
+  ): Promise<void> {
     let needsLatestOutput = false
     for (const { clientId, update } of updates) {
       if (update.type === 'Noop') continue
@@ -243,7 +241,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     },
     {
       watch: { skipWrite: true },
-      rebuildStrategy: 'auto',
+      rebuildStrategy: 'never',
       onOutput(result) {
         if (result instanceof Error) {
           logger.error(pc.red(`[bundled] build error: ${result.message}`), { error: result })
@@ -261,6 +259,12 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
           }
         }
         debug?.(`bundle output refreshed (${result.output.length} files)`)
+      },
+      onAdditionalAssets(result) {
+        for (const file of result.output) {
+          const content = file.type === 'chunk' ? file.code : (file as any).source
+          if (content != null) memoryFiles.set(file.fileName, content)
+        }
       },
       async onHmrUpdates(result) {
         if (result instanceof Error) {
@@ -292,14 +296,23 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     wss.handleUpgrade(req, socket, head, (ws) => {
       bundledClients.set(clientId, ws)
       debug?.(`bundled client connected: ${clientId}`)
-      ws.send(JSON.stringify({ type: 'connected' }))
+      void engine
+        .registerClient(clientId)
+        .then(async () => {
+          // 入口响应在 runtime 建立 WS 前已经完成；连接后补记初始 payload。
+          for (const fileName of entryFileNames.values()) {
+            await engine.notifyPayloadDelivered(fileName)
+          }
+          ws.send(JSON.stringify({ type: 'connected' }))
+        })
+        .catch((err: any) => {
+          debug?.(`registerClient failed for ${clientId}: ${err?.message ?? err}`)
+          ws.close()
+        })
       ws.on('message', async (raw) => {
         try {
           const msg = JSON.parse(String(raw))
-          if (msg.type === 'hmr:module-registered' && Array.isArray(msg.modules)) {
-            await engine.registerModules(clientId, msg.modules)
-            debug?.(`registered ${msg.modules.length} modules for ${clientId}`)
-          } else if (msg.type === 'hmr:invalidate') {
+          if (msg.type === 'hmr:invalidate') {
             // import.meta.hot.invalidate：保守处理为整页刷新
             scheduleFullReload()
           }
@@ -323,7 +336,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
       const url = new URL(rawUrl, 'http://localhost')
       const pathname = decodeURIComponent(url.pathname)
 
-      // 懒编译（rc.13 stub 硬编码 /@vite/lazy；/@nasti/lazy 同义）
+      // 懒编译（DevEngine stub 使用 /@vite/lazy；/@nasti/lazy 同义）
       if (pathname === '/@vite/lazy' || pathname === '/@nasti/lazy') {
         const id = url.searchParams.get('id')
         const clientId = url.searchParams.get('clientId')
@@ -332,10 +345,20 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
           res.end('// [nasti] lazy endpoint requires id & clientId')
           return
         }
-        const code = await engine.compileEntry(id, clientId)
+        const output = await engine.compileEntry(id, clientId)
+        if (output.sourcemap && output.sourcemapFilename) {
+          memoryFiles.set(output.sourcemapFilename, output.sourcemap)
+        }
+        res.once('finish', () => {
+          void engine
+            .notifyPayloadDelivered(output.filename)
+            .catch((err: any) =>
+              debug?.(`notifyPayloadDelivered failed: ${err?.message ?? err}`),
+            )
+        })
         res.setHeader('Content-Type', 'application/javascript')
         res.setHeader('Cache-Control', 'no-store')
-        res.end(code + '\n;export {}')
+        res.end(output.code + '\n;export {}')
         return
       }
 
@@ -360,6 +383,13 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
         res.setHeader('ETag', hit.etag)
         res.setHeader('Content-Type', MIME_TYPES[path.extname(fileName)] ?? 'application/octet-stream')
         res.setHeader('Cache-Control', 'no-cache')
+        res.once('finish', () => {
+          void engine
+            .notifyPayloadDelivered(fileName)
+            .catch((err: any) =>
+              debug?.(`notifyPayloadDelivered failed: ${err?.message ?? err}`),
+            )
+        })
         res.end(hit.content)
         return
       }
@@ -396,14 +426,12 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
 // ── React Fast Refresh（bundled 模式三件套）────────────────────────────────
 
 /**
- * 剥掉 nasti:resolve 的兜底 load 钩子（仅 bundled 模式）。
+ * 剥掉 nasti:resolve 的文件 load 钩子（仅 bundled 模式）。
  *
- * rc.13 DevEngine 的文件监听只注册**原生加载过**的模块路径 —— 模块一旦由
- * 插件 load 提供内容，就不进 watch 列表。nasti:resolve 的 load 是
- * "存在即读盘"的 catch-all（unbundled PluginContainer 必需 —— 那条管线
- * 没有原生加载器），进了 DevEngine 会接管**所有**文件模块，watch 列表
- * 清空、onHmrUpdates 永不触发（经 probe 二分定位：resolveId 无害，load 致死）。
- * Rolldown 原生加载本就覆盖读盘 + JSON，bundled 模式下直接剥掉。
+ * DevEngine 的文件监听只注册**原生加载过**的模块路径 —— 模块一旦由
+ * 插件 load 提供内容，就不进 watch 列表。nasti:resolve 目前只包装 JSON，
+ * 但 Rolldown 原生加载已经覆盖这一能力；为确保这些文件仍由 DevEngine
+ * 原生读取和监听，bundled 模式下继续剥掉该钩子。
  * 同理：用户插件的 catch-all load 也会让对应文件失去 HMR —— 文档已注记。
  */
 function stripCatchAllLoad(plugins: unknown[]): unknown[] {
@@ -511,7 +539,7 @@ export const __hmr_import = (module) => import(/* @vite-ignore */ module);
 /**
  * bundle 内的 refresh runtime 虚拟模块 + 入口 preamble 注入。
  * `/@react-refresh` 保留**字面 id**（不映射 \0 前缀）：原生 wrapper 插件自带
- * 该 id 的 resolveId（原样返回且先于一切 JS resolveId 执行，rc.13 探针验证），
+ * 该 id 的 resolveId（原样返回且先于一切 JS resolveId 执行，版本 smoke test 验证），
  * 因此只能在 load 阶段按字面 id 提供内容 —— 与 @vitejs/plugin-react 的
  * `load: { filter: exactRegex('/@react-refresh') }` 同款做法。
  */
@@ -545,7 +573,7 @@ function createReactRefreshRuntimePlugin(entryPoints: string[]) {
  * .jsx/.tsx 的 OXC refresh 注册转换（$RefreshReg$/$RefreshSig$ 插入）。
  * 必须以 JS 插件形式跑在 wrapper **之前** —— input 级 `transform.jsx` 在插件链
  * 之后才执行，wrapper 的内容过滤（`$RefreshReg$(`）会看不到而静默跳过
- *（rc.13 探针验证）。node_modules 交给 rolldown 原生转换。
+ *（版本 smoke test 验证）。node_modules 交给 rolldown 原生转换。
  */
 function createBundledOxcRefreshPlugin() {
   return {

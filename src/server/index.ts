@@ -17,10 +17,15 @@ import { NastiEnvironment } from '../core/environment.js'
 import { createWsHotChannel } from '../core/hot-channel.js'
 import { printServerUrls } from '../core/logger.js'
 import { createWebSocketServer } from './ws.js'
-import { transformMiddleware } from './middleware.js'
+import {
+  transformMiddleware,
+  transformRequest as runTransformRequest,
+  type TransformMiddlewareContext,
+} from './middleware.js'
 import { handleFileChange } from './hmr.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { getPluginApi } from '../core/plugin-api.js'
+import { buildEnvDefine, loadEnv, ssrDefineOverrides } from '../core/env.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
@@ -43,7 +48,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   // 容器在首次使用（ssrLoadModule）时初始化 —— 生命周期钩子默认 client 单次触发。
   const pluginApi = getPluginApi(config)
   const clientEnv = new NastiEnvironment('client', config, {
-    hot: createWsHotChannel(ws),
+    hot: createWsHotChannel(ws, 'client'),
     mode: 'dev',
     plugins: allPlugins,
     pluginApi,
@@ -58,13 +63,48 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       environmentName: name,
     })
     environments[name] = new NastiEnvironment(name, config, {
+      hot:
+        consumer === 'client'
+          ? createWsHotChannel(ws, name)
+          : undefined,
       mode: 'dev',
       plugins: envPlugins,
       pluginApi,
     })
   }
   for (const [name, environment] of Object.entries(environments)) {
-    if (name !== 'client' && environment.options.driver) await environment.init()
+    if (
+      name === 'client' ||
+      environment.consumer === 'client' ||
+      environment.options.driver
+    ) {
+      await environment.init()
+    }
+  }
+
+  const transformContexts = new Map<string, TransformMiddlewareContext>()
+  for (const environment of Object.values(environments)) {
+    if (environment.consumer !== 'client' || environment.driver) continue
+    const environmentConfig: ResolvedConfig = {
+      ...configWithPlugins,
+      resolve: environment.options.resolve,
+      build: environment.options.build,
+      plugins: environment.plugins,
+    }
+    const context: TransformMiddlewareContext = {
+      config: environmentConfig,
+      pluginContainer: environment.pluginContainer!,
+      moduleGraph: environment.moduleGraph,
+      environment,
+      envDefine: buildEnvDefine(
+        loadEnv(environmentConfig.mode, environmentConfig.root, environmentConfig.envPrefix),
+        environmentConfig.mode,
+        ssrDefineOverrides(environment.consumer),
+      ),
+      onPrune: (paths) => environment.hot.send({ type: 'prune', paths }),
+    }
+    transformContexts.set(environment.name, context)
+    environment.configureDevPipeline((url) => runTransformRequest(url, context))
   }
 
   // SSR module runner（懒初始化：仅在 ssrLoadModule 首次调用时建容器/runner）
@@ -82,7 +122,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   }
 
   const moduleGraph = clientEnv.moduleGraph
-  const pluginContainer = clientEnv.pluginContainer!
 
   // ── 完整打包模式（opt-in，experimental.bundledDev / --bundle）──────────
   // DevEngine 整体打包 client 环境，产物从内存服务；中间件注册在
@@ -125,6 +164,16 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   let server: DevServer
   const environmentServices: Record<string, EnvironmentServeResult> = {}
   let environmentDriversStarted = false
+  let devPipelinesStarted = false
+
+  const startDevPipelines = async () => {
+    if (devPipelinesStarted) return
+    devPipelinesStarted = true
+    for (const environment of Object.values(environments)) {
+      if (!transformContexts.has(environment.name)) continue
+      await environment.pluginContainer!.buildStart()
+    }
+  }
 
   const logCloseError = (target: string, error: unknown) => {
     const normalized = error instanceof Error ? error : new Error(String(error))
@@ -188,15 +237,67 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     }
   }
 
+  const updateClientEnvironments = async (file: string) => {
+    const timestamp = Date.now()
+    const results: Record<string, NonNullable<Awaited<ReturnType<typeof handleFileChange>>>> = {}
+    for (const environment of Object.values(environments)) {
+      if (environment.consumer !== 'client' || environment.driver) continue
+      try {
+        const result = await handleFileChange(file, server, environment.name, timestamp)
+        if (result) results[environment.name] = result
+      } catch (error) {
+        const normalized = error instanceof Error ? error : new Error(String(error))
+        logger.error(
+          `[nasti] HMR failed for environment "${environment.name}": ${normalized.message}`,
+          { error: normalized },
+        )
+        try {
+          environment.hot.send({
+            type: 'error',
+            err: { message: normalized.message, stack: normalized.stack },
+          })
+        } catch (channelError) {
+          const channelFailure =
+            channelError instanceof Error
+              ? channelError
+              : new Error(String(channelError))
+          logger.error(
+            `[nasti] failed to deliver HMR error to environment "${environment.name}"`,
+            { error: channelFailure },
+          )
+        }
+      }
+    }
+    if (Object.keys(results).length === 0) return
+    const context = {
+      file,
+      timestamp,
+      environments: Object.freeze({ ...results }),
+      server,
+    }
+    for (const plugin of config.plugins) {
+      await plugin.handleHotUpdateApp?.(context)
+    }
+  }
+
+  const queueClientEnvironmentUpdate = (file: string) => {
+    void updateClientEnvironments(file).catch((error) => {
+      const normalized = error instanceof Error ? error : new Error(String(error))
+      logger.error(`[nasti] multi-environment HMR failed: ${normalized.message}`, {
+        error: normalized,
+      })
+    })
+  }
+
   watcher.on('change', (file: string) => {
     ssrRunner?.invalidateFile(file)
-    handleFileChange(file, server)
+    queueClientEnvironmentUpdate(file)
     notifyEnvironmentDrivers(file, 'change')
   })
 
   watcher.on('add', (file: string) => {
     ssrRunner?.invalidateFile(file)
-    handleFileChange(file, server)
+    queueClientEnvironmentUpdate(file)
     notifyEnvironmentDrivers(file, 'add')
   })
 
@@ -218,7 +319,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       const finalPort = port ?? config.server.port
       const host = config.server.host === true ? '0.0.0.0' : (config.server.host as string)
 
-      await pluginContainer.buildStart()
+      await startDevPipelines()
       await startEnvironmentDrivers()
 
       return new Promise((resolve, reject) => {
@@ -267,13 +368,15 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     },
 
     async transformRequest(url: string) {
-      const { transformRequest } = await import('./middleware.js')
-      return transformRequest(url, {
-        config: configWithPlugins,
-        pluginContainer,
-        moduleGraph,
-        onPrune: (paths) => ws.send({ type: 'prune', paths }),
-      })
+      return clientEnv.transformRequest(url)
+    },
+
+    async transformEnvironmentRequest(environmentName: string, url: string) {
+      const environment = environments[environmentName]
+      if (!environment) {
+        throw new Error(`[nasti] unknown dev environment "${environmentName}"`)
+      }
+      return environment.transformRequest(url)
     },
 
     async ssrLoadModule(url: string) {
@@ -282,7 +385,12 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     },
 
     async close() {
-      await pluginContainer.buildEnd()
+      if (devPipelinesStarted) {
+        for (const environment of Object.values(environments).reverse()) {
+          if (!transformContexts.has(environment.name)) continue
+          await environment.pluginContainer!.buildEnd()
+        }
+      }
       await bundledServer?.close()
       let environmentCloseFailed = false
       let firstEnvironmentCloseError: unknown
@@ -335,12 +443,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   }
 
   // 外部环境驱动中间件优先于 Nasti 的转换和静态文件服务。
-  app.use(transformMiddleware({
-    config: configWithPlugins,
-    pluginContainer,
-    moduleGraph,
-    onPrune: (paths) => ws.send({ type: 'prune', paths }),
-  }))
+  app.use(transformMiddleware(transformContexts.get('client')!))
 
   const publicDir = path.resolve(config.root, 'public')
   app.use(sirv(publicDir, { dev: true, etag: true }))

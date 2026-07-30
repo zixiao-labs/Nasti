@@ -183,7 +183,11 @@ export async function resolveConfig(
     allowClearScreen: clearScreen,
     customLogger: merged.customLogger,
   })
-  const mergedBuild = { ...defaults.build, ...merged.build } as ResolvedConfig['build']
+  const mergedBuild = {
+    ...defaults.build,
+    ...merged.build,
+    css: { ...defaults.build.css, ...merged.build?.css },
+  } as ResolvedConfig['build']
   // cssMinify 未显式配置时跟随 minify
   if (merged.build?.cssMinify === undefined) {
     mergedBuild.cssMinify = !!mergedBuild.minify
@@ -226,11 +230,17 @@ export async function resolveConfig(
   // ── Environment API：解析 environments map（默认 client + ssr）──────────
   // client 与 top-level resolve/build 精确镜像（同引用）；其余环境按 consumer
   // 取 per-consumer resolve 默认值。configEnvironment 钩子在最终化前调用。
-  const userEnvironments: Record<string, EnvironmentOptions> = {
+  const rawUserEnvironments: Record<string, EnvironmentOptions> = {
     client: {},
     ssr: {},
     ...(merged.environments ?? {}),
   }
+  const userEnvironments = Object.fromEntries(
+    Object.entries(rawUserEnvironments).map(([name, options]) => [
+      name,
+      deepMerge({}, options),
+    ]),
+  ) as Record<string, EnvironmentOptions>
   for (const [name, envOptions] of Object.entries(userEnvironments)) {
     for (const plugin of rawPlugins) {
       if (plugin.configEnvironment) {
@@ -242,6 +252,7 @@ export async function resolveConfig(
   for (const [name, envOptions] of Object.entries(userEnvironments)) {
     const consumer: 'client' | 'server' =
       envOptions.consumer ?? (name === 'client' ? 'client' : 'server')
+    const vueOptions = deepMerge({}, envOptions.vue ?? {})
 
     if (name === 'client') {
       // 用户对 environments.client 的覆盖写回 top-level（镜像语义：二者是同一份）
@@ -251,7 +262,11 @@ export async function resolveConfig(
           alias: { ...resolved.resolve.alias, ...envOptions.resolve.alias },
         })
       }
-      if (envOptions.build) Object.assign(resolved.build, envOptions.build)
+      if (envOptions.build) {
+        const { css, ...environmentBuild } = envOptions.build
+        Object.assign(resolved.build, environmentBuild)
+        if (css) resolved.build.css = { ...resolved.build.css, ...css }
+      }
       resolved.environments.client = {
         consumer,
         buildEnabled: envOptions.buildEnabled ?? true,
@@ -265,6 +280,7 @@ export async function resolveConfig(
         // 同引用 —— 精确镜像（assertClientEnvironmentMirror 校验）
         resolve: resolved.resolve,
         build: resolved.build,
+        vue: vueOptions,
       }
       continue
     }
@@ -278,6 +294,7 @@ export async function resolveConfig(
           ? path.resolve(root, envOptions.html)
           : undefined,
       driver: envOptions.driver,
+      vue: vueOptions,
       resolve: {
         alias: { ...resolved.resolve.alias, ...envOptions.resolve?.alias },
         extensions: envOptions.resolve?.extensions ?? [...resolved.resolve.extensions],
@@ -294,6 +311,7 @@ export async function resolveConfig(
       build: {
         ...resolved.build,
         ...envOptions.build,
+        css: { ...resolved.build.css, ...envOptions.build?.css },
         // 非 client 环境默认产出到 <outDir>/<envName>（如 dist/ssr），可显式覆盖
         outDir: envOptions.build?.outDir ?? path.join(resolved.build.outDir, name),
         // server 产物默认不压缩（可调试性优先，与 Vite SSR 默认一致），可显式覆盖

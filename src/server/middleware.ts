@@ -5,13 +5,19 @@ import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import pc from 'picocolors'
-import type { ResolvedConfig } from '../types.js'
+import type { EnvironmentInstance, ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { ModuleGraph } from '../core/module-graph.js'
 import { transformCode, shouldTransform, getModuleType } from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
-import { loadEnv, buildEnvDefine, replaceEnvInCode } from '../core/env.js'
+import {
+  loadEnv,
+  buildEnvDefine,
+  replaceEnvInCode,
+  ssrDefineOverrides,
+} from '../core/env.js'
 import { removeTimestampQuery } from '../core/url.js'
+import { isAssetFile } from '../plugins/assets.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -227,6 +233,7 @@ export interface TransformMiddlewareContext {
   config: ResolvedConfig
   pluginContainer: PluginContainer
   moduleGraph: ModuleGraph
+  environment?: EnvironmentInstance
   envDefine?: Record<string, string>
   onPrune?: (paths: string[]) => void
 }
@@ -237,6 +244,7 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
   ctx.envDefine = buildEnvDefine(
     loadEnv(ctx.config.mode, ctx.config.root, ctx.config.envPrefix),
     ctx.config.mode,
+    ssrDefineOverrides(ctx.environment?.consumer ?? 'client'),
   )
   return async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     const url = req.url ?? '/'
@@ -294,7 +302,7 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
     }
 
     // 处理模块请求（.ts, .tsx, .jsx, .vue, .css 等）
-    if (isModuleRequest(url)) {
+    if (isModuleRequest(url, req.headers['sec-fetch-dest'])) {
       try {
         const result = await transformRequest(url, ctx)
         if (result) {
@@ -413,9 +421,13 @@ export async function transformRequest(
     const loaded = await pluginContainer.load(url)
     if (loaded != null) {
       let code = typeof loaded === 'string' ? loaded : loaded.code
+      let map = typeof loaded === 'string' ? undefined : loaded.map
       const transformed = await pluginContainer.transform(code, url)
       if (transformed != null) {
         code = typeof transformed === 'string' ? transformed : transformed.code
+        if (typeof transformed !== 'string' && transformed.map != null) {
+          map = transformed.map
+        }
       }
       // file 关联磁盘上的父文件：父文件变更时子模块一并失效
       const parentFile = resolveUrlToFile(cleanReqUrl, config.root) ?? cleanReqUrl
@@ -425,6 +437,7 @@ export async function transformRequest(
       code = replaceEnvInCode(code, ctx.envDefine ?? buildEnvDefine(
         loadEnv(config.mode, config.root, config.envPrefix),
         config.mode,
+        ssrDefineOverrides(ctx.environment?.consumer ?? 'client'),
       ))
       const importedUrls = new Set<string>()
       code = rewriteImports(code, config, parentFile, importedUrls, moduleGraph)
@@ -435,7 +448,7 @@ export async function transformRequest(
         hotInfo.isSelfAccepting,
         transformVersion,
       )
-      const transformResult = { code }
+      const transformResult = { code, map }
       if (pruned) {
         if (pruned.size > 0) ctx.onPrune?.([...pruned].map((item) => item.url))
         mod.transformResult = transformResult
@@ -462,13 +475,21 @@ export async function transformRequest(
     return transformResult
   }
 
-  // 读取源码
-  let code = fs.readFileSync(filePath, 'utf-8')
+  // 先允许 assets 等专用 loader 把真实文件转换为 JS；无插件接管再读源码。
+  const loaded = await pluginContainer.load(filePath)
+  let code =
+    loaded == null
+      ? fs.readFileSync(filePath, 'utf-8')
+      : typeof loaded === 'string'
+        ? loaded
+        : loaded.code
+  let map: unknown = loaded && typeof loaded !== 'string' ? loaded.map : undefined
 
   // 通过插件管道 transform
   const pluginResult = await pluginContainer.transform(code, filePath)
   if (pluginResult) {
     code = typeof pluginResult === 'string' ? pluginResult : pluginResult.code
+    if (typeof pluginResult !== 'string') map = pluginResult.map
   }
 
   // Fast Refresh / HMR 键必须在同一文件的多次 import（?t=xxx 变化）间稳定
@@ -484,8 +505,10 @@ export async function transformRequest(
       jsxRuntime: 'automatic',
       jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       reactRefresh: useRefresh,
+      target: ctx.environment?.options.build.target ?? config.build.target,
     })
     code = result.code
+    if (result.map) map = JSON.parse(result.map)
     if (useRefresh) {
       // 把模块包装起来：安装 $RefreshReg$/$RefreshSig$、建 hot context、尾部触发 performReactRefresh
       code = buildReactRefreshWrapper(stableUrl, code)
@@ -507,6 +530,7 @@ export async function transformRequest(
   const envDefine = ctx.envDefine ?? buildEnvDefine(
     loadEnv(config.mode, config.root, config.envPrefix),
     config.mode,
+    ssrDefineOverrides(ctx.environment?.consumer ?? 'client'),
   )
   code = replaceEnvInCode(code, envDefine)
 
@@ -522,7 +546,7 @@ export async function transformRequest(
     transformVersion,
   )
 
-  const transformResult = { code }
+  const transformResult = { code, map }
   if (pruned) {
     if (pruned.size > 0) ctx.onPrune?.([...pruned].map((item) => item.url))
     mod.transformResult = transformResult
@@ -569,6 +593,7 @@ async function loadVirtualModule(
   code = replaceEnvInCode(code, ctx.envDefine ?? buildEnvDefine(
     loadEnv(config.mode, config.root, config.envPrefix),
     config.mode,
+    ssrDefineOverrides(ctx.environment?.consumer ?? 'client'),
   ))
   const anchor = path.join(config.root, '__nasti_virtual__.ts')
   code = rewriteImports(code, config, anchor)
@@ -1447,10 +1472,18 @@ function resolveUrlToFile(url: string, root: string): string | null {
   return null
 }
 
-function isModuleRequest(url: string): boolean {
+function isModuleRequest(
+  url: string,
+  destination?: string | string[],
+): boolean {
   const cleanUrl = url.split('?')[0]
   if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.startsWith('/@modules/')) return true
+  if (isAssetFile(cleanUrl)) {
+    const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+    const isExplicitAssetModule = /(?:^|&)(?:url|raw)(?:&|$)/.test(query)
+    return isExplicitAssetModule || destination === 'script'
+  }
   // 无扩展名路径可能是省略扩展名的模块导入（如 /src/App）
   if (!path.extname(cleanUrl)) return true
   return false
@@ -1465,11 +1498,15 @@ const hotModulesMap = new Map();
 const disposeMap = new Map();
 const pruneMap = new Map();
 const dataMap = new Map();
+const customListenersMap = new Map();
 let updateQueue = [];
 let pendingUpdateQueue = false;
 
 socket.addEventListener('message', async ({ data }) => {
   const payload = JSON.parse(data);
+  // 默认浏览器 client 只消费自己的 HMR 消息；native/worker 环境通过各自的
+  // HotChannel 或 app-level HMR 协调器处理同一 transport 上的命名消息。
+  if (payload.environment && payload.environment !== 'client') return;
   switch (payload.type) {
     case 'connected':
       console.debug('[nasti] connected.');
@@ -1502,8 +1539,24 @@ socket.addEventListener('message', async ({ data }) => {
         disposeMap.delete(path);
         pruneMap.delete(path);
         dataMap.delete(path);
+        clearCustomListeners(path);
       }));
       break;
+    case 'custom': {
+      const listenersByOwner = customListenersMap.get(payload.event);
+      if (!listenersByOwner) break;
+      const results = await Promise.allSettled(
+        [...listenersByOwner.values()]
+          .flatMap((listeners) => [...listeners])
+          .map((listener) => Promise.resolve().then(() => listener(payload.data)))
+      );
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          console.error('[nasti] custom HMR event listener failed:', result.reason);
+        }
+      }
+      break;
+    }
     case 'error':
       console.error('[nasti] error:', payload.err.message);
       showErrorOverlay(payload.err);
@@ -1602,6 +1655,7 @@ export function createHotContext(ownerPath) {
   // 模块重新执行时丢弃旧 accept 回调，但保留同一个 hot.data 对象。
   const existing = hotModulesMap.get(ownerPath);
   if (existing) existing.callbacks = [];
+  clearCustomListeners(ownerPath);
 
   const acceptDeps = (deps, callback = () => {}) => {
     const mod = hotModulesMap.get(ownerPath) || { id: ownerPath, callbacks: [] };
@@ -1627,11 +1681,38 @@ export function createHotContext(ownerPath) {
     dispose(callback) {
       disposeMap.set(ownerPath, callback);
     },
+    on(event, callback) {
+      let listenersByOwner = customListenersMap.get(event);
+      if (!listenersByOwner) {
+        listenersByOwner = new Map();
+        customListenersMap.set(event, listenersByOwner);
+      }
+      let listeners = listenersByOwner.get(ownerPath);
+      if (!listeners) {
+        listeners = new Set();
+        listenersByOwner.set(ownerPath, listeners);
+      }
+      listeners.add(callback);
+    },
+    off(event, callback) {
+      const listenersByOwner = customListenersMap.get(event);
+      const listeners = listenersByOwner?.get(ownerPath);
+      listeners?.delete(callback);
+      if (listeners?.size === 0) listenersByOwner.delete(ownerPath);
+      if (listenersByOwner?.size === 0) customListenersMap.delete(event);
+    },
     invalidate() {
       location.reload();
     },
     data: dataMap.get(ownerPath),
   };
+}
+
+function clearCustomListeners(ownerPath) {
+  for (const [event, listenersByOwner] of customListenersMap) {
+    listenersByOwner.delete(ownerPath);
+    if (listenersByOwner.size === 0) customListenersMap.delete(event);
+  }
 }
 `
 }

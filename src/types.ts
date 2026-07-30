@@ -3,6 +3,12 @@
 
 import type { InputOptions, OutputOptions, RenderedChunk } from 'rolldown'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type {
+  SFCAsyncStyleCompileOptions,
+  SFCParseOptions,
+  SFCScriptCompileOptions,
+  SFCTemplateCompileOptions,
+} from '@vue/compiler-sfc'
 import type { Logger } from './core/logger.js'
 
 export interface NastiConfig {
@@ -51,7 +57,7 @@ export interface ExperimentalOptions {
    * dev 用 Rolldown `dev()` 引擎整体打包 client 环境后从内存服务
    * （完整打包模式 / Full Bundle Mode）。HMR 由引擎的 patch 机制驱动，
    * 动态 import 走懒编译端点。依赖 rolldown 实验 API（无 semver 保护，
-   * 版本锁定 rc.13）。unbundled 管线保持默认。
+   * Nasti 会精确锁定经过验证的 Rolldown 版本）。unbundled 管线保持默认。
    * @experimental
    * @default false
    */
@@ -89,6 +95,41 @@ export interface EnvironmentOptions {
   resolve?: ResolveConfig
   /** per-env 构建覆盖（未设置的字段回退 top-level build） */
   build?: BuildConfig
+  /**
+   * Vue SFC 编译扩展点。每个环境可独立设置 compiler-sfc 选项与源码变换，
+   * 同一个 SFC 的虚拟模块 id / scope id 不包含环境名，因而在多图之间保持稳定。
+   */
+  vue?: VueEnvironmentOptions
+}
+
+export interface VueSfcTransformContext {
+  filename: string
+  environmentName: string
+  type: 'sfc' | 'template' | 'style'
+  index?: number
+}
+
+export type VueSfcSourceTransform = (
+  source: string,
+  context: VueSfcTransformContext,
+) =>
+  | string
+  /**
+   * Object results may provide a source map from `code` back to `source`.
+   * Nasti composes it with compiler-sfc maps where that stage supports chaining.
+   */
+  | { code: string; map?: unknown }
+  | Promise<string | { code: string; map?: unknown }>
+
+/** 直接透传给 `@vue/compiler-sfc` 对应阶段的 per-environment 选项。 */
+export interface VueEnvironmentOptions {
+  parse?: SFCParseOptions
+  script?: Partial<SFCScriptCompileOptions>
+  template?: Partial<SFCTemplateCompileOptions>
+  style?: Partial<SFCAsyncStyleCompileOptions>
+  transformSfc?: VueSfcSourceTransform
+  transformTemplate?: VueSfcSourceTransform
+  transformStyle?: VueSfcSourceTransform
 }
 
 /** 解析后的环境配置 */
@@ -104,6 +145,7 @@ export interface ResolvedEnvironmentOptions {
   driver?: string
   resolve: Required<ResolveConfig>
   build: Required<BuildConfig>
+  vue: VueEnvironmentOptions
 }
 
 /** Electron 目标专用配置，支持 Electron 41+ */
@@ -210,10 +252,21 @@ export interface CssConfig {
   /** CSP nonce to add to inline <style> tags (dev only since 2.0 — build emits real .css files) */
   nonce?: string
   /**
-   * @deprecated 2.0 起 build 始终抽取真实 .css 文件（per-chunk hash + <link> 注入），
-   * 该开关不再生效。控制拆分用 `build.cssCodeSplit`，控制压缩用 `build.cssMinify`。
+   * @deprecated 请改用 `css.emit` 控制是否写出 CSS 文件。控制拆分用
+   * `build.cssCodeSplit`，控制压缩用 `build.cssMinify`。
    */
   emitCssFile?: boolean
+  /**
+   * 是否在浏览器运行时 / HTML 中注入 CSS。原生 client 环境可关闭注入，
+   * 同时继续保留 CSS 模块图与结构化元数据。
+   * @default true
+   */
+  inject?: boolean
+  /**
+   * 是否写出 `.css` 文件。关闭后仍收集每个 chunk 的 CSS 所有权。
+   * @default true
+   */
+  emit?: boolean
 }
 
 // Vite 兼容的插件接口
@@ -309,6 +362,11 @@ export interface NastiPlugin {
   configureServer?: (server: DevServer) => void | (() => void) | Promise<void | (() => void)>
   transformIndexHtml?: (html: string) => string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] } | Promise<string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }>
   handleHotUpdate?: (ctx: HmrContext) => void | ModuleNode[] | Promise<void | ModuleNode[]>
+  /**
+   * 一个文件在所有 dev client 环境完成失效、插件 HMR 钩子与重新转换后调用一次。
+   * 多运行时工具链可据此只重编码受影响的 native section。
+   */
+  handleHotUpdateApp?: (ctx: AppHmrContext) => void | Promise<void>
 }
 
 export interface PluginContext {
@@ -337,6 +395,49 @@ export interface EnvironmentBuildOutput {
   type: string
   code?: string
   source?: Uint8Array | string
+  map?: unknown
+  name?: string
+  names?: string[]
+  isEntry?: boolean
+  isDynamicEntry?: boolean
+  imports?: string[]
+  dynamicImports?: string[]
+  moduleIds?: string[]
+}
+
+export interface EnvironmentCssModule {
+  id: string
+  source: string
+  code: string
+}
+
+export interface EnvironmentCssChunk {
+  fileName: string
+  moduleIds: string[]
+  cssFileNames: string[]
+}
+
+export interface EnvironmentCssMetadata {
+  modules: Record<string, EnvironmentCssModule>
+  chunks: Record<string, EnvironmentCssChunk>
+}
+
+export interface EnvironmentChunkMetadata {
+  fileName: string
+  name: string
+  isEntry: boolean
+  isDynamicEntry: boolean
+  imports: string[]
+  dynamicImports: string[]
+  moduleIds: string[]
+  css: string[]
+  assets: string[]
+}
+
+export interface EnvironmentAssetMetadata {
+  fileName: string
+  names: string[]
+  publicPath: string
 }
 
 /** 单个环境附加到标准构建结果上的结构化元数据。 */
@@ -345,6 +446,10 @@ export interface EnvironmentBuildMetadata {
   publicPath?: string
   manifest?: unknown
   stats?: unknown
+  chunks?: Record<string, EnvironmentChunkMetadata>
+  assets?: Record<string, EnvironmentAssetMetadata>
+  css?: EnvironmentCssMetadata
+  sourceMaps?: Record<string, unknown>
 }
 
 /** 外部环境驱动或原生 Rolldown 环境返回的标准构建结果。 */
@@ -376,6 +481,13 @@ export interface BuildAppContext {
     entryName: string,
   ) => EnvironmentBuildOutput | undefined
   getManifest: <T = unknown>(environmentName: string) => T | undefined
+  getChunk: (
+    environmentName: string,
+    fileName: string,
+  ) => EnvironmentChunkMetadata | undefined
+  getCss: (environmentName: string) => EnvironmentCssMetadata | undefined
+  getSourceMap: (environmentName: string, fileName: string) => unknown
+  resolvePublicPath: (environmentName: string, fileName: string) => string | undefined
   /** 将聚合产物安全地写入 top-level `build.outDir`，并纳入 BuildResult.appOutput。 */
   emitFile: (file: AppBuildOutput) => string
 }
@@ -431,6 +543,19 @@ export interface EnvironmentInstance {
   hot: HotChannel
   /** 声明 driver 后，由插件提供的外部环境编译驱动 */
   driver?: EnvironmentDriver
+  /** per-environment dev 模块图与插件列表。 */
+  moduleGraph: ModuleGraph
+  plugins: NastiPlugin[]
+  /**
+   * 在该环境的独立 transform 管线中请求模块。仅 dev 环境在初始化后可用。
+   */
+  transformRequest: (url: string) => Promise<{ code: string; map?: unknown } | null>
+  /** 内置 CSS 管线登记模块；工具链通常读取 getCssModule(s)。 */
+  setCssModule: (module: EnvironmentCssModule) => void
+  getCssModule: (id: string) => EnvironmentCssModule | undefined
+  getCssModules: () => Readonly<Record<string, EnvironmentCssModule>>
+  setAssetModule: (id: string, fileName: string) => void
+  getAssetModules: () => Readonly<Record<string, string>>
   /** 由生产插件登记 entries / manifest / stats，构建完成后合并进环境结果。 */
   setBuildMetadata: (metadata: EnvironmentBuildMetadata) => void
 }
@@ -543,13 +668,17 @@ export interface DevServer {
   moduleGraph: ModuleGraph
   watcher: any // chokidar FSWatcher
   ws: WebSocketServer
-  /** Environment API：per-env 环境实例（Phase 1 仅 client 有完整运行时） */
+  /** Environment API：每个 client-consumer 环境都有独立的 transform/HMR 管线。 */
   environments: Record<string, EnvironmentInstance>
   /** 外部环境驱动启动后返回的服务 URL / middleware 信息 */
   environmentServices: Record<string, EnvironmentServeResult>
   listen: (port?: number) => Promise<DevServer>
   close: () => Promise<void>
   transformRequest: (url: string) => Promise<TransformResult>
+  transformEnvironmentRequest: (
+    environmentName: string,
+    url: string,
+  ) => Promise<TransformResult>
   /**
    * SSR：在 server consumer 环境（默认 `ssr`）中加载并执行模块，返回其导出。
    * Vite `server.ssrLoadModule` 的 back-compat shim（底层是 module runner +
@@ -617,14 +746,37 @@ export interface HmrContext {
   modules: ModuleNode[]
   read: () => string | Promise<string>
   server: DevServer
+  environment: EnvironmentInstance
 }
 
-export type HmrPayload =
+export interface EnvironmentTransformedModule {
+  module: ModuleNode
+  result: { code: string; map?: unknown } | null
+}
+
+export interface EnvironmentHotUpdateResult {
+  environment: EnvironmentInstance
+  modules: ModuleNode[]
+  updates: HmrUpdate[]
+  transformed: EnvironmentTransformedModule[]
+  fullReload: boolean
+}
+
+export interface AppHmrContext {
+  file: string
+  timestamp: number
+  environments: Readonly<Record<string, EnvironmentHotUpdateResult>>
+  server: DevServer
+}
+
+export type HmrPayload = (
   | { type: 'connected' }
   | { type: 'update'; updates: HmrUpdate[] }
   | { type: 'full-reload'; path?: string }
   | { type: 'prune'; paths: string[] }
   | { type: 'error'; err: { message: string; stack?: string } }
+  | { type: 'custom'; event: string; data?: unknown }
+) & { environment?: string }
 
 export interface HmrUpdate {
   type: 'js-update' | 'css-update'

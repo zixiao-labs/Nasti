@@ -50,6 +50,28 @@ export function createBuildAppContext(
       return results[environmentName]?.manifest as T | undefined
     },
 
+    getChunk(environmentName, fileName) {
+      const normalized = normalizeEnvironmentFileName(fileName)
+      return results[environmentName]?.chunks?.[normalized]
+    },
+
+    getCss(environmentName) {
+      return results[environmentName]?.css
+    },
+
+    getSourceMap(environmentName, fileName) {
+      const normalized = normalizeEnvironmentFileName(fileName)
+      return results[environmentName]?.sourceMaps?.[normalized]
+    },
+
+    resolvePublicPath(environmentName, fileName) {
+      const result = results[environmentName]
+      if (!result) return undefined
+      const normalized = normalizeEnvironmentFileName(fileName)
+      const base = result.publicPath ?? config.base
+      return joinPublicPath(base, normalized)
+    },
+
     emitFile(file) {
       const fileName = normalizeAppFileName(file.fileName)
       const collisionKey = artifactCollisionKey(fileName)
@@ -81,6 +103,10 @@ export function createBuildAppContext(
       return fileName
     },
   }
+}
+
+export function joinPublicPath(base: string, fileName: string): string {
+  return `${base.endsWith('/') ? base : `${base}/`}${fileName.replace(/^\//, '')}`
 }
 
 export function normalizeEnvironmentFileName(fileName: string): string {
