@@ -25,6 +25,26 @@ export class ModuleGraph {
     return this.fileToModulesMap.get(file)
   }
 
+  /**
+   * Modules whose registered entry file lives under `dir` (inclusive).
+   * Used when a non-entry source inside a prebundled workspace package changes:
+   * only the package entry was registered, so getModulesByFile(changedFile)
+   * misses — we invalidate every /@modules entry rooted in that package.
+   */
+  getModulesWithFileUnder(dir: string): Set<ModuleNode> {
+    const result = new Set<ModuleNode>()
+    // Normalize separators so Windows-stored paths still match.
+    const normDir = dir.replace(/\\/g, '/')
+    const normPrefix = normDir.endsWith('/') ? normDir : normDir + '/'
+    for (const [file, mods] of this.fileToModulesMap) {
+      const normFile = file.replace(/\\/g, '/')
+      if (normFile === normDir || normFile.startsWith(normPrefix)) {
+        for (const m of mods) result.add(m)
+      }
+    }
+    return result
+  }
+
   async ensureEntryFromUrl(url: string): Promise<ModuleNode> {
     const normalizedUrl = removeTimestampQuery(url)
     let mod = this.urlToModuleMap.get(normalizedUrl)

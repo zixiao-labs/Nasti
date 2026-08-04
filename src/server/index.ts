@@ -26,6 +26,7 @@ import { handleFileChange } from './hmr.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { getPluginApi } from '../core/plugin-api.js'
 import { buildEnvDefine, loadEnv, ssrDefineOverrides } from '../core/env.js'
+import { getLinkedPackageRoots } from './fs-allow.js'
 
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
@@ -144,21 +145,31 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   // 等模式根本不会命中任何路径，导致 watcher 递归进入 node_modules 并对每个
   // 子目录调用 fs.watch，在 macOS 上很快耗尽 fd 触发 EMFILE。改用函数 matcher
   // 显式判定相对段。
+  //
+  // pnpm/yarn/npm workspaces：直接依赖以 symlink 出现在 node_modules，realpath
+  // 落在 apps/web 之外的 packages/*。只 watch config.root 时这些包的改动永远
+  // 进不了 HMR —— 把 discover 到的 linked package roots 一并纳入。
   const ignoredSegments = new Set(['node_modules', '.git', '.nasti'])
   const outDirAbs = path.resolve(config.root, config.build.outDir)
-  const watcher = watch(config.root, {
+  const linkedPackageRoots = getLinkedPackageRoots(config.root)
+  const watchTargets = [config.root, ...linkedPackageRoots]
+  const watcher = watch(watchTargets, {
     ignored: (filePath: string) => {
-      if (filePath === config.root) return false
       if (filePath === outDirAbs || filePath.startsWith(outDirAbs + path.sep)) return true
-      const rel = path.relative(config.root, filePath)
-      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return false
-      for (const seg of rel.split(path.sep)) {
-        if (ignoredSegments.has(seg)) return true
+      for (const watchRoot of watchTargets) {
+        if (filePath === watchRoot) return false
+        const rel = path.relative(watchRoot, filePath)
+        if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue
+        for (const seg of rel.split(path.sep)) {
+          if (ignoredSegments.has(seg)) return true
+        }
+        return false
       }
       return false
     },
     ignoreInitial: true,
   })
+
 
   // 先声明 server 变量，再赋值
   let server: DevServer
