@@ -96,7 +96,7 @@ npm install -D @vue/compiler-sfc@^3.6.0-0</pre></div>
     </p>
 
     <h3>单文件 opt-in</h3>
-    <div class="code-block"><pre><span class="comment">&lt;!-- 在 script setup 或 template 上加 vapor --&gt;</span>
+    <div class="code-block"><pre><span class="comment">&lt;!-- 在 script setup 上加 vapor --&gt;</span>
 <span class="keyword">&lt;script setup</span> <span class="type">vapor</span><span class="keyword">&gt;</span>
 <span class="keyword">import</span> { <span class="type">ref</span> } <span class="keyword">from</span> <span class="string">'vue'</span>
 <span class="keyword">const</span> count = <span class="func">ref</span>(<span class="orange">0</span>)
@@ -104,6 +104,11 @@ npm install -D @vue/compiler-sfc@^3.6.0-0</pre></div>
 
 <span class="keyword">&lt;template&gt;</span>
   &lt;<span class="type">button</span> @click=<span class="string">"count++"</span>&gt;{{ count }}&lt;/<span class="type">button</span>&gt;
+<span class="keyword">&lt;/template&gt;</span></pre></div>
+
+    <div class="code-block"><pre><span class="comment">&lt;!-- 或在 template 上加 vapor（纯 template SFC） --&gt;</span>
+<span class="keyword">&lt;template</span> <span class="type">vapor</span><span class="keyword">&gt;</span>
+  &lt;<span class="type">div</span>&gt;hi&lt;/<span class="type">div</span>&gt;
 <span class="keyword">&lt;/template&gt;</span></pre></div>
 
     <h3>环境级强制</h3>

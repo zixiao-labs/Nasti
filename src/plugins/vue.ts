@@ -345,7 +345,12 @@ export function vuePlugin(
 
       // Vapor 测试版免责声明：必须放在所有 import 之后，避免破坏 ESM 语法
       if (vapor) {
-        append(`\nconsole.warn(${JSON.stringify(VAPOR_BETA_WARNING)})\n`)
+        append(
+          `\nif (!globalThis.__NASTI_VAPOR_BETA_WARNED__) {\n` +
+            `  globalThis.__NASTI_VAPOR_BETA_WARNED__ = true\n` +
+            `  console.warn(${JSON.stringify(VAPOR_BETA_WARNING)})\n` +
+            `}\n`,
+        )
       }
 
       // scoped 标记
@@ -459,8 +464,8 @@ function resolveVaporMode(
  */
 function canForceVaporMode(descriptor: any): boolean {
   if (typeof descriptor.filename === 'string' && descriptor.filename.endsWith('.vue')) {
-    if (descriptor.scriptSetup) return true
-    if (descriptor.script) return false
+    if (descriptor.script && !descriptor.scriptSetup) return false
+    return !!(descriptor.scriptSetup || descriptor.template)
   }
   return true
 }

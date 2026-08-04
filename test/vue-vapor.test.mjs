@@ -93,7 +93,7 @@ test('Vue Vapor Mode supports template-only vapor SFCs and features.vapor force'
   )
   fs.writeFileSync(
     path.join(root, 'src/Only.vue'),
-    '<template vapor><div>hi</div></template>',
+    '<template vapor><div>hi</div><p>there</p></template>',
   )
   fs.writeFileSync(
     path.join(root, 'src/Forced.vue'),
@@ -126,7 +126,7 @@ test('Vue Vapor Mode supports template-only vapor SFCs and features.vapor force'
   const only = await server.transformRequest('/src/Only.vue')
   assert.ok(only?.code)
   assert.match(only.code, /__vapor:\s*true/)
-  assert.match(only.code, /__multiRoot/)
+  assert.match(only.code, /__sfc__\.__multiRoot = true/)
   assert.match(only.code, /console\.warn\(/)
 
   const forced = await server.transformRequest('/src/Forced.vue')

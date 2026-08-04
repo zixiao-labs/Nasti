@@ -200,6 +200,13 @@ export default defineConfig({
 
 ### Vapor Mode（测试版，需 Vue / `@vue/compiler-sfc` ≥ 3.6）
 
+若仍在使用 Vue 3.5，请先升级依赖（详见 [website/pages/vue.html](./website/pages/vue.html)）：
+
+```bash
+npm install vue@^3.6.0-rc.2
+npm install -D @vue/compiler-sfc@^3.6.0-rc.2
+```
+
 [Vapor Mode](https://github.com/vuejs/core/releases) 是 Vue 3.6 的 opt-in 编译模式，跳过 Virtual DOM，生成直接 DOM 操作。Nasti 支持单文件标记与环境级强制：
 
 ```vue

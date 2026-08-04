@@ -75,7 +75,7 @@
     "vue": "^3.6.0-rc.2"
   },
   "optionalDependencies": {
-    "@vue/compiler-sfc": "^3.5.0 || ^3.6.0-0",
+    "@vue/compiler-sfc": "^3.6.0-rc.2",
     "lightningcss": "^1.32.0"
   }
 }
