@@ -963,10 +963,12 @@ function createModuleSpecifierResolver(
       return '/' + path.relative(root, abs).replace(/\\/g, '/')
     }
     // Workspace / file: packages live outside root after realpath. Serve via
-    // `/@fs<abs>` (Vite-compatible) when the path is under a linked package.
+    // `/@fs/<abs>` (Vite-compatible) when the path is under a linked package.
+    // Always use `/@fs/` so Windows drive paths become `/@fs/C:/...`, not `/@fsC:/...`.
     for (const pkgRoot of getLinkedPackageRoots(root)) {
       if (abs === pkgRoot || abs.startsWith(pkgRoot + path.sep)) {
-        return '/@fs' + abs.replace(/\\/g, '/')
+        const normalized = abs.replace(/\\/g, '/')
+        return '/@fs/' + (normalized.startsWith('/') ? normalized.slice(1) : normalized)
       }
     }
     return null
@@ -1443,8 +1445,8 @@ function resolveExportValue(value: any, pkgDir: string): string | null {
 }
 
 function resolveUrlToFile(url: string, root: string): string | null {
-  // 去除查询参数
-  const cleanUrl = url.split('?')[0]
+  // 去除 query / hash，避免污染文件系统路径解析
+  const cleanUrl = url.split(/[?#]/)[0]
 
   // /@modules/ 前缀 → node_modules 预构建
   if (cleanUrl.startsWith('/@modules/')) {
@@ -1454,9 +1456,13 @@ function resolveUrlToFile(url: string, root: string): string | null {
 
   // /@fs/<abs>：workspace / file: 包在 root 外的源文件（Vite 兼容）
   if (cleanUrl.startsWith('/@fs/')) {
-    let abs = cleanUrl.slice('/@fs'.length)
-    // URL 里是 POSIX 分隔符；Windows 盘符路径保持 /C:/...
-    if (process.platform === 'win32') abs = abs.replace(/\//g, path.sep)
+    let abs = cleanUrl.slice('/@fs/'.length)
+    // URL 里是 POSIX 分隔符；Windows 盘符为 `C:/...`，Unix 需补回前导 `/`
+    if (process.platform === 'win32') {
+      abs = abs.replace(/\//g, path.sep)
+    } else if (!abs.startsWith('/')) {
+      abs = '/' + abs
+    }
     try {
       const real = fs.realpathSync(abs)
       if (fs.statSync(real).isFile() && isAllowedDevModulePath(real, root)) return real
@@ -1493,12 +1499,15 @@ function isModuleRequest(
   url: string,
   destination?: string | string[],
 ): boolean {
-  const cleanUrl = url.split('?')[0]
+  const cleanUrl = url.split(/[?#]/)[0]
   if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.startsWith('/@modules/')) return true
   if (cleanUrl.startsWith('/@fs/')) return true
   if (isAssetFile(cleanUrl)) {
-    const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+    const qIdx = url.indexOf('?')
+    const hIdx = url.indexOf('#')
+    const queryEnd = hIdx === -1 ? url.length : hIdx
+    const query = qIdx === -1 || qIdx > queryEnd ? '' : url.slice(qIdx + 1, queryEnd)
     const isExplicitAssetModule = /(?:^|&)(?:url|raw)(?:&|$)/.test(query)
     return isExplicitAssetModule || destination === 'script'
   }

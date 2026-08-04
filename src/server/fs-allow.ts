@@ -99,8 +99,7 @@ function listScopedPackages(nm: string, scope: string): string[] {
   }
 }
 
-let linkedRootsCache: { root: string; roots: string[]; mtimeMs: number } | null =
-  null
+const linkedRootsCache = new Map<string, { roots: string[]; mtimeMs: number }>()
 
 /** Cached discoverLinkedPackageRoots; invalidated when root/node_modules mtime changes. */
 export function getLinkedPackageRoots(projectRoot: string): string[] {
@@ -110,37 +109,49 @@ export function getLinkedPackageRoots(projectRoot: string): string[] {
   } catch {
     mtimeMs = 0
   }
-  if (
-    linkedRootsCache &&
-    linkedRootsCache.root === projectRoot &&
-    linkedRootsCache.mtimeMs === mtimeMs
-  ) {
-    return linkedRootsCache.roots
+  const cached = linkedRootsCache.get(projectRoot)
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.roots
   }
   const roots = discoverLinkedPackageRoots(projectRoot)
-  linkedRootsCache = { root: projectRoot, roots, mtimeMs }
+  linkedRootsCache.set(projectRoot, { roots, mtimeMs })
   return roots
 }
 
-/** Clear the linked-roots cache (tests). */
+/**
+ * Clear the linked-roots cache. Call from the file watcher when any
+ * `node_modules` tree changes (including nested ones under linked packages).
+ */
 export function clearLinkedPackageRootsCache(): void {
-  linkedRootsCache = null
+  linkedRootsCache.clear()
 }
 
 /**
  * Whether a realpath'd absolute file may be served via `/@modules/...?id=`.
  *
  * Allowed:
- *   1. anywhere under a `node_modules` segment (npm / pnpm store)
- *   2. under the project root
+ *   1. under the project root (includes the app's own `node_modules`)
+ *   2. under a `node_modules` directory on the walk up from the project root
+ *      (monorepo-hoisted stores such as `<repo>/node_modules/.pnpm/...`)
  *   3. under a workspace / file: package linked from the project's
  *      node_modules tree (realpath leaves node_modules)
+ *
+ * A forged path that merely contains a `node_modules` segment under an
+ * unrelated directory (e.g. `/tmp/other/node_modules/x`) is rejected.
  */
 export function isAllowedDevModulePath(realId: string, projectRoot: string): boolean {
-  if (realId.includes(NM)) return true
-  if (isUnderRoot(realId, projectRoot)) return true
+  if (realId === projectRoot || isUnderRoot(realId, projectRoot)) return true
   for (const pkgRoot of getLinkedPackageRoots(projectRoot)) {
     if (realId === pkgRoot || realId.startsWith(pkgRoot + path.sep)) return true
+  }
+  // Monorepo hoist: allow `<ancestor>/node_modules/...` while walking up from root.
+  let dir = projectRoot
+  for (;;) {
+    const nm = path.join(dir, 'node_modules')
+    if (realId === nm || realId.startsWith(nm + path.sep)) return true
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
   }
   return false
 }

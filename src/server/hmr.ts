@@ -10,7 +10,7 @@ import type {
   HmrContext,
 } from '../types.js'
 import { ModuleGraph } from '../core/module-graph.js'
-import { findNearestPackageRoot, getLinkedPackageRoots, isUnderRoot } from './fs-allow.js'
+import { findNearestPackageRoot, getLinkedPackageRoots } from './fs-allow.js'
 
 export async function handleFileChange(
   file: string,
@@ -46,11 +46,9 @@ export async function handleFileChange(
     const packageRoot = findNearestPackageRoot(file)
     if (
       packageRoot &&
-      (isUnderRoot(packageRoot, config.root) ||
-        packageRoot === config.root ||
-        getLinkedPackageRoots(config.root).some(
-          (r) => packageRoot === r || packageRoot.startsWith(r + path.sep),
-        ))
+      getLinkedPackageRoots(config.root).some(
+        (r) => packageRoot === r || packageRoot.startsWith(r + path.sep),
+      )
     ) {
       const under = (moduleGraph as ModuleGraph).getModulesWithFileUnder(packageRoot)
       if (under.size > 0) mods = under

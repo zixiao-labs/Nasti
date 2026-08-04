@@ -190,16 +190,19 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
       // 绕过了默认规则，这里做 defense-in-depth。pnpm 下 node_modules/monaco-editor
       // 是指向 .pnpm store 的 symlink，unwatch 需要用 realpath 才能命中实际被 watch 的路径。
       const watcher: any = (server as any).watcher
-      let monacoDir = path.resolve(resolvedConfig.root, 'node_modules/monaco-editor')
+      const monacoLogical = path.resolve(resolvedConfig.root, 'node_modules/monaco-editor')
+      const monacoPaths = new Set<string>([monacoLogical])
       try {
-        monacoDir = fs.realpathSync(monacoDir)
+        monacoPaths.add(fs.realpathSync(monacoLogical))
       } catch {
         /* not installed */
       }
-      try {
-        watcher?.unwatch?.(monacoDir)
-      } catch {
-        /* ignore */
+      for (const monacoDir of monacoPaths) {
+        try {
+          watcher?.unwatch?.(monacoDir)
+        } catch {
+          /* ignore */
+        }
       }
 
       if (!shouldBuild) return

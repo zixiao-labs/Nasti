@@ -64,11 +64,13 @@ function createWorkspaceFixture() {
     'import { fromA, fromB } from "@repro/a"\nglobalThis.__vals = { fromA, fromB }\n',
   )
 
-  // Symlink layout pnpm would create for workspace:* deps
+  // Symlink layout pnpm would create for workspace:* deps.
+  // On Windows use junctions so tests don't need administrator privileges.
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
   fs.mkdirSync(path.join(web, 'node_modules', '@repro'), { recursive: true })
-  fs.symlinkSync(pkgA, path.join(web, 'node_modules', '@repro', 'a'))
+  fs.symlinkSync(pkgA, path.join(web, 'node_modules', '@repro', 'a'), linkType)
   fs.mkdirSync(path.join(pkgA, 'node_modules', '@repro'), { recursive: true })
-  fs.symlinkSync(pkgB, path.join(pkgA, 'node_modules', '@repro', 'b'))
+  fs.symlinkSync(pkgB, path.join(pkgA, 'node_modules', '@repro', 'b'), linkType)
 
   return { monorepo, web, pkgA, pkgB }
 }
@@ -107,6 +109,20 @@ test('dev server serves transitive workspace deps via /@modules/?id=', async (t)
     `/@modules/evil?id=${encodeURIComponent('/etc/passwd')}`,
   )
   assert.equal(forged, null, 'arbitrary absolute paths must not be served')
+
+  // Security: a path that merely contains a `node_modules` segment outside the
+  // monorepo must still be rejected (no blanket allow on the segment alone).
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-outside-'))
+  t.after(() => {
+    fs.rmSync(outside, { recursive: true, force: true })
+  })
+  const forgedNmFile = path.join(outside, 'other', 'node_modules', 'x', 'index.js')
+  fs.mkdirSync(path.dirname(forgedNmFile), { recursive: true })
+  fs.writeFileSync(forgedNmFile, 'export default "forged"\n')
+  const forgedNm = await server.transformRequest(
+    `/@modules/evil?id=${encodeURIComponent(forgedNmFile)}`,
+  )
+  assert.equal(forgedNm, null, 'unrelated node_modules paths must not be served')
 
   // Sanity: the real B path is under packages/b (outside web root, no node_modules segment)
   const bReal = fs.realpathSync(path.join(pkgB, 'index.js'))
