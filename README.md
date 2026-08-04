@@ -22,7 +22,7 @@
 - **OXC 转译** - Rust 编写的 TS/JSX/TSX 转译器，比 Babel 快 20-50x
 - **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform）
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
-- **内置 Vue 支持** - SFC 编译 + Vue HMR（可选依赖 `@vue/compiler-sfc`）
+- **内置 Vue 支持** - SFC 编译 + Vue HMR；测试版支持 Vue 3.6 Vapor Mode（可选依赖 `@vue/compiler-sfc`）
 - **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
 - **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
 - **Monaco Editor 集成** - 内置 `monacoEditorPlugin`，预打包 Web Worker，修复 HMR 期间的 EMFILE
@@ -197,6 +197,39 @@ export default defineConfig({
   framework: 'vue',
 })
 ```
+
+### Vapor Mode（测试版，需 Vue / `@vue/compiler-sfc` ≥ 3.6）
+
+若仍在使用 Vue 3.5，请先升级依赖（详见 [website/pages/vue.html](./website/pages/vue.html)）：
+
+```bash
+npm install vue@^3.6.0-rc.2
+npm install -D @vue/compiler-sfc@^3.6.0-rc.2
+```
+
+[Vapor Mode](https://github.com/vuejs/core/releases) 是 Vue 3.6 的 opt-in 编译模式，跳过 Virtual DOM，生成直接 DOM 操作。Nasti 支持单文件标记与环境级强制：
+
+```vue
+<!-- 单文件 opt-in -->
+<script setup vapor>
+import { ref } from 'vue'
+const count = ref(0)
+</script>
+```
+
+```ts
+// 环境级强制：对 <script setup> / 纯 template SFC 启用 Vapor
+export default defineConfig({
+  framework: 'vue',
+  environments: {
+    client: {
+      vue: { features: { vapor: true } },
+    },
+  },
+})
+```
+
+启用后，终端与浏览器控制台会打印测试版免责声明。Vapor Mode **不适合 SSR**；生产环境无崩溃保证，仅建议用于试验或局部性能热点。
 
 ## Electron 支持
 
