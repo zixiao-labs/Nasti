@@ -10,6 +10,7 @@ import type {
   HmrContext,
 } from '../types.js'
 import { ModuleGraph } from '../core/module-graph.js'
+import { findNearestPackageRoot, getLinkedPackageRoots } from './fs-allow.js'
 
 export async function handleFileChange(
   file: string,
@@ -27,8 +28,32 @@ export async function handleFileChange(
   const relativePath = '/' + path.relative(config.root, file)
   const shortFile = path.relative(config.root, file)
 
-  // 找到受影响的模块
-  const mods = moduleGraph.getModulesByFile(file)
+  // 找到受影响的模块。watcher 路径与 registerModule 路径在 macOS（/var →
+  // /private/var）或 pnpm workspace realpath 后可能不一致，先精确匹配再试
+  // realpath。workspace 包经 /@modules 预打包时只登记入口，包内其它文件变更
+  // 再回退到同一 package root 下已登记的模块。
+  let mods = moduleGraph.getModulesByFile(file)
+  if (!mods || mods.size === 0) {
+    try {
+      const real = fs.realpathSync(file)
+      if (real !== file) mods = moduleGraph.getModulesByFile(real)
+      if (mods && mods.size > 0) file = real
+    } catch {
+      /* deleted / dangling */
+    }
+  }
+  if (!mods || mods.size === 0) {
+    const packageRoot = findNearestPackageRoot(file)
+    if (
+      packageRoot &&
+      getLinkedPackageRoots(config.root).some(
+        (r) => packageRoot === r || packageRoot.startsWith(r + path.sep),
+      )
+    ) {
+      const under = (moduleGraph as ModuleGraph).getModulesWithFileUnder(packageRoot)
+      if (under.size > 0) mods = under
+    }
+  }
   if (!mods || mods.size === 0) {
     return null
   }

@@ -18,6 +18,7 @@ import {
 } from '../core/env.js'
 import { removeTimestampQuery } from '../core/url.js'
 import { isAssetFile } from '../plugins/assets.js'
+import { isAllowedDevModulePath, isUnderRoot, getLinkedPackageRoots } from './fs-allow.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -358,9 +359,10 @@ export async function transformRequest(
   if (cleanReqUrl.startsWith('/@modules/') && url.includes('?')) {
     const idParam = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('id')
     // 安全校验：`?id=` 本应只由我们自己写入（externalSpecToModuleUrl / subpath shim
-    // 解析到的 node_modules 真实文件），但浏览器或恶意页面可向 dev server 伪造任意绝对
-    // 路径。解析真实路径后必须 (a) 是普通文件、(b) 落在某个 node_modules 内或项目根之下，
-    // 否则拒绝 —— 防止借此把 /etc/passwd、~/.ssh/* 等任意磁盘文件打成 ESM 读出去。
+    // 解析到的依赖真实文件），但浏览器或恶意页面可向 dev server 伪造任意绝对路径。
+    // 解析真实路径后必须 (a) 是普通文件、(b) 落在 node_modules / 项目根 / 经
+    // node_modules symlink 可达的 workspace·file: 包内，否则拒绝 —— 防止借此把
+    // /etc/passwd、~/.ssh/* 等任意磁盘文件打成 ESM 读出去。
     let realId: string | null = null
     let realIdValid = false
     try {
@@ -370,8 +372,7 @@ export async function transformRequest(
         // 与上面的 realpathSync 一样按「校验失败」处理：落到下面的解析分支，而非把
         // 文件系统竞态变成 500（HTTP 路径）或向 server.transformRequest 调用方抛异常。
         realIdValid =
-          fs.statSync(realId).isFile() &&
-          (realId.includes(`${path.sep}node_modules${path.sep}`) || isUnderRoot(realId, config.root))
+          fs.statSync(realId).isFile() && isAllowedDevModulePath(realId, config.root)
       }
     } catch {
       realId = null
@@ -957,8 +958,21 @@ function createModuleSpecifierResolver(
   const aliasEntries = Object.entries(config.resolve.alias).sort(
     ([a], [b]) => b.length - a.length,
   )
-  const toRootUrl = (abs: string): string =>
-    '/' + path.relative(root, abs).replace(/\\/g, '/')
+  const toServableUrl = (abs: string): string | null => {
+    if (isUnderRoot(abs, root)) {
+      return '/' + path.relative(root, abs).replace(/\\/g, '/')
+    }
+    // Workspace / file: packages live outside root after realpath. Serve via
+    // `/@fs/<abs>` (Vite-compatible) when the path is under a linked package.
+    // Always use `/@fs/` so Windows drive paths become `/@fs/C:/...`, not `/@fsC:/...`.
+    for (const pkgRoot of getLinkedPackageRoots(root)) {
+      if (abs === pkgRoot || abs.startsWith(pkgRoot + path.sep)) {
+        const normalized = abs.replace(/\\/g, '/')
+        return '/@fs/' + (normalized.startsWith('/') ? normalized.slice(1) : normalized)
+      }
+    }
+    return null
+  }
 
   return (specifier: string): string => {
     // 解析时剥离 ?query / #hash（如 svg?url、json?import），回写时再附加到结果 URL
@@ -973,26 +987,23 @@ function createModuleSpecifierResolver(
         const sub = baseSpec.slice(key.length).replace(/^\//, '')
         const target = sub ? path.join(aliasBase, sub) : aliasBase
         const resolved = tryResolveDiskPath(target)
-        return resolved && isUnderRoot(resolved, root)
-          ? toRootUrl(resolved) + suffix
-          : specifier
+        const url = resolved ? toServableUrl(resolved) : null
+        return url ? url + suffix : specifier
       }
     }
 
     // 2) 相对路径
     if (baseSpec.startsWith('./') || baseSpec.startsWith('../')) {
       const resolved = tryResolveDiskPath(path.resolve(fileDir, baseSpec))
-      return resolved && isUnderRoot(resolved, root)
-        ? toRootUrl(resolved) + suffix
-        : specifier
+      const url = resolved ? toServableUrl(resolved) : null
+      return url ? url + suffix : specifier
     }
 
     // 3) 项目内绝对路径
     if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
       const resolved = tryResolveDiskPath(path.join(root, baseSpec.replace(/^\//, '')))
-      return resolved && isUnderRoot(resolved, root)
-        ? toRootUrl(resolved) + suffix
-        : specifier
+      const url = resolved ? toServableUrl(resolved) : null
+      return url ? url + suffix : specifier
     }
 
     // 4) 已改写的内部 URL 原样保留；其余 bare specifier 交给包中间件。
@@ -1212,12 +1223,6 @@ function tryResolveDiskPath(target: string): string | null {
     }
   }
   return null
-}
-
-/** alias 目标可能在 root 之外（symlink、monorepo），那种情况无法生成项目内 URL。 */
-function isUnderRoot(abs: string, root: string): boolean {
-  const rel = path.relative(root, abs)
-  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel)
 }
 
 function appendTimestampQuery(url: string, timestamp: number): string {
@@ -1440,13 +1445,31 @@ function resolveExportValue(value: any, pkgDir: string): string | null {
 }
 
 function resolveUrlToFile(url: string, root: string): string | null {
-  // 去除查询参数
-  const cleanUrl = url.split('?')[0]
+  // 去除 query / hash，避免污染文件系统路径解析
+  const cleanUrl = url.split(/[?#]/)[0]
 
   // /@modules/ 前缀 → node_modules 预构建
   if (cleanUrl.startsWith('/@modules/')) {
     const moduleName = cleanUrl.slice('/@modules/'.length)
     return resolveNodeModule(root, moduleName)
+  }
+
+  // /@fs/<abs>：workspace / file: 包在 root 外的源文件（Vite 兼容）
+  if (cleanUrl.startsWith('/@fs/')) {
+    let abs = cleanUrl.slice('/@fs/'.length)
+    // URL 里是 POSIX 分隔符；Windows 盘符为 `C:/...`，Unix 需补回前导 `/`
+    if (process.platform === 'win32') {
+      abs = abs.replace(/\//g, path.sep)
+    } else if (!abs.startsWith('/')) {
+      abs = '/' + abs
+    }
+    try {
+      const real = fs.realpathSync(abs)
+      if (fs.statSync(real).isFile() && isAllowedDevModulePath(real, root)) return real
+    } catch {
+      return null
+    }
+    return null
   }
 
   // 普通路径
@@ -1476,11 +1499,15 @@ function isModuleRequest(
   url: string,
   destination?: string | string[],
 ): boolean {
-  const cleanUrl = url.split('?')[0]
+  const cleanUrl = url.split(/[?#]/)[0]
   if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.startsWith('/@modules/')) return true
+  if (cleanUrl.startsWith('/@fs/')) return true
   if (isAssetFile(cleanUrl)) {
-    const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+    const qIdx = url.indexOf('?')
+    const hIdx = url.indexOf('#')
+    const queryEnd = hIdx === -1 ? url.length : hIdx
+    const query = qIdx === -1 || qIdx > queryEnd ? '' : url.slice(qIdx + 1, queryEnd)
     const isExplicitAssetModule = /(?:^|&)(?:url|raw)(?:&|$)/.test(query)
     return isExplicitAssetModule || destination === 'script'
   }

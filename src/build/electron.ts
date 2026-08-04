@@ -12,6 +12,7 @@
 //   └── preload.{cjs,mjs}
 import path from 'node:path'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import { rolldown } from 'rolldown'
 import pc from 'picocolors'
 import type { NastiConfig, ResolvedConfig } from '../types.js'
@@ -263,17 +264,27 @@ function assertElectronVersion(config: ResolvedConfig): void {
 /**
  * Detects the installed Electron major version in the given project root.
  *
- * @param root - Project root directory used to locate `node_modules/electron/package.json`
+ * @param root - Project root directory used to locate electron via Node resolution
  * @returns The major Electron version as a number, or `null` if Electron is not installed or the version cannot be determined
  */
 export function detectInstalledElectron(root: string): number | null {
   try {
-    const pkgPath = path.resolve(root, 'node_modules/electron/package.json')
-    if (!fs.existsSync(pkgPath)) return null
+    // Node resolution handles pnpm/yarn symlink layouts; plain path join is a
+    // fallback for installers that still flatten electron under node_modules.
+    const require = createRequire(path.resolve(root, 'package.json'))
+    const pkgPath = require.resolve('electron/package.json')
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
     const major = parseInt(String(pkg.version).split('.')[0], 10)
     return Number.isFinite(major) ? major : null
   } catch {
-    return null
+    try {
+      const pkgPath = path.resolve(root, 'node_modules/electron/package.json')
+      if (!fs.existsSync(pkgPath)) return null
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
+      const major = parseInt(String(pkg.version).split('.')[0], 10)
+      return Number.isFinite(major) ? major : null
+    } catch {
+      return null
+    }
   }
 }

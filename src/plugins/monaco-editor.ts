@@ -187,13 +187,22 @@ export function monacoEditorPlugin(options: MonacoEditorPluginOptions = {}): Nas
 
       // 显式把 monaco-editor 从 chokidar watcher 中剔除。node_modules 虽已在默认
       // ignored 列表，但 HMR EMFILE 多次报告源于 Monaco 的深层符号链接/嵌套 node_modules
-      // 绕过了默认规则，这里做 defense-in-depth。
+      // 绕过了默认规则，这里做 defense-in-depth。pnpm 下 node_modules/monaco-editor
+      // 是指向 .pnpm store 的 symlink，unwatch 需要用 realpath 才能命中实际被 watch 的路径。
       const watcher: any = (server as any).watcher
-      const monacoDir = path.resolve(resolvedConfig.root, 'node_modules/monaco-editor')
+      const monacoLogical = path.resolve(resolvedConfig.root, 'node_modules/monaco-editor')
+      const monacoPaths = new Set<string>([monacoLogical])
       try {
-        watcher?.unwatch?.(monacoDir)
+        monacoPaths.add(fs.realpathSync(monacoLogical))
       } catch {
-        /* ignore */
+        /* not installed */
+      }
+      for (const monacoDir of monacoPaths) {
+        try {
+          watcher?.unwatch?.(monacoDir)
+        } catch {
+          /* ignore */
+        }
       }
 
       if (!shouldBuild) return
