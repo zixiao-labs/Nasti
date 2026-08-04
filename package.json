@@ -72,10 +72,10 @@
     "@types/ws": "^8.5.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vue": "3.5.40"
+    "vue": "^3.6.0-rc.2"
   },
   "optionalDependencies": {
-    "@vue/compiler-sfc": "^3.5.0",
+    "@vue/compiler-sfc": "^3.5.0 || ^3.6.0-0",
     "lightningcss": "^1.32.0"
   }
 }

@@ -66,6 +66,9 @@
     <p>Vue 的 SFC 编译器作为可选依赖，需要手动安装：</p>
     <div class="code-block"><pre>npm install vue
 npm install -D @vue/compiler-sfc</pre></div>
+    <p>Vapor Mode（测试版）需要 <code>vue</code> / <code>@vue/compiler-sfc</code> ≥ 3.6：</p>
+    <div class="code-block"><pre>npm install vue@^3.6.0-0
+npm install -D @vue/compiler-sfc@^3.6.0-0</pre></div>
 
     <h2>特性</h2>
     <ul>
@@ -74,6 +77,7 @@ npm install -D @vue/compiler-sfc</pre></div>
       <li>Scoped CSS</li>
       <li>Vue HMR 热更新（模板/样式修改不丢失状态）</li>
       <li>TypeScript 支持（<code>&lt;script setup lang="ts"&gt;</code>）</li>
+      <li>Vue 3.6 <strong>Vapor Mode</strong>（测试版，opt-in）</li>
     </ul>
 
     <h2>配置</h2>
@@ -83,6 +87,43 @@ npm install -D @vue/compiler-sfc</pre></div>
 <span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">framework</span>: <span class="string">'vue'</span>,
 })</pre></div>
+
+    <h2>Vapor Mode（测试版）</h2>
+    <p>
+      Vapor Mode 是 Vue 3.6 的 opt-in 编译策略：跳过 Virtual DOM，生成直接 DOM 操作。
+      Nasti 支持单文件标记与环境级强制；仅支持 <code>&lt;script setup&gt;</code> / 纯 template SFC，
+      Options API 不可用。
+    </p>
+
+    <h3>单文件 opt-in</h3>
+    <div class="code-block"><pre><span class="comment">&lt;!-- 在 script setup 或 template 上加 vapor --&gt;</span>
+<span class="keyword">&lt;script setup</span> <span class="type">vapor</span><span class="keyword">&gt;</span>
+<span class="keyword">import</span> { <span class="type">ref</span> } <span class="keyword">from</span> <span class="string">'vue'</span>
+<span class="keyword">const</span> count = <span class="func">ref</span>(<span class="orange">0</span>)
+<span class="keyword">&lt;/script&gt;</span>
+
+<span class="keyword">&lt;template&gt;</span>
+  &lt;<span class="type">button</span> @click=<span class="string">"count++"</span>&gt;{{ count }}&lt;/<span class="type">button</span>&gt;
+<span class="keyword">&lt;/template&gt;</span></pre></div>
+
+    <h3>环境级强制</h3>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">framework</span>: <span class="string">'vue'</span>,
+  <span class="type">environments</span>: {
+    <span class="type">client</span>: {
+      <span class="type">vue</span>: {
+        <span class="type">features</span>: { <span class="type">vapor</span>: <span class="orange">true</span> },
+      },
+    },
+  },
+})</pre></div>
+
+    <div class="tip">
+      <strong>测试版免责声明：</strong>
+      启用 Vapor 时，终端与浏览器控制台会打印：
+      <em>Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.</em>
+      请勿在 SSR 或对稳定性有强要求的生产路径中依赖该模式。
+    </div>
 
     <h2>示例</h2>
 

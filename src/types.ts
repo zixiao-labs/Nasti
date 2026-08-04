@@ -127,6 +127,17 @@ export interface VueEnvironmentOptions {
   script?: Partial<SFCScriptCompileOptions>
   template?: Partial<SFCTemplateCompileOptions>
   style?: Partial<SFCAsyncStyleCompileOptions>
+  /**
+   * Vue 编译特性开关。
+   *
+   * `vapor`：将可强制进入 Vapor Mode 的 SFC（`<script setup>` / 纯 template）
+   * 统一按 Vapor 编译。单文件仍可通过 `<script setup vapor>` / `<template vapor>`
+   * 按需 opt-in。需要 `@vue/compiler-sfc` ≥ 3.6。
+   * @experimental
+   */
+  features?: {
+    vapor?: boolean
+  }
   transformSfc?: VueSfcSourceTransform
   transformTemplate?: VueSfcSourceTransform
   transformStyle?: VueSfcSourceTransform

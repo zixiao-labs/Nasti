@@ -1,8 +1,9 @@
-// 内置 Vue 插件 - SFC 编译 + Vue HMR
+// 内置 Vue 插件 - SFC 编译 + Vue HMR（含 Vue 3.6 Vapor Mode 测试版）
 import crypto from 'node:crypto'
 import type {
   NastiPlugin,
   ResolvedConfig,
+  VueEnvironmentOptions,
   VueSfcSourceTransform,
   VueSfcTransformContext,
 } from '../types.js'
@@ -21,11 +22,16 @@ const VUE_FILE_RE = /\.vue$/
 const VUE_QUERY_RE = /\.vue\?vue&type=(script|template|style)(&index=\d+)?(&lang[.=]\w+)?/
 const debug = createDebugger('nasti:vue')
 
+/** Vapor Mode 测试版免责声明：终端与浏览器控制台共用同一文案 */
+export const VAPOR_BETA_WARNING =
+  'Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.'
+
 interface VueCompilerSfc {
   parse: (source: string, options?: any) => any
   compileScript: (sfc: any, options: any) => any
   compileTemplate: (options: any) => any
   compileStyleAsync: (options: any) => Promise<any>
+  version?: string
 }
 
 let compiler: VueCompilerSfc | null = null
@@ -188,10 +194,12 @@ export function vuePlugin(
       const scopeId = hashId(id)
       const wantsSourceMap =
         !!config.build.sourcemap || transformedSfc.map != null
+      const vapor = resolveVaporMode(descriptor, vueOptions, sfc, config)
 
       // 编译 script
       let scriptCode = ''
       let scriptMap: unknown
+      let scriptBindings: Record<string, unknown> | undefined
       if (descriptor.script || descriptor.scriptSetup) {
         const inlineTemplate = vueOptions.script?.inlineTemplate !== false
         const compiled = sfc.compileScript(descriptor, {
@@ -204,8 +212,10 @@ export function vuePlugin(
           // 否则下方追加的 `__sfc__.render` / `__sfc__.__scopeId` / HMR 记录会引用一个
           // 不存在的 `__sfc__`，并与 compileScript 自带的 `export default` 形成双重默认导出。
           genDefaultAs: '__sfc__',
+          vapor,
         })
         scriptCode = compiled.content
+        scriptBindings = compiled.bindings
         scriptMap = composeSourceMapChain(
           [compiled.map, transformedSfc.map],
           { filename: id, environmentName, type: 'sfc' },
@@ -221,8 +231,11 @@ export function vuePlugin(
       // 编译 template（如果没有 inline）
       let templateCode = ''
       let templateMap: unknown
+      let templateMultiRoot: boolean | undefined
       const scriptSetupIsInline =
         !!descriptor.scriptSetup && vueOptions.script?.inlineTemplate !== false
+      const isTemplateOnlyVapor =
+        vapor && !descriptor.script && !descriptor.scriptSetup
       if (descriptor.template && !scriptSetupIsInline) {
         const transformedTemplate = await applySourceTransform(
           vueOptions.transformTemplate,
@@ -245,12 +258,19 @@ export function vuePlugin(
           filename: id,
           id: scopeId,
           inMap: templateInputMap,
+          vapor,
           compilerOptions: {
             ...customCompilerOptions,
+            // Vapor 在 bindingMetadata 缺失时需要空对象（与 Vite / compiler-sfc 一致）
+            bindingMetadata:
+              customCompilerOptions.bindingMetadata ??
+              scriptBindings ??
+              (vapor ? {} : undefined),
             scopeId: `data-v-${scopeId}`,
           },
         })
         templateCode = compiled.code
+        templateMultiRoot = compiled.multiRoot
         if (
           wantsSourceMap ||
           transformedTemplate.map != null
@@ -267,6 +287,7 @@ export function vuePlugin(
 
       // 组装输出。若 SFC 只有 <template> 而无任何 <script>，scriptCode 为空，
       // 兜底一个空组件对象，保证后续 `__sfc__.render` / `__scopeId` 赋值成立。
+      // Vapor 纯 template SFC 必须带 `__vapor: true`，否则运行时按 VDOM 组件处理。
       const outputNode = new SourceNode()
       let hasMappedOutput = false
       const append = (fragment: string, map?: unknown) => {
@@ -298,13 +319,21 @@ export function vuePlugin(
           outputNode.add(fragment)
         }
       }
-      append(scriptCode || 'const __sfc__ = {}', scriptMap)
+
+      append(
+        scriptCode ||
+          (vapor ? 'const __sfc__ = { __vapor: true }' : 'const __sfc__ = {}'),
+        scriptMap,
+      )
 
       if (templateCode) {
         append('\n')
         append(templateCode, templateMap)
         append('\n')
         append('\n__sfc__.render = render\n')
+        if (isTemplateOnlyVapor && templateMultiRoot !== undefined) {
+          append(`\n__sfc__.__multiRoot = ${JSON.stringify(templateMultiRoot)}\n`)
+        }
       }
 
       // style 导入（&lang.css 结尾 —— css 插件按 .css 后缀接管该虚拟模块）
@@ -312,6 +341,11 @@ export function vuePlugin(
         for (let i = 0; i < descriptor.styles.length; i++) {
           append(`\nimport "${id}?vue&type=style&index=${i}&lang.css"\n`)
         }
+      }
+
+      // Vapor 测试版免责声明：必须放在所有 import 之后，避免破坏 ESM 语法
+      if (vapor) {
+        append(`\nconsole.warn(${JSON.stringify(VAPOR_BETA_WARNING)})\n`)
       }
 
       // scoped 标记
@@ -388,6 +422,56 @@ if (import.meta.hot) {
       return modules
     },
   }
+}
+
+/**
+ * 解析当前 SFC 是否启用 Vapor Mode。
+ * - 单文件 opt-in：`descriptor.vapor`（`<script setup vapor>` / `<template vapor>`）
+ * - 环境级强制：`vue.features.vapor`（仅对可强制的 SFC 生效）
+ * 首次启用时在终端打印测试版免责声明。
+ */
+function resolveVaporMode(
+  descriptor: any,
+  vueOptions: VueEnvironmentOptions,
+  sfc: VueCompilerSfc,
+  config: ResolvedConfig,
+): boolean {
+  const requested =
+    !!descriptor.vapor ||
+    (!!vueOptions.features?.vapor && canForceVaporMode(descriptor))
+  if (!requested) return false
+
+  if (!supportsVaporCompiler(sfc)) {
+    config.logger.warnOnce(
+      '[nasti:vue] Vapor Mode requires @vue/compiler-sfc >= 3.6. ' +
+        'Install it: npm install @vue/compiler-sfc@^3.6.0-0',
+    )
+    return false
+  }
+
+  config.logger.warnOnce(VAPOR_BETA_WARNING)
+  return true
+}
+
+/**
+ * `features.vapor` 可强制：纯 template SFC、`<script setup>` SFC。
+ * 不可强制仅含普通 `<script>`（无 setup）的 `.vue`，因为 Vapor 不支持 Options API。
+ */
+function canForceVaporMode(descriptor: any): boolean {
+  if (typeof descriptor.filename === 'string' && descriptor.filename.endsWith('.vue')) {
+    if (descriptor.scriptSetup) return true
+    if (descriptor.script) return false
+  }
+  return true
+}
+
+/** `@vue/compiler-sfc` 主版本 ≥ 3.6 才具备 Vapor 编译器。 */
+function supportsVaporCompiler(sfc: VueCompilerSfc): boolean {
+  const version = sfc.version
+  if (!version) return false
+  const [major, minor] = version.split('.').map((part) => Number.parseInt(part, 10))
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return false
+  return major > 3 || (major === 3 && minor >= 6)
 }
 
 async function applySourceTransform(
