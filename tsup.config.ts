@@ -13,7 +13,7 @@ export default defineConfig({
   sourcemap: true,
   target: 'node20',
   splitting: false,
-  external: ['@vue/compiler-sfc'],
+  external: ['@vue/compiler-sfc', 'oxc-transform-react'],
   define: {
     __NASTI_VERSION__: JSON.stringify(pkg.version),
   },

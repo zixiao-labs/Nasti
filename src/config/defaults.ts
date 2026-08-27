@@ -1,4 +1,12 @@
-import type { NastiConfig, BuildConfig, ServerConfig, ResolveConfig, ElectronConfig, ExperimentalOptions } from '../types.js'
+import type {
+  NastiConfig,
+  BuildConfig,
+  ServerConfig,
+  ResolveConfig,
+  ElectronConfig,
+  ExperimentalOptions,
+  ResolvedReactOptions,
+} from '../types.js'
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
@@ -55,6 +63,14 @@ const defaultExperimental: Required<ExperimentalOptions> = {
   bundledDev: false,
 }
 
+export const defaultReact: ResolvedReactOptions = {
+  include: /\.[tj]sx?$/,
+  exclude: /node_modules/,
+  jsxImportSource: 'react',
+  jsxRuntime: 'automatic',
+  compiler: false,
+}
+
 export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | 'environments' | 'experimental'>> & {
   plugins: []
   experimental: Required<ExperimentalOptions>
@@ -64,6 +80,7 @@ export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | '
   mode: 'development',
   target: 'web',
   framework: 'auto',
+  react: defaultReact,
   resolve: defaultResolve,
   server: defaultServer,
   build: defaultBuild,

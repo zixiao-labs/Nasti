@@ -8,7 +8,12 @@ import pc from 'picocolors'
 import type { EnvironmentInstance, ResolvedConfig } from '../types.js'
 import { PluginContainer } from '../core/plugin-container.js'
 import { ModuleGraph } from '../core/module-graph.js'
-import { transformCode, shouldTransform, getModuleType } from '../core/transformer.js'
+import {
+  transformCode,
+  transformReactCode,
+  shouldTransform,
+  getModuleType,
+} from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
 import {
   loadEnv,
@@ -496,25 +501,43 @@ export async function transformRequest(
   // Fast Refresh / HMR 键必须在同一文件的多次 import（?t=xxx 变化）间稳定
   const stableUrl = cleanReqUrl
 
-  // OXC 转译 (TS/JSX/TSX)
+  // OXC 转译 (TS/JSX/TSX)。React 走独立管线，以便 Compiler 与 Refresh
+  // 共享同一次 AST 转换；Vue/旧插件继续保持原来的后置转换顺序。
   let wrappedWithRefresh = false
-  if (shouldTransform(filePath)) {
-    const isJsx = /\.[jt]sx$/.test(filePath)
-    const useRefresh = isJsx && config.framework !== 'vue'
+  if (config.framework === 'react') {
+    const refreshEnabled =
+      (ctx.environment?.consumer ?? 'client') === 'client' &&
+      config.server.hmr !== false
+    const useRefresh = refreshEnabled && (
+      !!config.react.compiler || /\.[jt]sx$/.test(filePath)
+    )
+    const result = await transformReactCode(filePath, code, {
+      react: config.react,
+      consumer: ctx.environment?.consumer ?? 'client',
+      development: true,
+      reactRefresh: useRefresh,
+      sourcemap: true,
+      target: ctx.environment?.options.build.target ?? config.build.target,
+      onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
+    })
+    if (result) {
+      code = result.code
+      if (result.map) map = JSON.parse(result.map)
+      if (useRefresh) {
+        // 把模块包装起来：安装 $RefreshReg$/$RefreshSig$、建 hot context、尾部触发 performReactRefresh
+        code = buildReactRefreshWrapper(stableUrl, code)
+        wrappedWithRefresh = true
+      }
+    }
+  } else if (shouldTransform(filePath)) {
     const result = transformCode(filePath, code, {
       sourcemap: true,
       jsxRuntime: 'automatic',
-      jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
-      reactRefresh: useRefresh,
+      jsxImportSource: 'vue',
       target: ctx.environment?.options.build.target ?? config.build.target,
     })
     code = result.code
     if (result.map) map = JSON.parse(result.map)
-    if (useRefresh) {
-      // 把模块包装起来：安装 $RefreshReg$/$RefreshSig$、建 hot context、尾部触发 performReactRefresh
-      code = buildReactRefreshWrapper(stableUrl, code)
-      wrappedWithRefresh = true
-    }
   }
 
   // 服务端与客户端必须使用同一组规范化 accept URL；否则消息里的 acceptedPath

@@ -18,7 +18,7 @@ import { resolveConfig } from '../config/index.js'
 import { rolldown } from 'rolldown'
 import { electronPlugin } from '../plugins/electron.js'
 import { resolvePlugin } from '../plugins/resolve.js'
-import { transformCode, shouldTransform } from '../core/transformer.js'
+import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
 import { detectInstalledElectron, normalizePreload } from '../build/electron.js'
 
@@ -211,14 +211,25 @@ async function compileNode(config: ResolvedConfig, entry: string, opts: CompileN
 
   const oxcTransformPlugin = {
     name: 'nasti:oxc-transform',
-    transform(code: string, id: string) {
-      if (!shouldTransform(id)) return null
-      const result = transformCode(id, code, {
-        sourcemap: true,
-        jsxRuntime: 'automatic',
-        jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
-        target: config.electron.nodeTarget,
-      })
+    async transform(code: string, id: string) {
+      const result = config.framework === 'react'
+        ? await transformReactCode(id, code, {
+            react: config.react,
+            consumer: 'server',
+            development: true,
+            sourcemap: true,
+            target: config.electron.nodeTarget,
+            onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
+          })
+        : shouldTransform(id)
+          ? transformCode(id, code, {
+              sourcemap: true,
+              jsxRuntime: 'automatic',
+              jsxImportSource: 'vue',
+              target: config.electron.nodeTarget,
+            })
+          : null
+      if (!result) return null
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },
   }

@@ -17,7 +17,7 @@ import { builtinModules, createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import type { ResolvedConfig, HotChannelInvokeHandlers } from '../types.js'
 import type { NastiEnvironment } from '../core/environment.js'
-import { transformCode, shouldTransform } from '../core/transformer.js'
+import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides, replaceEnvInCode } from '../core/env.js'
 import { createDebugger } from '../core/debug.js'
 
@@ -124,12 +124,32 @@ export class NastiModuleRunner {
       code = typeof transformed === 'string' ? transformed : transformed.code
     }
 
-    if (shouldTransform(cleanId)) {
+    if (this.config.framework === 'react') {
+      const result = await transformReactCode(cleanId, code, {
+        react: this.config.react,
+        consumer: this.environment.consumer,
+        development: true,
+        sourcemap: false,
+        target: this.environment.options.build.target,
+        onWarning: (message) => this.config.logger.warn(`[nasti:react] ${message}`),
+      })
+      if (result) {
+        code = result.code
+      } else if (shouldTransform(cleanId)) {
+        const fallback = transformCode(cleanId, code, {
+          sourcemap: false,
+          jsxRuntime: this.config.react.jsxRuntime,
+          jsxImportSource: this.config.react.jsxImportSource,
+          target: this.environment.options.build.target,
+        })
+        code = fallback.code
+      }
+    } else if (shouldTransform(cleanId)) {
       const result = transformCode(cleanId, code, {
         sourcemap: false,
         target: this.environment.options.build.target,
         jsxRuntime: 'automatic',
-        jsxImportSource: this.config.framework === 'vue' ? 'vue' : 'react',
+        jsxImportSource: 'vue',
       })
       code = result.code
     }

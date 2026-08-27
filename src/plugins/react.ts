@@ -1,25 +1,45 @@
-// 内置 React 插件 - handleHotUpdate 保底标记 JSX 为自接受
+// 内置 React 转换阶段。
 //
-// 注意：JSX/TSX 的实际转译与 Fast Refresh 包装统一由 server/middleware 管线处理
-// （因为涉及 import.meta.hot 注入、模块 URL 标识、self-accepting 位），
-// 此插件只保留一个后备 handleHotUpdate，防止在极端场景下（例如首次加载尚未
-// transformRequest 过的模块发生 change 事件）还能走 full-reload 兜底。
-import type { NastiPlugin } from '../types.js'
+// 保留 `nasti:oxc-transform` 插件名与生产构建中的原有位置，避免依赖旧顺序的
+// Nasti/Vite 兼容插件发生行为变化；真正的配置与可选 Compiler 选择集中在这里。
+import type { EnvironmentInstance, NastiPlugin, ResolvedConfig } from '../types.js'
+import { matchesReactFilter, transformReactCode } from '../core/transformer.js'
 
-const REACT_FILE_RE = /\.[jt]sx$/
+const REACT_FILE_RE = /\.[jt]sx(?:[?#].*)?$/
 
-export function reactPlugin(_: unknown): NastiPlugin {
+export function reactPlugin(
+  config: ResolvedConfig,
+  environment: EnvironmentInstance,
+): NastiPlugin {
   return {
-    name: 'nasti:react',
+    name: 'nasti:oxc-transform',
+
+    async transform(code, id) {
+      const result = await transformReactCode(id, code, {
+        react: config.react,
+        consumer: environment.consumer,
+        development: config.mode === 'development',
+        sourcemap: !!environment.options.build.sourcemap,
+        target: environment.options.build.target,
+        onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
+      })
+      if (!result) return null
+      return {
+        code: result.code,
+        map: result.map ? JSON.parse(result.map) : undefined,
+      }
+    },
 
     handleHotUpdate(ctx) {
-      const { modules } = ctx
-      for (const mod of modules) {
-        if (REACT_FILE_RE.test(mod.url)) {
+      for (const mod of ctx.modules) {
+        if (
+          REACT_FILE_RE.test(mod.url) &&
+          matchesReactFilter(mod.url, config.react.include, config.react.exclude)
+        ) {
           mod.isSelfAccepting = true
         }
       }
-      return modules
+      return ctx.modules
     },
   }
 }

@@ -45,7 +45,7 @@ import {
   toRolldownPlugins,
 } from '../../build/index.js'
 import { readHtmlFile, processHtml } from '../../plugins/html.js'
-import { transformCode } from '../../core/transformer.js'
+import { transformReactCode } from '../../core/transformer.js'
 import { getReactRefreshRuntimeEsm } from '../middleware.js'
 import { createDebugger } from '../../core/debug.js'
 
@@ -135,12 +135,13 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
   // React Fast Refresh 三件套（条件与 unbundled 中间件一致：framework !== 'vue'）：
   //   refresh runtime 虚拟模块 + 入口 preamble → OXC refresh 注册转换 →
   //   Nasti 插件 → 原生 wrapper（必须在 OXC 之后才能看到 $RefreshReg$ 调用）
-  const useReactRefresh = config.framework !== 'vue' && refreshWrapperFn != null
+  const useReactRefresh =
+    config.framework === 'react' && config.server.hmr !== false && refreshWrapperFn != null
   const rolldownPlugins = [
     ...(useReactRefresh
       ? [
           createReactRefreshRuntimePlugin(entryPoints),
-          createBundledOxcRefreshPlugin(),
+          createBundledOxcRefreshPlugin(config),
         ]
       : []),
     ...stripCatchAllLoad(toRolldownPlugins(clientEnv.plugins, clientEnv)),
@@ -575,18 +576,21 @@ function createReactRefreshRuntimePlugin(entryPoints: string[]) {
  * 之后才执行，wrapper 的内容过滤（`$RefreshReg$(`）会看不到而静默跳过
  *（版本 smoke test 验证）。node_modules 交给 rolldown 原生转换。
  */
-function createBundledOxcRefreshPlugin() {
+function createBundledOxcRefreshPlugin(config: ResolvedConfig) {
   return {
     name: 'nasti:bundled-oxc-refresh',
-    transform(code: string, id: string) {
+    async transform(code: string, id: string) {
       const clean = id.split('?')[0]
-      if (!/\.[jt]sx$/.test(clean) || clean.includes('/node_modules/')) return null
-      const result = transformCode(clean, code, {
-        sourcemap: true,
-        jsxRuntime: 'automatic',
-        jsxImportSource: 'react',
+      const result = await transformReactCode(clean, code, {
+        react: config.react,
+        consumer: 'client',
+        development: true,
         reactRefresh: true,
+        sourcemap: true,
+        target: config.build.target,
+        onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
       })
+      if (!result) return null
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },
   }

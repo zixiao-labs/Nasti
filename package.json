@@ -70,6 +70,7 @@
     "@types/connect": "^3.4.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
+    "oxc-transform-react": "^0.142.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
     "vue": "^3.6.0-rc.2"
@@ -77,5 +78,17 @@
   "optionalDependencies": {
     "@vue/compiler-sfc": "^3.6.0-rc.2",
     "lightningcss": "^1.32.0"
+  },
+  "peerDependencies": {
+    "oxc-transform-react": "^0.142.0",
+    "react-server-dom-webpack": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "oxc-transform-react": {
+      "optional": true
+    },
+    "react-server-dom-webpack": {
+      "optional": true
+    }
   }
 }

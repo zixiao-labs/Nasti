@@ -183,6 +183,82 @@ function myPlugin(): NastiPlugin {
 }
 ```
 
+## React pipeline
+
+React projects keep the existing automatic JSX and Fast Refresh behavior. The transform is now
+configured through a dedicated pipeline whose option names follow `@vitejs/plugin-react`:
+
+```ts
+export default defineConfig({
+  framework: 'react',
+  react: {
+    include: /\.[tj]sx?$/,
+    exclude: /node_modules/,
+    jsxRuntime: 'automatic',
+    jsxImportSource: 'react',
+  },
+})
+```
+
+The pipeline stays in the legacy transform slot: existing plugins still receive the same source
+shape and run in the same order in development and production.
+
+### React Compiler (experimental)
+
+Install the optional native compiler and enable it explicitly:
+
+```bash
+npm install -D oxc-transform-react
+```
+
+```ts
+export default defineConfig({
+  framework: 'react',
+  react: {
+    compiler: true,
+    // Or: compiler: { compilationMode: 'annotation', target: '19' },
+  },
+})
+```
+
+Compiler optimization is limited to `client` consumers. Server environments still use the same
+JSX runtime transform without compiling component memoization, which keeps server/client graphs
+explicit for full-stack frameworks.
+
+### RSC reference generator (experimental)
+
+The opt-in `rsc()` plugin provides the low-level bundler generation needed by React Server
+Components: `"use client"` proxies in the RSC graph, file-level `"use server"` references,
+automatic client-boundary entries, the `react-server` condition, and an inspectable chunk
+manifest.
+
+```bash
+npm install react-server-dom-webpack
+```
+
+```ts
+import { defineConfig, rsc } from '@nasti-toolchain/nasti'
+
+export default defineConfig({
+  framework: 'react',
+  plugins: [
+    rsc({
+      entries: {
+        client: 'src/entry.client.tsx',
+        ssr: 'src/entry.ssr.tsx',
+        rsc: 'src/entry.rsc.tsx',
+      },
+    }),
+  ],
+})
+```
+
+Production builds emit `rsc-manifest.json`, mapping stable `/<root-relative-module>#<export>`
+reference IDs to real client/RSC chunks. A framework remains responsible for request routing,
+Flight streaming, and installing its server-function dispatcher at
+`globalThis[Symbol.for('nasti.rsc.callServer')]`. This split lets Kunlun Next.js own application
+conventions without coupling Nasti to a specific runtime.
+
 ## Vue 支持
 
 Vue 支持需要安装可选依赖：
