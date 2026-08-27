@@ -194,6 +194,7 @@ export function rsc(options: RscPluginOptions = {}): NastiPlugin {
           }
         }
         if (
+          this.environment?.consumer === 'client' ||
           this.environment?.name === names.client ||
           this.environment?.name === names.ssr
         ) {

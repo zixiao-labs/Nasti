@@ -95,6 +95,31 @@ test('native React Compiler only optimizes client consumers', async (t) => {
   assert.match(serverCode, /react\/jsx-runtime/)
 })
 
+test('native React Compiler skips files outside the transform extensions', async (t) => {
+  const root = fixture(t)
+  write(root, 'index.html', '<script type="module" src="/src/plain.js"></script>\n')
+  write(root, 'src/plain.js', [
+    'import { useState } from "react";',
+    'export function App() { const [count] = useState(0); return count }',
+    '',
+  ].join('\n'))
+
+  const result = await build({
+    root,
+    framework: 'react',
+    react: { compiler: true },
+    logLevel: 'silent',
+    build: {
+      outDir: 'dist',
+      minify: false,
+      rolldownOptions: { external: REACT_EXTERNAL },
+    },
+  })
+
+  const clientCode = chunks(result.environments.client)
+  assert.doesNotMatch(clientCode, /react\/compiler-runtime/)
+})
+
 test('RSC generator emits client/server proxies and an inspectable manifest', async (t) => {
   const root = fixture(t)
   write(root, 'src/main.tsx', [
@@ -121,12 +146,19 @@ test('RSC generator emits client/server proxies and an inspectable manifest', as
     'export function Page() { return <Button action={save} /> }',
     '',
   ].join('\n'))
+  write(root, 'src/handheld.ts', [
+    'export { save } from "./actions";',
+    '',
+  ].join('\n'))
 
   const result = await build({
     root,
     framework: 'react',
     logLevel: 'silent',
     plugins: [rsc({ entries: { client: 'src/main.tsx', rsc: 'src/rsc.tsx' } })],
+    environments: {
+      handheld: { consumer: 'client', entry: 'src/handheld.ts' },
+    },
     build: {
       outDir: 'dist',
       minify: false,
@@ -136,6 +168,7 @@ test('RSC generator emits client/server proxies and an inspectable manifest', as
 
   const clientCode = chunks(result.environments.client)
   const rscCode = chunks(result.environments.rsc)
+  const handheldCode = chunks(result.environments.handheld)
   assert.match(clientCode, /interactive/)
   assert.match(clientCode, /createServerReference/)
   assert.doesNotMatch(clientCode, /SERVER_ONLY/)
@@ -143,6 +176,8 @@ test('RSC generator emits client/server proxies and an inspectable manifest', as
   assert.match(rscCode, /registerServerReference/)
   assert.match(rscCode, /SERVER_ONLY/)
   assert.doesNotMatch(rscCode, /interactive/)
+  assert.match(handheldCode, /createServerReference/)
+  assert.doesNotMatch(handheldCode, /SERVER_ONLY/)
 
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'dist/rsc-manifest.json'), 'utf-8'))
   assert.equal(manifest.version, 1)
@@ -151,6 +186,26 @@ test('RSC generator emits client/server proxies and an inspectable manifest', as
   assert.ok(manifest.clientReferences['/src/Button.tsx#label'].chunks.length > 0)
   assert.ok(manifest.serverReferences['/src/actions.ts#save'].chunks.length > 0)
   assert.ok(result.appOutput.some((item) => item.fileName === 'rsc-manifest.json'))
+})
+
+test('React SSR runner falls back to TypeScript transform outside the React filter', async (t) => {
+  const root = fixture(t)
+  write(root, 'src/entry.ts', [
+    'const answer: number = 42;',
+    'export { answer };',
+    '',
+  ].join('\n'))
+
+  const server = await createServer({
+    root,
+    framework: 'react',
+    react: { include: /\.tsx$/ },
+    logLevel: 'silent',
+  })
+  t.after(() => server.close())
+
+  const module = await server.ssrLoadModule('/src/entry.ts')
+  assert.equal(module.answer, 42)
 })
 
 function fixture(t) {

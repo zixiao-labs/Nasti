@@ -133,7 +133,17 @@ export class NastiModuleRunner {
         target: this.environment.options.build.target,
         onWarning: (message) => this.config.logger.warn(`[nasti:react] ${message}`),
       })
-      if (result) code = result.code
+      if (result) {
+        code = result.code
+      } else if (shouldTransform(cleanId)) {
+        const fallback = transformCode(cleanId, code, {
+          sourcemap: false,
+          jsxRuntime: this.config.react.jsxRuntime,
+          jsxImportSource: this.config.react.jsxImportSource,
+          target: this.environment.options.build.target,
+        })
+        code = fallback.code
+      }
     } else if (shouldTransform(cleanId)) {
       const result = transformCode(cleanId, code, {
         sourcemap: false,

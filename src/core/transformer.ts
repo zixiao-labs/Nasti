@@ -103,6 +103,7 @@ export async function transformReactCode(
     })
   }
 
+  if (!shouldTransform(filename)) return null
   const compiler = await loadReactCompiler()
   const compilerOptions = options.react.compiler
   const shouldCompile =
