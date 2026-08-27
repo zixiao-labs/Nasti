@@ -22,6 +22,8 @@ export interface NastiConfig {
   target?: 'web' | 'electron'
   /** 框架自动检测或手动指定 */
   framework?: 'react' | 'vue' | 'auto'
+  /** React JSX / Fast Refresh / Compiler 管线。仅在 framework 解析为 react 时生效。 */
+  react?: ReactOptions
   /** 路径解析配置 */
   resolve?: ResolveConfig
   /** 插件列表 */
@@ -50,6 +52,49 @@ export interface NastiConfig {
   environments?: Record<string, EnvironmentOptions>
   /** 实验特性（无稳定性保证，随时可能变更/移除） */
   experimental?: ExperimentalOptions
+}
+
+export type ReactFileFilter = string | RegExp | Array<string | RegExp>
+
+/**
+ * 原生 React Compiler 的公共配置子集。其余实验字段会原样传给
+ * `oxc-transform-react`，无需让 Nasti 与编译器的快速迭代强耦合。
+ */
+export interface ReactCompilerOptions {
+  compilationMode?: 'infer' | 'syntax' | 'annotation' | 'all'
+  panicThreshold?: 'none' | 'critical_errors' | 'all_errors'
+  target?: '17' | '18' | '19' | {
+    kind: 'donotuse_meta_internal'
+    runtimeModule?: string
+  }
+  gating?: { source: string; importSpecifierName: string }
+  dynamicGating?: { source: string }
+  noEmit?: boolean
+  outputMode?: 'client' | 'ssr' | 'lint'
+  sources?: string[]
+  [option: string]: unknown
+}
+
+/** React 管线选项；命名与 @vitejs/plugin-react 保持一致。 */
+export interface ReactOptions {
+  /** @default /\.[tj]sx?$/ */
+  include?: ReactFileFilter
+  /** @default /node_modules/ */
+  exclude?: ReactFileFilter
+  /** @default 'react' */
+  jsxImportSource?: string
+  /** @default 'automatic' */
+  jsxRuntime?: 'automatic' | 'classic'
+  /** 可选的原生 React Compiler；只编译 client consumer。 */
+  compiler?: boolean | ReactCompilerOptions
+}
+
+export interface ResolvedReactOptions {
+  include: ReactFileFilter
+  exclude: ReactFileFilter
+  jsxImportSource: string
+  jsxRuntime: 'automatic' | 'classic'
+  compiler: false | ReactCompilerOptions
 }
 
 export interface ExperimentalOptions {
@@ -648,6 +693,8 @@ export interface ResolvedConfig {
   target: 'web' | 'electron'
   /** `auto` 在配置解析阶段已收敛为具体框架 */
   framework: 'react' | 'vue'
+  /** 解析后的 React 管线配置；Vue 项目仍保留该字段以简化插件读取。 */
+  react: ResolvedReactOptions
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
   plugins: NastiPlugin[]

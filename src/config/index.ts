@@ -7,7 +7,7 @@ import type {
   NastiPlugin,
   EnvironmentOptions,
 } from '../types.js'
-import { defaults } from './defaults.js'
+import { defaultReact, defaults } from './defaults.js'
 import { createLogger } from '../core/logger.js'
 import { orderPlugins, setupPluginApi } from '../core/plugin-api.js'
 
@@ -201,6 +201,16 @@ export async function resolveConfig(
       (merged.framework ?? defaults.framework) === 'auto'
         ? detectFramework(root)
         : (merged.framework as 'react' | 'vue'),
+    react: {
+      include: merged.react?.include ?? defaultReact.include,
+      exclude: merged.react?.exclude ?? defaultReact.exclude,
+      jsxImportSource: merged.react?.jsxImportSource ?? defaultReact.jsxImportSource,
+      jsxRuntime: merged.react?.jsxRuntime ?? defaultReact.jsxRuntime,
+      compiler:
+        merged.react?.compiler === true
+          ? {}
+          : (merged.react?.compiler ?? defaultReact.compiler),
+    },
     command,
     resolve: {
       // tsconfig paths 优先级最低：tsconfig < defaults < user config

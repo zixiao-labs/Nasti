@@ -9,6 +9,12 @@ export { createServer } from './server/index.js'
 export { startElectronDev, electronRendererDevPath } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
 export { monacoEditorPlugin } from './plugins/monaco-editor.js'
+export { rsc } from './plugins/rsc.js'
+export type {
+  RscPluginOptions,
+  RscManifest,
+  RscManifestReference,
+} from './plugins/rsc.js'
 
 // 2.0: Environment API + Logger
 export { NastiEnvironment, resolveEnvironmentPlugins } from './core/environment.js'
@@ -19,6 +25,10 @@ export { loadEnv, buildEnvDefine, ssrDefineOverrides } from './core/env.js'
 
 export type {
   NastiConfig,
+  ReactOptions,
+  ReactCompilerOptions,
+  ReactFileFilter,
+  ResolvedReactOptions,
   NastiPlugin,
   ResolvedConfig,
   ElectronConfig,
