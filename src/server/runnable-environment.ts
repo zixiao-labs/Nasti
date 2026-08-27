@@ -13,8 +13,9 @@
 // runner.import(url)。
 import path from 'node:path'
 import fs from 'node:fs'
-import { builtinModules, createRequire } from 'node:module'
+import { builtinModules } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { moduleResolve } from 'import-meta-resolve'
 import type { ResolvedConfig, HotChannelInvokeHandlers } from '../types.js'
 import type { NastiEnvironment } from '../core/environment.js'
 import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
@@ -40,7 +41,8 @@ export class NastiModuleRunner {
   private config: ResolvedConfig
   private cache = new Map<string, ModuleCacheEntry>()
   private envDefine: Record<string, string>
-  private require: NodeJS.Require
+  private externalImportParent: URL
+  private externalImportConditions: Set<string>
 
   constructor(environment: NastiEnvironment) {
     this.environment = environment
@@ -50,7 +52,15 @@ export class NastiModuleRunner {
       this.config.mode,
       ssrDefineOverrides(environment.consumer),
     )
-    this.require = createRequire(path.join(this.config.root, 'package.json'))
+    this.externalImportParent = pathToFileURL(path.join(this.config.root, 'package.json'))
+    // External modules are executed with native `import()`, so `require` must
+    // never participate in conditional-export matching. Keep environment-specific
+    // conditions (for example `react-server`) while guaranteeing Node ESM semantics.
+    this.externalImportConditions = new Set([
+      ...environment.options.resolve.conditions.filter((condition) => condition !== 'require'),
+      'node',
+      'import',
+    ])
 
     // invoke 桥：fetchModule / getBuiltins 注册到该环境的 HotChannel
     const handlers: HotChannelInvokeHandlers = {
@@ -272,15 +282,16 @@ export class NastiModuleRunner {
     }
   }
 
-  /** bare specifier → 项目 node_modules 的绝对 URL（避免相对 Nasti 自身解析） */
+  /** bare specifier → 项目 node_modules 的 ESM URL（避免相对 Nasti 自身解析） */
   private resolveExternalSpecifier(spec: string): string {
     if (spec.startsWith('node:')) return spec
     if (NODE_BUILTINS.has(spec)) return `node:${spec}`
-    try {
-      return pathToFileURL(this.require.resolve(spec)).href
-    } catch {
-      return spec
-    }
+    return moduleResolve(
+      spec,
+      this.externalImportParent,
+      this.externalImportConditions,
+      false,
+    ).href
   }
 }
 
