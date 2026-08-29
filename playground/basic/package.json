@@ -1,14 +1,11 @@
 {
-  "name": "playground-vue-basic",
+  "name": "playground-basic",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "nasti dev",
     "build": "nasti build",
     "preview": "nasti preview"
-  },
-  "dependencies": {
-    "vue": "^3.5.35"
   },
   "devDependencies": {
     "@nasti-toolchain/nasti": "workspace:*"

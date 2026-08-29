@@ -22,6 +22,7 @@
   "license": "MIT",
   "author": "amiya167",
   "type": "module",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },

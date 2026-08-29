@@ -2,7 +2,14 @@
   "name": "nasti-electron-vue-playground",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "nasti electron",
+    "build": "nasti electron-build"
+  },
   "dependencies": {
     "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*"
   }
 }

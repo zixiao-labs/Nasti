@@ -19,19 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
           registry-url: 'https://registry.npmjs.org'
 
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: npm run build
+        run: pnpm build
 
       - name: Verify build output
         run: |
@@ -48,8 +50,10 @@ jobs:
 
       - name: Publish with provenance
         run: npm publish --provenance --access public
-        env: 
+        env:
           NODE_AUTH_TOKEN: ''
+        # 依赖安装/构建走 pnpm，但发布仍用 npm CLI：
+        # OIDC Trusted Publisher + --provenance 是 npm 特有的认证/溯源流程。
         # 使用 OIDC Trusted Publisher 认证，不需要 NPM_TOKEN
         #
         # === 首次配置步骤 ===

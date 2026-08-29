@@ -1,0 +1,5 @@
+packages:
+  - 'playground/*'
+allowBuilds:
+  # tsup 传递依赖，Part 2 换成 tsdown 后即消失
+  esbuild: true
