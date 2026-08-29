@@ -9,6 +9,7 @@ import type {
 } from '../types.js'
 import { defaultReact, defaults } from './defaults.js'
 import { createLogger } from '../core/logger.js'
+import { isMinifyEnabled } from '../core/minify.js'
 import { orderPlugins, setupPluginApi } from '../core/plugin-api.js'
 
 /** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
@@ -190,7 +191,7 @@ export async function resolveConfig(
   } as ResolvedConfig['build']
   // cssMinify 未显式配置时跟随 minify
   if (merged.build?.cssMinify === undefined) {
-    mergedBuild.cssMinify = !!mergedBuild.minify
+    mergedBuild.cssMinify = isMinifyEnabled(mergedBuild.minify)
   }
   const resolved: ResolvedConfig = {
     root,

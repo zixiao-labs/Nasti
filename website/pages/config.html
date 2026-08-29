@@ -172,13 +172,34 @@
       <tbody>
         <tr><td><code>outDir</code></td><td><code>string</code></td><td><code>'dist'</code></td><td>输出目录</td></tr>
         <tr><td><code>assetsDir</code></td><td><code>string</code></td><td><code>'assets'</code></td><td>资源子目录</td></tr>
-        <tr><td><code>minify</code></td><td><code>boolean</code></td><td><code>true</code></td><td>是否压缩</td></tr>
+        <tr><td><code>minify</code></td><td><code>boolean | 'dce-only' | object</code></td><td><code>true</code></td><td>产物压缩（OXC Minifier）。传对象可细控 <code>compress</code> / <code>mangle</code> / <code>codegen</code>：<code>mangle.keepNames.class</code> 控制<strong>类名最小化</strong>，<code>mangleProps</code> 按正则最小化<strong>属性名</strong>（Rolldown 1.2.6 · OXC 0.147 新增）。详见下方示例</td></tr>
         <tr><td><code>sourcemap</code></td><td><code>boolean | 'inline' | 'hidden'</code></td><td><code>false</code></td><td>Source map</td></tr>
         <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
         <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
         <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>透传给 Rolldown 的底层选项，用于手动控制 <strong>Tree-shaking</strong>（<code>treeshake</code>）与<strong>代码拆分</strong>（<code>output.advancedChunks</code> / <code>output.codeSplitting</code>）。详见下方示例</td></tr>
       </tbody>
     </table>
+
+    <h3>minify：类名与属性名最小化</h3>
+    <p><code>build.minify</code> 除 <code>true</code> / <code>false</code> / <code>'dce-only'</code> 外，还接受一个 OXC Minifier 选项对象（Rolldown 内置 OXC minifier）。默认情况下类名与函数名都会被最小化。</p>
+    <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
+  <span class="type">build</span>: {
+    <span class="type">minify</span>: {
+      <span class="comment">// 保留类名（依赖 Class.prototype.name 做注册 / 依赖注入的框架需要），</span>
+      <span class="comment">// 函数名照常最小化</span>
+      <span class="type">mangle</span>: { <span class="type">keepNames</span>: { <span class="type">class</span>: <span class="orange">true</span>, <span class="type">function</span>: <span class="orange">false</span> } },
+
+      <span class="comment">// 属性名最小化 —— Rolldown 1.2.6 · OXC 0.147 新增。</span>
+      <span class="comment">// 与 mangle 平级：独立于标识符重命名之外单独处理属性名（含类成员）</span>
+      <span class="type">mangleProps</span>: {
+        <span class="type">include</span>: /^_/,          <span class="comment">// 只压缩下划线前缀的「私有」属性</span>
+        <span class="type">exclude</span>: /^__/,         <span class="comment">// 排除双下划线约定</span>
+        <span class="type">reserved</span>: [<span class="string">'_id'</span>],     <span class="comment">// 精确豁免</span>
+      },
+    },
+  },
+})</pre></div>
+    <p><strong>注意：</strong><code>mangleProps</code> 只按名字匹配、不做类型分析。凡是被未压缩代码、模块命名空间、全局对象或宿主 API 持有的属性，都必须用 <code>exclude</code> / <code>reserved</code> 摘出去，否则访问路径会被改坏。</p>
 
     <h3>rolldownOptions：手动控制代码拆分与 Tree-shaking</h3>
     <p>生产应用常需手动分包（vendor / 按路由拆分）并精细化 Tree-shaking。<code>rolldownOptions</code> 的 input 侧选项（如 <code>treeshake</code>、<code>resolve</code>、<code>external</code>）会合并进 Rolldown，<code>output</code> 则合并进产物写出阶段（<code>bundle.write()</code>）。注：<code>input</code> / <code>plugins</code> 由 Nasti 接管，<code>output.dir</code> 始终由 <code>build.outDir</code> 决定。</p>

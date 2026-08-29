@@ -92,7 +92,9 @@ nasti dev ./my-project</pre></div>
       <tbody>
         <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
         <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
-        <tr><td><code>--minify</code></td><td>是否压缩</td><td><code>true</code></td></tr>
+        <tr><td><code>--no-minify</code></td><td>关闭压缩</td><td>压缩默认开启</td></tr>
+        <tr><td><code>--keep-names</code></td><td>压缩时保留函数名与类名</td><td><code>false</code></td></tr>
+        <tr><td><code>--mangle-props &lt;regex&gt;</code></td><td>最小化匹配该正则的属性名（如 <code>"^_"</code>）</td><td>—</td></tr>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
         <tr><td><code>--target &lt;target&gt;</code></td><td>构建目标：<code>web</code> 或 <code>electron</code></td><td><code>web</code></td></tr>
       </tbody>
@@ -134,7 +136,9 @@ nasti build --outDir output</pre></div>
       <tbody>
         <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
         <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
-        <tr><td><code>--minify</code></td><td>压缩产物</td><td><code>true</code></td></tr>
+        <tr><td><code>--no-minify</code></td><td>关闭压缩</td><td>压缩默认开启</td></tr>
+        <tr><td><code>--keep-names</code></td><td>压缩时保留函数名与类名</td><td><code>false</code></td></tr>
+        <tr><td><code>--mangle-props &lt;regex&gt;</code></td><td>最小化匹配该正则的属性名（如 <code>"^_"</code>）</td><td>—</td></tr>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
       </tbody>
     </table>

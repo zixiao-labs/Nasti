@@ -2,6 +2,7 @@
 import { cac } from 'cac'
 import pc from 'picocolors'
 import { createLogger, type LogLevel, type Logger } from './core/logger.js'
+import type { MinifyOption, NastiMinifyOptions } from './types.js'
 
 const cli = cac('nasti')
 
@@ -39,6 +40,40 @@ function createCliLogger(options: GlobalCLIOptions): Logger {
   return createLogger(options.logLevel ?? 'info', {
     allowClearScreen: options.clearScreen !== false,
   })
+}
+
+interface MinifyCLIOptions {
+  minify?: boolean
+  keepNames?: boolean
+  mangleProps?: string
+}
+
+/**
+ * 把压缩相关的 CLI flag 归一为 `build.minify`。
+ *
+ * 返回 `undefined` 表示「命令行未表态」—— 此时**不能**往 inline config 里塞值，
+ * 否则会覆盖掉 nasti.config.ts 里的 `build.minify`（inline 优先级高于文件配置）。
+ * 默认值由 config/defaults.ts 的 `minify: true` 提供。
+ *
+ * 注意不能只看 `options.minify`：cac 给否定式选项（`--no-minify`）自动补了
+ * `default: true`，未传任何 flag 时它同样是 `true`，与显式 `--minify` 无法区分。
+ * 故显式性一律以 argv 为准。
+ */
+function resolveCliMinify(
+  options: MinifyCLIOptions,
+  argv: readonly string[] = process.argv,
+): MinifyOption | undefined {
+  if (options.minify === false) return false
+  if (!options.keepNames && !options.mangleProps) {
+    return argv.includes('--minify') ? true : undefined
+  }
+  const minify: NastiMinifyOptions = {}
+  // keepNames 同时覆盖 function 与 class —— CLI 只提供粗粒度开关，
+  // 需要分别控制请用配置文件的 mangle.keepNames.{function,class}。
+  if (options.keepNames) minify.mangle = { keepNames: true }
+  // mangleProps 与 mangle 平级：它独立于标识符重命名之外单独处理属性名。
+  if (options.mangleProps) minify.mangleProps = { include: new RegExp(options.mangleProps) }
+  return minify
 }
 
 function logCliError(logger: Logger, prefix: string, err: unknown): never {
@@ -99,7 +134,9 @@ cli
   .command('build [root]', 'Build for production')
   .option('--outDir <dir>', 'Output directory', { default: 'dist' })
   .option('--sourcemap', 'Generate source map')
-  .option('--minify', 'Minify output', { default: true })
+  .option('--no-minify', 'Disable minification')
+  .option('--keep-names', 'Preserve function and class names through minification')
+  .option('--mangle-props <regex>', 'Minify property names matching this regex (e.g. "^_")')
   .option('--mode <mode>', 'Set env mode')
   .option('--target <target>', 'Build target: web | electron', { default: 'web' })
   .action(async (root: string | undefined, options: any) => {
@@ -120,7 +157,7 @@ cli
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
-          minify: options.minify,
+          minify: resolveCliMinify(options),
         },
       }
       if (target === 'electron') {
@@ -175,7 +212,9 @@ cli
   .command('electron-build [root]', 'Build Electron app for production')
   .option('--outDir <dir>', 'Output directory', { default: 'dist' })
   .option('--sourcemap', 'Generate source map')
-  .option('--minify', 'Minify output', { default: true })
+  .option('--no-minify', 'Disable minification')
+  .option('--keep-names', 'Preserve function and class names through minification')
+  .option('--mangle-props <regex>', 'Minify property names matching this regex (e.g. "^_")')
   .option('--mode <mode>', 'Set env mode')
   .action(async (root: string | undefined, options: any) => {
     setupDebug(options)
@@ -192,7 +231,7 @@ cli
         build: {
           outDir: options.outDir,
           sourcemap: options.sourcemap,
-          minify: options.minify,
+          minify: resolveCliMinify(options),
         },
       })
     } catch (err: any) {

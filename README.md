@@ -116,6 +116,36 @@ export default defineConfig({
 })
 ```
 
+### 产物压缩：类名 / 属性名最小化
+
+`build.minify` 接受 `boolean`、`'dce-only'` 或一个 OXC Minifier 选项对象（Rolldown 内置 OXC minifier）：
+
+```ts
+export default defineConfig({
+  build: {
+    minify: {
+      // 保留类名（依赖 Class.prototype.name 做注册 / 依赖注入的框架需要）；
+      // 函数名照常最小化。默认二者都会被压缩。
+      mangle: { keepNames: { class: true, function: false } },
+
+      // 最小化属性名 —— Rolldown 1.2.6 · OXC 0.147 新增。
+      // 与 mangle 平级：它独立于标识符重命名之外单独处理属性名（含类成员）。
+      mangleProps: {
+        include: /^_/,        // 只压缩下划线前缀的「私有」属性
+        exclude: /^__/,       // 排除双下划线约定
+        reserved: ['_id'],    // 精确豁免
+      },
+    },
+  },
+})
+```
+
+> `mangleProps` 只按名字匹配、不做类型分析。凡是被未压缩代码、模块命名空间、
+> 全局对象或宿主 API 持有的属性，都必须用 `exclude` / `reserved` 摘出去，
+> 否则访问路径会被改坏。
+
+CLI 侧提供对应的粗粒度开关：`--no-minify`、`--keep-names`（同时保函数名与类名）、`--mangle-props <regex>`。未传这些 flag 时完全交由配置文件决定。
+
 ## CLI
 
 ```bash
@@ -123,7 +153,7 @@ export default defineConfig({
 nasti dev [root] [--port 3000] [--host] [--open]
 
 # 生产构建（Web / Electron）
-nasti build [root] [--outDir dist] [--sourcemap] [--minify] [--target web|electron]
+nasti build [root] [--outDir dist] [--sourcemap] [--no-minify] [--keep-names] [--mangle-props <regex>] [--target web|electron]
 
 # 预览构建产物
 nasti preview [root] [--port 4173]
