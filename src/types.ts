@@ -1,7 +1,7 @@
 // Nasti - 核心类型定义
 // 兼容 Vite Plugin 接口
 
-import type { InputOptions, OutputOptions, RenderedChunk } from 'rolldown'
+import type { InputOptions, MinifyOptions, OutputOptions, RenderedChunk } from 'rolldown'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   SFCAsyncStyleCompileOptions,
@@ -269,7 +269,30 @@ export interface ProxyConfig {
 export interface BuildConfig {
   outDir?: string
   assetsDir?: string
-  minify?: boolean | 'oxc'
+  /**
+   * 产物压缩（Rolldown 内置 OXC Minifier）。
+   *
+   * - `true` / `false`：整体开关，默认 `true`；
+   * - `'oxc'`：历史写法，等同 `true`（Rolldown 只有 OXC 一个 minifier）；
+   * - `'dce-only'`：只做死代码消除，不重命名、不压缩语法；
+   * - {@link NastiMinifyOptions}：细粒度控制 `compress` / `mangle` / `codegen`。
+   *
+   * @example 保留类名（依赖 `Class.prototype.name` 做注册/绑定的框架需要）
+   * ```ts
+   * build: { minify: { mangle: { keepNames: { class: true, function: false } } } }
+   * ```
+   *
+   * @example 最小化类成员 / 属性名（Rolldown 1.2.6 · OXC 0.147 新增）
+   * ```ts
+   * build: { minify: { mangleProps: { include: /^_/ } } }
+   * ```
+   * `mangleProps` 与 `mangle` 平级，独立于标识符重命名之外单独处理属性名。
+   * 仅支持最终生成一个 JavaScript chunk；分包产生多个 JS chunk 时 Rolldown 会报错。
+   * 单入口可设置 `rolldownOptions.output.codeSplitting: false` 内联动态导入。
+   * 它只按名字匹配、不做类型分析，因此必须排除掉由未压缩代码、模块命名空间、
+   * 全局对象或宿主 API 持有的属性，否则会改坏访问路径。
+   */
+  minify?: MinifyOption
   sourcemap?: boolean | 'inline' | 'hidden'
   target?: string | string[]
   /**
@@ -294,6 +317,25 @@ export interface BuildConfig {
   /** 是否压缩抽取出的 CSS（Lightning CSS，不可用时回退正则压缩），默认同 minify */
   cssMinify?: boolean
 }
+
+/**
+ * Nasti 暴露的 OXC Minifier 选项，直接复用 Rolldown 的 `MinifyOptions`
+ * （`compress` / `mangle` / `codegen`）。
+ *
+ * 与类名最小化直接相关的两项：
+ * - `mangle.keepNames.class` / `.function` —— 是否保留类 / 函数的标识符名。
+ *   默认 `false`，即类名参与最小化；置 `true` 可让 `Class.prototype.name`
+ *   在压缩后仍然可用。
+ * - `mangleProps` —— 按 `include` / `exclude` 正则最小化属性名（含类成员），
+ *   与 `mangle` 平级，Rolldown 1.2.6 · OXC 0.147 起可用。
+ */
+export type NastiMinifyOptions = MinifyOptions
+
+/** {@link BuildConfig.minify} 的取值域。 */
+export type MinifyOption = boolean | 'oxc' | 'dce-only' | NastiMinifyOptions
+
+/** 归一化后交给 Rolldown `OutputOptions.minify` 的取值域（不含 `'oxc'` 别名）。 */
+export type ResolvedMinifyOption = boolean | 'dce-only' | NastiMinifyOptions
 
 /**
  * Nasti 暴露的 Rolldown 选项：在 Rolldown {@link InputOptions} 基础上去掉由 Nasti

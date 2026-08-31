@@ -22,8 +22,16 @@
   "license": "MIT",
   "author": "amiya167",
   "type": "module",
+  "packageManager": "pnpm@11.22.0",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^22.18.0 || >=24.11.0",
+      "onFail": "warn"
+    }
   },
   "exports": {
     ".": {
@@ -46,9 +54,10 @@
     "client"
   ],
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "test": "npm run build && node --test \"test/*.test.mjs\""
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "pnpm build && pnpm test:run",
+    "test:run": "node --test"
   },
   "dependencies": {
     "cac": "^6.7.14",
@@ -56,11 +65,11 @@
     "connect": "^3.7.0",
     "dotenv": "^16.4.0",
     "import-meta-resolve": "^4.2.0",
-    "oxc-parser": "^0.142.0",
-    "oxc-transform": "^0.142.0",
+    "oxc-parser": "^0.147.0",
+    "oxc-transform": "^0.147.0",
     "picocolors": "^1.1.0",
     "react-refresh": "^0.14.2",
-    "rolldown": "1.2.1",
+    "rolldown": "1.2.6",
     "sirv": "^3.0.0",
     "source-map-js": "^1.2.1",
     "ws": "^8.18.0"
@@ -71,8 +80,8 @@
     "@types/connect": "^3.4.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
-    "oxc-transform-react": "^0.142.0",
-    "tsup": "^8.0.0",
+    "oxc-transform-react": "^0.147.0",
+    "tsdown": "^0.22.14",
     "typescript": "^5.7.0",
     "vue": "^3.6.0-rc.2"
   },
@@ -81,7 +90,7 @@
     "lightningcss": "^1.32.0"
   },
   "peerDependencies": {
-    "oxc-transform-react": "^0.142.0",
+    "oxc-transform-react": "^0.147.0",
     "react-server-dom-webpack": "^19.0.0"
   },
   "peerDependenciesMeta": {
@@ -91,8 +100,5 @@
     "react-server-dom-webpack": {
       "optional": true
     }
-  },
-  "overrides": {
-    "esbuild": "0.28.2"
   }
 }

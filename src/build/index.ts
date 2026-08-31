@@ -21,6 +21,7 @@ import type {
   NastiPlugin,
 } from '../types.js'
 import { resolveConfig } from '../config/index.js'
+import { resolveMinifyOption } from '../core/minify.js'
 import { resolvePluginList } from '../plugins/builtins.js'
 import { NastiEnvironment } from '../core/environment.js'
 import {
@@ -144,7 +145,7 @@ export function getRolldownOptions(
     ? {
         format: 'esm',
         sourcemap: envOptions.build.sourcemap,
-        minify: !!envOptions.build.minify,
+        minify: resolveMinifyOption(envOptions.build.minify),
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: `${assetsDir}/[name].[hash][extname]`,
@@ -154,7 +155,7 @@ export function getRolldownOptions(
     : {
         format: 'esm',
         sourcemap: envOptions.build.sourcemap,
-        minify: !!envOptions.build.minify,
+        minify: resolveMinifyOption(envOptions.build.minify),
         entryFileNames: `${assetsDir}/[name].[hash].js`,
         chunkFileNames: `${assetsDir}/[name].[hash].js`,
         assetFileNames: `${assetsDir}/[name].[hash][extname]`,

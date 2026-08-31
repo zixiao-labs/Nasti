@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -7,26 +10,78 @@ on:
     branches: [main]
 
 jobs:
+  # tsdown 要求 Node ^22.18.0 || >=24.11.0，pnpm 11 自身要求 Node >=22.13，
+  # 而 Nasti 发布产物仍支持 Node 20（见 package.json engines）。
+  # 因此：构建只跑一次（Node 24）并把 dist/ 作为 artifact 交给测试作业，
+  # 测试作业依旧覆盖 20 / 22 / 24 三个运行时。
   build:
     runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         node-version: [20, 22, 24]
 
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+
+      # 安装固定在 Node 24：pnpm 11 依赖 node:sqlite，在 Node 20 上跑不起来。
+      # 依赖里的原生模块（rolldown / oxc-* / lightningcss）都是 N-API，
+      # 跨 Node 版本 ABI 稳定，故装完再切版本执行测试是安全的。
+      - name: Setup Node.js 24 (for pnpm install)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build output
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Build
-        run: npm run build
-
-      - name: Typecheck
-        run: npx tsc --noEmit
+      # 直接调 node，不经 pnpm —— 此时 PATH 上的 Node 可能是 20，pnpm 跑不了。
+      # 裸 `node --test`（依赖内置发现规则）是 Node 20/22/24 通用写法：
+      # 20 不支持 glob 形式，24 又会把 `test/` 当成模块路径去 require。
+      - name: Test (Node ${{ matrix.node-version }})
+        run: node --test

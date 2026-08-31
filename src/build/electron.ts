@@ -21,6 +21,7 @@ import { resolvePlugin } from '../plugins/resolve.js'
 import { electronPlugin } from '../plugins/electron.js'
 import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine } from '../core/env.js'
+import { resolveMinifyOption } from '../core/minify.js'
 
 export interface ElectronBuildResult {
   rendererOutDir: string
@@ -183,7 +184,7 @@ async function bundleNode(
 
   await bundle.write({
     sourcemap: !!config.build.sourcemap,
-    minify: !!config.build.minify,
+    minify: resolveMinifyOption(config.build.minify),
     // 允许用户微调 output；但主进程 / preload 的单文件约束由下方键强制保证
     ...userOutput,
     file: opts.outFile,
