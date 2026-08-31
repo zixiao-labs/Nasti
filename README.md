@@ -118,7 +118,7 @@ export default defineConfig({
 
 ### 产物压缩：类名 / 属性名最小化
 
-`build.minify` 接受 `boolean`、`'dce-only'` 或一个 OXC Minifier 选项对象（Rolldown 内置 OXC minifier）：
+`build.minify` 接受 `boolean`、`'oxc'`、`'dce-only'` 或一个 OXC Minifier 选项对象（Rolldown 内置 OXC minifier）。历史值 `'oxc'` 等同于 `true`，保留用于兼容旧配置：
 
 ```ts
 export default defineConfig({
@@ -143,8 +143,10 @@ export default defineConfig({
 > `mangleProps` 只按名字匹配、不做类型分析。凡是被未压缩代码、模块命名空间、
 > 全局对象或宿主 API 持有的属性，都必须用 `exclude` / `reserved` 摘出去，
 > 否则访问路径会被改坏。
+> 仅支持最终生成一个 JavaScript chunk；分包产生多个 JS chunk 时 Rolldown 会报错。
+> 单入口可设置 `build.rolldownOptions.output.codeSplitting: false` 内联动态导入。
 
-CLI 侧提供对应的粗粒度开关：`--no-minify`、`--keep-names`（同时保函数名与类名）、`--mangle-props <regex>`。未传这些 flag 时完全交由配置文件决定。
+`nasti build` 与 `nasti electron-build` 提供对应的粗粒度开关：`--minify` 显式启用压缩（可覆盖配置中的 `build.minify: false`），`--no-minify` 则显式关闭压缩。另有 `--keep-names`（同时保函数名与类名）、`--mangle-props <regex>`。未传这些 flag 时完全交由配置文件决定（默认开启压缩）。
 
 ## CLI
 
@@ -153,7 +155,7 @@ CLI 侧提供对应的粗粒度开关：`--no-minify`、`--keep-names`（同时�
 nasti dev [root] [--port 3000] [--host] [--open]
 
 # 生产构建（Web / Electron）
-nasti build [root] [--outDir dist] [--sourcemap] [--no-minify] [--keep-names] [--mangle-props <regex>] [--target web|electron]
+nasti build [root] [--outDir dist] [--sourcemap] [--minify | --no-minify] [--keep-names] [--mangle-props <regex>] [--target web|electron]
 
 # 预览构建产物
 nasti preview [root] [--port 4173]
@@ -162,7 +164,7 @@ nasti preview [root] [--port 4173]
 nasti electron [root] [--port 3000] [--no-spawn] [--no-restart]
 
 # Electron 生产构建（等价于 nasti build --target electron）
-nasti electron-build [root] [--outDir dist]
+nasti electron-build [root] [--outDir dist] [--minify | --no-minify]
 ```
 
 ## Programmatic API

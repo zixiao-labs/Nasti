@@ -86,13 +86,15 @@ nasti dev ./my-project</pre></div>
 
     <h2>nasti build</h2>
     <p>生产构建，输出到 <code>dist/</code> 目录。支持 Web 与 Electron 两种目标。</p>
+    <p><code>--minify</code> 显式启用压缩（可覆盖配置中的 <code>build.minify: false</code>），<code>--no-minify</code> 则显式关闭压缩。未传压缩相关 flag 时由配置文件决定（默认开启）。</p>
     <div class="code-block"><pre>nasti build [root] [options]</pre></div>
     <table>
       <thead><tr><th>选项</th><th>说明</th><th>默认值</th></tr></thead>
       <tbody>
         <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
         <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
-        <tr><td><code>--no-minify</code></td><td>关闭压缩</td><td>压缩默认开启</td></tr>
+        <tr><td><code>--minify</code></td><td>启用压缩，覆盖配置</td><td>由配置文件决定</td></tr>
+        <tr><td><code>--no-minify</code></td><td>关闭压缩，覆盖配置</td><td>由配置文件决定</td></tr>
         <tr><td><code>--keep-names</code></td><td>压缩时保留函数名与类名</td><td><code>false</code></td></tr>
         <tr><td><code>--mangle-props &lt;regex&gt;</code></td><td>最小化匹配该正则的属性名（如 <code>"^_"</code>）</td><td>—</td></tr>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>
@@ -125,6 +127,7 @@ nasti build --outDir output</pre></div>
 
     <h2>nasti electron-build</h2>
     <p>Electron 生产构建，等价于 <code>nasti build --target electron</code>。</p>
+    <p><code>--minify</code> / <code>--no-minify</code> 分别显式启用 / 关闭压缩并覆盖配置；未传压缩相关 flag 时由配置文件决定（默认开启）。</p>
     <div class="code-block"><pre>nasti electron-build [root] [options]
 
 <span class="comment"># 产物:</span>
@@ -136,7 +139,8 @@ nasti build --outDir output</pre></div>
       <tbody>
         <tr><td><code>--outDir &lt;dir&gt;</code></td><td>输出目录</td><td><code>dist</code></td></tr>
         <tr><td><code>--sourcemap</code></td><td>生成 source map</td><td><code>false</code></td></tr>
-        <tr><td><code>--no-minify</code></td><td>关闭压缩</td><td>压缩默认开启</td></tr>
+        <tr><td><code>--minify</code></td><td>启用压缩，覆盖配置</td><td>由配置文件决定</td></tr>
+        <tr><td><code>--no-minify</code></td><td>关闭压缩，覆盖配置</td><td>由配置文件决定</td></tr>
         <tr><td><code>--keep-names</code></td><td>压缩时保留函数名与类名</td><td><code>false</code></td></tr>
         <tr><td><code>--mangle-props &lt;regex&gt;</code></td><td>最小化匹配该正则的属性名（如 <code>"^_"</code>）</td><td>—</td></tr>
         <tr><td><code>--mode &lt;mode&gt;</code></td><td>设置环境模式</td><td><code>production</code></td></tr>

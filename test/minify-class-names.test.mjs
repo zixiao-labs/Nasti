@@ -11,6 +11,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { runInNewContext } from 'node:vm'
 
 import { build, resolveConfig } from '../dist/index.js'
 
@@ -83,6 +84,47 @@ test('mangleProps.reserved exempts exact names from property minification', asyn
   })
 
   assert.match(code, /_internalSlot/)
+})
+
+const propertyMinify = { mangleProps: { include: /^_private$/ } }
+
+// Rolldown 1.2.6 按最终 JS chunk 数拒绝属性压缩，无需在 Nasti 中重复猜测分包结果。
+for (const [name, output] of [
+  ['dynamic imports', {}],
+  ['manual chunks', { codeSplitting: { groups: [{ name: 'shared', test: /shared\.ts$/ }] } }],
+  ['preserveModules', { preserveModules: true }],
+  ['output.minify override', { minify: propertyMinify }],
+]) {
+  test(`mangleProps rejects multiple JavaScript chunks from ${name}`, async (t) => {
+    const root = splitFixture(t)
+    await assert.rejects(
+      build({
+        root,
+        logLevel: 'silent',
+        build: {
+          minify: output.minify ? false : propertyMinify,
+          rolldownOptions: { output },
+        },
+      }),
+      /output\.minify\.mangleProps.*one JavaScript chunk/,
+    )
+  })
+}
+
+test('mangleProps preserves property access when dynamic imports are inlined', async (t) => {
+  const root = splitFixture(t)
+  const result = await build({
+    root,
+    logLevel: 'silent',
+    build: { minify: propertyMinify, rolldownOptions: { output: { codeSplitting: false } } },
+  })
+  const chunks = result.output.filter((item) => item.type === 'chunk')
+  assert.equal(chunks.length, 1)
+  assert.doesNotMatch(chunks[0].code, /_private/)
+  const context = {}
+  runInNewContext(chunks[0].code, context)
+  assert.equal(context.__read(), 42)
+  assert.equal((await context.__lazy()).read(), 42)
 })
 
 test('dce-only skips renaming entirely', async (t) => {
@@ -175,11 +217,31 @@ test('CLI --keep-names and --mangle-props build a minify object', async (t) => {
   assert.doesNotMatch(code, /_internalSlot/, '属性名应按正则被压缩')
 })
 
-async function runCliBuild(root, args = []) {
-  await execFileAsync(process.execPath, [NASTI_BIN, 'build', '--logLevel', 'silent', ...args], {
+for (const command of ['build', 'electron-build']) {
+  test(`CLI ${command} respects minify: false unless --minify is explicit`, async (t) => {
+    const root = fixture(t)
+    fs.writeFileSync(path.join(root, 'nasti.config.ts'), 'export default { build: { minify: false } }\n')
+    if (command === 'electron-build') {
+      fs.mkdirSync(path.join(root, 'src/electron'))
+      fs.writeFileSync(path.join(root, 'src/electron/main.ts'), SOURCE)
+      fs.writeFileSync(path.join(root, 'src/electron/preload.ts'), SOURCE)
+    }
+
+    const baseline = await runCliBuild(root, [], command)
+    assert.match(baseline, /WidgetRegistryImpl/)
+    assert.match(baseline, /function createWidgetRegistry\(\)/)
+
+    const minified = await runCliBuild(root, ['--minify'], command)
+    assert.doesNotMatch(minified, /WidgetRegistryImpl/)
+    assert.doesNotMatch(minified, /createWidgetRegistry/)
+  })
+}
+
+async function runCliBuild(root, args = [], command = 'build') {
+  await execFileAsync(process.execPath, [NASTI_BIN, command, '--logLevel', 'silent', ...args], {
     cwd: root,
   })
-  const assets = path.join(root, 'dist', 'assets')
+  const assets = path.join(root, 'dist', command === 'electron-build' ? 'renderer' : '', 'assets')
   return fs
     .readdirSync(assets)
     .filter((file) => file.endsWith('.js'))
@@ -208,6 +270,20 @@ async function buildCode(t, buildOptions) {  const root = fixture(t)
     .filter((item) => item.type === 'chunk')
     .map((item) => item.code)
     .join('\n')
+}
+
+function splitFixture(t) {
+  const root = fixture(t)
+  fs.writeFileSync(path.join(root, 'src/shared.ts'), 'export const value = { _private: 42 }')
+  fs.writeFileSync(
+    path.join(root, 'src/main.ts'),
+    'import { value } from "./shared.ts"; globalThis.__read = () => value._private; globalThis.__lazy = () => import("./lazy.ts")',
+  )
+  fs.writeFileSync(
+    path.join(root, 'src/lazy.ts'),
+    'import { value } from "./shared.ts"; export const read = () => value._private',
+  )
+  return root
 }
 
 function fixture(t) {

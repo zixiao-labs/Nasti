@@ -287,6 +287,8 @@ export interface BuildConfig {
    * build: { minify: { mangleProps: { include: /^_/ } } }
    * ```
    * `mangleProps` 与 `mangle` 平级，独立于标识符重命名之外单独处理属性名。
+   * 仅支持最终生成一个 JavaScript chunk；分包产生多个 JS chunk 时 Rolldown 会报错。
+   * 单入口可设置 `rolldownOptions.output.codeSplitting: false` 内联动态导入。
    * 它只按名字匹配、不做类型分析，因此必须排除掉由未压缩代码、模块命名空间、
    * 全局对象或宿主 API 持有的属性，否则会改坏访问路径。
    */
