@@ -297,6 +297,7 @@ test('Electron dev recovers when a missing new import is created and watches sub
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   const pids = new Set()
+  const pidLiveness = new Map()
   let changedImport = false
   let createdModule = false
   let editedModule = false
@@ -316,7 +317,14 @@ test('Electron dev recovers when a missing new import is created and watches sub
     if (!createdModule && output.includes('保留上一次进程')) {
       createdModule = true
       // 失败的编译不能结束上一次已经加载的应用。
-      for (const pid of pids) assert.doesNotThrow(() => process.kill(pid, 0))
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 0)
+          pidLiveness.set(pid, true)
+        } catch {
+          pidLiveness.set(pid, false)
+        }
+      }
       write(root, 'new.mts', 'export const value = "recovered"')
     }
     if (!editedModule && output.includes('recovery-value:recovered:')) {
@@ -329,5 +337,8 @@ test('Electron dev recovers when a missing new import is created and watches sub
   const [code] = await once(child, 'exit')
   assert.equal(code, 0, output)
   assert.ok(createdModule, output)
+  for (const [pid, alive] of pidLiveness) {
+    assert.ok(alive, `Previous process ${pid} exited after a failed compilation: ${output}`)
+  }
   assert.match(output, /recovery-value:final:\d+/)
 })
