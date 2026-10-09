@@ -12,6 +12,9 @@ import { pack } from '../index.mjs';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const blockSize = 4 * 1024 * 1024;
 const invoke = (input, output, ...args) => spawnSync(binary, ['pack', input, output, ...args], { encoding: 'utf8', timeout: 10_000 });
+// @electron/asar splits lookup directories on path.sep; normalize at its API boundary.
+const oracleStatFile = (archive, name) => asar.statFile(archive, path.normalize(name));
+const oracleExtractFile = (archive, name) => asar.extractFile(archive, path.normalize(name));
 
 for (const backend of ['cli', 'binding']) {
 test(`${backend} official oracle: list, extraction, integrity, executable, sidecar, deterministic bytes`, async () => {
@@ -19,6 +22,7 @@ test(`${backend} official oracle: list, extraction, integrity, executable, sidec
   try {
     const input = path.join(temp, 'app');
     await fs.mkdir(path.join(input, '嵌套', 'empty-dir'), { recursive: true });
+    await fs.mkdir(path.join(input, '嵌套', '更深', 'empty-dir'), { recursive: true });
     await fs.mkdir(path.join(input, 'native', 'empty-dir'), { recursive: true });
     const files = {
       'package.json': Buffer.from('{"main":"index.js"}'),
@@ -26,6 +30,7 @@ test(`${backend} official oracle: list, extraction, integrity, executable, sidec
       '.hidden': Buffer.from('dot file'),
       '.pnpm': Buffer.from('ordinary dot file, not a dependency directory'),
       '嵌套/空.txt': Buffer.alloc(0),
+      '嵌套/更深/文件.txt': Buffer.from('nested file'),
       '嵌套/跨块.bin': Buffer.alloc(blockSize + 17, 42),
       '嵌套/整块.bin': Buffer.alloc(blockSize, 91),
       'native/run': Buffer.from('#!/bin/sh\nexit 0\n'),
@@ -48,10 +53,10 @@ test(`${backend} official oracle: list, extraction, integrity, executable, sidec
     await asar.createPackageWithOptions(input, official, { unpackDir: 'native', unpack: '.hidden' });
     assert.deepEqual(asar.listPackage(output).sort(), asar.listPackage(official).sort());
     for (const [name, bytes] of Object.entries(files)) {
-      assert.deepEqual(asar.extractFile(output, name), bytes);
-      const stat = asar.statFile(output, name);
+      assert.deepEqual(oracleExtractFile(output, name), bytes);
+      const stat = oracleStatFile(output, name);
       assert.equal(stat.size, bytes.length);
-      assert.deepEqual(stat.integrity, asar.statFile(official, name).integrity);
+      assert.deepEqual(stat.integrity, oracleStatFile(official, name).integrity);
       assert.equal(stat.integrity.hash, hash(bytes));
       assert.equal(stat.integrity.blockSize, blockSize);
       const blocks = [];
@@ -61,12 +66,13 @@ test(`${backend} official oracle: list, extraction, integrity, executable, sidec
       assert.equal(Boolean(stat.unpacked), name.startsWith('native/') || name === '.hidden');
       if (stat.unpacked) assert.deepEqual(await fs.readFile(`${output}.unpacked/${name}`), bytes);
     }
-    assert.equal(Boolean(asar.statFile(output, 'native/run').executable), process.platform !== 'win32');
-    assert.equal(asar.statFile(output, 'native/empty-dir').unpacked, true);
+    assert.equal(Boolean(oracleStatFile(output, 'native/run').executable), process.platform !== 'win32');
+    assert.equal(oracleStatFile(output, 'native/empty-dir').unpacked, true);
     const extracted = path.join(temp, 'extracted');
     asar.extractAll(output, extracted);
     for (const [name, bytes] of Object.entries(files)) assert.deepEqual(await fs.readFile(path.join(extracted, name)), bytes);
     assert.equal((await fs.stat(path.join(extracted, '嵌套/empty-dir'))).isDirectory(), true);
+    assert.equal((await fs.stat(path.join(extracted, '嵌套/更深/empty-dir'))).isDirectory(), true);
     if (process.platform !== 'win32') assert.ok((await fs.stat(path.join(extracted, 'native/run'))).mode & 0o100);
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
@@ -211,11 +217,15 @@ test('binding validates transitive, hoisted, nested and optional dependency mani
     await fs.mkdir(path.join(input, 'node_modules/b'));
     await fs.writeFile(path.join(input, 'node_modules/b/package.json'), '{}');
     await pack({ input, output });
-    assert.equal(asar.statFile(output, 'node_modules/b/package.json').size, 2);
+    assert.equal(oracleStatFile(output, 'node_modules/b/package.json').size, 2);
+    assert.deepEqual(oracleExtractFile(output, 'node_modules/b/package.json'), Buffer.from('{}'));
     await fs.rm(path.join(input, 'node_modules/b'), { recursive: true });
     await fs.mkdir(path.join(input, 'node_modules/a/node_modules/b'), { recursive: true });
     await fs.writeFile(path.join(input, 'node_modules/a/node_modules/b/package.json'), '{}');
-    await pack({ input, output: path.join(temp, 'nested.asar') });
+    const nestedOutput = path.join(temp, 'nested.asar');
+    await pack({ input, output: nestedOutput });
+    assert.equal(oracleStatFile(nestedOutput, 'node_modules/a/node_modules/b/package.json').size, 2);
+    assert.deepEqual(oracleExtractFile(nestedOutput, 'node_modules/a/node_modules/b/package.json'), Buffer.from('{}'));
   } finally {
     await fs.rm(temp, { recursive: true, force: true });
   }
