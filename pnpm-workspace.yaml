@@ -1,5 +1,6 @@
 packages:
   - 'playground/*'
+  - 'packages/*'
 
 # Nasti 的两个 peer（oxc-transform-react / react-server-dom-webpack）都是
 # optional —— 由下游按需安装。pnpm 的 autoInstallPeers 默认会把它们装进来，

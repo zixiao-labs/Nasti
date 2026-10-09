@@ -214,15 +214,15 @@ export interface ElectronConfig {
   renderer?: string
   /**
    * 主进程与 preload 打包目标 Node 版本。
-   * Electron 41 捆绑 Node 22.x，默认为 'node22'
+   * 默认为保守的 'node22'；使用更旧的 Electron 时需匹配其内置 Node 版本。
    */
   nodeTarget?: string
   /**
    * 主进程输出格式：cjs（默认，兼容 Electron 加载器）或 esm
-   * （Electron 41+ 完整支持 ESM 主进程）
+   * （输出 .mjs，Electron 28+ 原生支持；项目默认最低版本仍为 41）。
    */
   mainFormat?: 'cjs' | 'esm'
-  /** Preload 输出格式，默认 cjs（Electron contextIsolation 推荐） */
+  /** 默认 cjs（兼容 sandbox）；esm 输出 .mjs 且要求 BrowserWindow sandbox: false */
   preloadFormat?: 'cjs' | 'esm'
   /** Electron 可执行文件路径，默认从 node_modules/electron 查找 */
   electronPath?: string
@@ -232,7 +232,7 @@ export interface ElectronConfig {
   autoRestart?: boolean
   /** 声明最低 Electron 版本，默认 41（低于此版本将警告） */
   minVersion?: number
-  /** 主进程/preload 的外部依赖（不参与打包，运行时 require） */
+  /** 主进程/preload 的外部依赖及其子路径（运行时 import/require，需随应用分发） */
   external?: string[]
 }
 

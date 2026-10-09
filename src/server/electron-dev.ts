@@ -15,12 +15,8 @@ import chokidar from 'chokidar'
 import pc from 'picocolors'
 import type { NastiConfig, ResolvedConfig } from '../types.js'
 import { resolveConfig } from '../config/index.js'
-import { rolldown } from 'rolldown'
-import { electronPlugin } from '../plugins/electron.js'
-import { resolvePlugin } from '../plugins/resolve.js'
-import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
-import { loadEnv, buildEnvDefine } from '../core/env.js'
-import { detectInstalledElectron, normalizePreload } from '../build/electron.js'
+import { assertElectronVersion, detectInstalledElectron, normalizePreload } from '../build/electron.js'
+import { bundleElectronNode } from '../build/electron-node.js'
 
 export interface ElectronDevOptions extends NastiConfig {
   /** 不启动 Electron 进程，只编译主/preload（CI 场景） */
@@ -62,32 +58,38 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
   const preloadEntries = normalizePreload(config.electron.preload, config.root)
 
   const builtMainFile = path.join(stageDir, 'main' + extFor(config.electron.mainFormat))
-  const builtPreloadFiles: string[] = []
+  let watchTargets = [mainEntry, ...preloadEntries]
 
   const compileAll = async () => {
-    await compileNode(config, mainEntry, {
+    const files = new Set([mainEntry, ...preloadEntries])
+    for (const file of await bundleElectronNode(config, mainEntry, {
       outFile: builtMainFile,
       format: config.electron.mainFormat,
       devUrl,
-    })
-    builtPreloadFiles.length = 0
+    })) files.add(file)
     for (const entry of preloadEntries) {
       if (!fs.existsSync(entry)) continue
       const base = path.basename(entry).replace(/\.[^.]+$/, '')
       const out = path.join(stageDir, base + extFor(config.electron.preloadFormat))
-      await compileNode(config, entry, {
+      for (const file of await bundleElectronNode(config, entry, {
         outFile: out,
         format: config.electron.preloadFormat,
         devUrl,
-      })
-      builtPreloadFiles.push(out)
+      })) files.add(file)
     }
+    watchTargets = [...files]
   }
 
-  await compileAll()
+  try {
+    await compileAll()
+  } catch (error) {
+    await server.close()
+    throw error
+  }
 
   if (noSpawn) {
     console.log(pc.dim('  (noSpawn) 已编译主/preload，跳过启动 Electron。'))
+    await server.close()
     return
   }
 
@@ -99,6 +101,7 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
         '  ⚠ 未找到 Electron 可执行文件，请先安装：npm install -D electron\n    已编译主/preload 至 .nasti/，可手动运行。',
       ),
     )
+    await server.close()
     return
   }
 
@@ -116,12 +119,22 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
       }
     })
   }
-  spawnElectron()
 
   // 4. 监听主/preload 变化并重启
   if (config.electron.autoRestart) {
-    const watchTargets = [mainEntry, ...preloadEntries].filter(fs.existsSync)
-    const watcher = chokidar.watch(watchTargets, { ignoreInitial: true })
+    let watched = new Set(watchTargets)
+    let rebuildFailed = false
+    const ignoredDirs = [stageDir, path.resolve(config.root, config.build.outDir), path.join(config.root, '.git')]
+    // root 只用于失败后的源码恢复；正常编辑仅响应当前主/preload 依赖图，
+    // renderer HMR 不会因此触发 Electron 重启。避免扫描依赖树和自生成的输出。
+    const watcher = chokidar.watch([config.root, ...watchTargets], {
+      ignoreInitial: true,
+      ignored(file) {
+        const absolute = path.resolve(file)
+        return ignoredDirs.some((dir) => absolute === dir || absolute.startsWith(dir + path.sep)) ||
+          (absolute.split(path.sep).includes('node_modules') && !watched.has(absolute))
+      },
+    })
     // 旧实现：重启进行中就 return，丢弃变更。场景：改主进程后立刻改 preload
     //        会漏掉第二次。现在用 pending 标记 coalesce：等本轮完成后若 pending
     //        为真再跑一次，保证最后一次编辑必被编进去。
@@ -136,22 +149,33 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
         do {
           pending = false
           console.log(pc.cyan('\n  ♻ 主/preload 变更，重启 Electron...'))
-          if (child && !child.killed) {
-            ;(child as any).__nastiKilled = true
-            const dying = child
-            await new Promise<void>((resolve) => {
-              const timer = setTimeout(() => resolve(), 3000)
-              dying.once('exit', () => {
-                clearTimeout(timer)
-                resolve()
-              })
-              dying.kill()
-            })
-          }
           try {
             await compileAll()
+            rebuildFailed = false
+            // 编译成功后才结束旧进程，失败时继续运行上一次已加载的应用。
+            if (child && !child.killed) {
+              ;(child as any).__nastiKilled = true
+              const dying = child
+              await new Promise<void>((resolve) => {
+                const timer = setTimeout(() => resolve(), 3000)
+                dying.once('exit', () => {
+                  clearTimeout(timer)
+                  resolve()
+                })
+                dying.kill()
+              })
+            }
+            const next = new Set(watchTargets)
+            const added = [...next].filter((file) => !watched.has(file))
+            // root 已覆盖的路径保留目录监听，才能从新 import 缺文件的错误中恢复。
+            const removed = [...watched].filter((file) =>
+              !next.has(file) && !file.startsWith(config.root + path.sep))
+            watched = next
+            watcher.add(added)
+            await watcher.unwatch(removed)
             spawnElectron()
           } catch (e: any) {
+            rebuildFailed = true
             console.warn(pc.yellow(`  ⚠ 重启编译失败，保留上一次进程: ${e.message}`))
           }
           // 若 pending 在本轮期间被再次置位，立即再跑一轮
@@ -162,14 +186,28 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
     }
     // chokidar 会对一次保存触发多次事件；小窗口去抖避免过早发起重启
     let debounceTimer: NodeJS.Timeout | null = null
-    watcher.on('all', () => {
+    watcher.on('all', (_event, file) => {
+      const sourceFile = /\.(?:[cm]?[jt]s|[jt]sx|json)$/.test(file)
+      if (!watched.has(path.resolve(file)) && !(rebuildFailed && sourceFile)) return
       if (debounceTimer) clearTimeout(debounceTimer)
       debounceTimer = setTimeout(() => {
         debounceTimer = null
         void restart()
       }, 80)
     })
+    // 先建立监听再启动应用，避免启动后的第一笔导入模块变更落在初始化窗口内。
+    try {
+      await new Promise<void>((resolve, reject) => {
+        watcher.once('ready', resolve)
+        watcher.once('error', reject)
+      })
+    } catch (error) {
+      await watcher.close()
+      await server.close()
+      throw error
+    }
   }
+  spawnElectron()
 }
 
 /**
@@ -180,80 +218,6 @@ export async function startElectronDev(inlineConfig: ElectronDevOptions = {}): P
  */
 function extFor(format: 'cjs' | 'esm'): string {
   return format === 'cjs' ? '.cjs' : '.mjs'
-}
-
-interface CompileNodeOpts {
-  outFile: string
-  format: 'cjs' | 'esm'
-  devUrl: string
-}
-
-/**
- * Compile a Node-target entry (Electron main or preload) into a single output file for development.
- *
- * Injects environment defines (including `__ELECTRON__`, `__NASTI_TARGET__`, and `__NASTI_DEV_SERVER_URL__`), applies source transforms, and writes a bundled file using rolldown.
- *
- * @param config - Resolved Nasti configuration used for transforms and plugin resolution
- * @param entry - Path to the entry file to bundle
- * @param opts - Compilation options
- * @param opts.outFile - Destination path for the bundled output
- * @param opts.format - Output module format, either `'cjs'` or `'esm'`
- * @param opts.devUrl - Dev server URL injected into the bundle as `__NASTI_DEV_SERVER_URL__`
- */
-async function compileNode(config: ResolvedConfig, entry: string, opts: CompileNodeOpts): Promise<void> {
-  const env = loadEnv(config.mode, config.root, config.envPrefix)
-  const envDefine = {
-    ...buildEnvDefine(env, config.mode),
-    __ELECTRON__: 'true',
-    __NASTI_TARGET__: JSON.stringify('electron'),
-    __NASTI_DEV_SERVER_URL__: JSON.stringify(opts.devUrl),
-  }
-
-  const oxcTransformPlugin = {
-    name: 'nasti:oxc-transform',
-    async transform(code: string, id: string) {
-      const result = config.framework === 'react'
-        ? await transformReactCode(id, code, {
-            react: config.react,
-            consumer: 'server',
-            development: true,
-            sourcemap: true,
-            target: config.electron.nodeTarget,
-            onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
-          })
-        : shouldTransform(id)
-          ? transformCode(id, code, {
-              sourcemap: true,
-              jsxRuntime: 'automatic',
-              jsxImportSource: 'vue',
-              target: config.electron.nodeTarget,
-            })
-          : null
-      if (!result) return null
-      return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
-    },
-  }
-
-  const bundle = await rolldown({
-    input: entry,
-    transform: {
-      target: config.electron.nodeTarget,
-      define: envDefine,
-    },
-    platform: 'node',
-    plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
-  })
-  fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
-  await bundle.write({
-    file: opts.outFile,
-    format: opts.format === 'cjs' ? 'cjs' : 'esm',
-    sourcemap: true,
-    minify: false,
-    // rolldown 已弃用 inlineDynamicImports，改用 codeSplitting:false 表达
-    // 同样语义（单 chunk、内联 dynamic import）
-    codeSplitting: false,
-  })
-  await bundle.close()
 }
 
 /** 将 renderer HTML 路径转换为 Electron 开发服务器 URL path。 */
@@ -297,6 +261,7 @@ function resolveElectronBinary(config: ResolvedConfig): string | null {
  * @param config - Resolved configuration containing the project root and `electron.minVersion` to check against
  */
 function warnElectronVersion(config: ResolvedConfig): void {
+  assertElectronVersion(config)
   const installed = detectInstalledElectron(config.root)
   if (installed === null) {
     console.warn(
@@ -305,12 +270,5 @@ function warnElectronVersion(config: ResolvedConfig): void {
       ),
     )
     return
-  }
-  if (installed < config.electron.minVersion) {
-    console.warn(
-      pc.yellow(
-        `  ⚠ Electron ${installed} 低于 Nasti 要求的 ${config.electron.minVersion}，某些特性（如 ESM 主进程）不可用。`,
-      ),
-    )
   }
 }

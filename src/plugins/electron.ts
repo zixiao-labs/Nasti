@@ -31,14 +31,15 @@ export function electronPlugin(config: ResolvedConfig): NastiPlugin {
     ...NODE_BUILTINS,
     ...(config.electron.external ?? []),
   ])
+  const externalPrefixes = (config.electron.external ?? []).map((id) => id + '/')
 
   return {
     name: 'nasti:electron',
     enforce: 'pre',
 
     resolveId(source) {
-      // 显式外部化 electron 与 Node 内建模块
-      if (external.has(source)) {
+      // 外部包的子路径也属于同一个运行时依赖（包括 scoped packages）。
+      if (external.has(source) || externalPrefixes.some((prefix) => source.startsWith(prefix))) {
         return { id: source, external: true }
       }
       // 形如 `electron/xxx` 的子路径一律标记外部

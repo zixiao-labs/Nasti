@@ -4,7 +4,10 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 
-export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
+export function resolvePlugin(
+  config: ResolvedConfig,
+  options: { nativeResolver?: boolean } = {},
+): NastiPlugin {
   const { alias, extensions } = config.resolve
   const require = createRequire(path.resolve(config.root, 'package.json'))
 
@@ -18,7 +21,7 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
   // 否则整套模板编译器（~500kB）会被打进生产包。仅在 framework==='vue' 时启用，且只对
   // **精确** 的 `vue` specifier 生效（不影响 `vue/xxx` 子路径）。启动时解析一次并缓存。
   let vueRuntimeEntry: string | null = null
-  if (config.framework === 'vue') {
+  if (config.framework === 'vue' && !options.nativeResolver) {
     try {
       const vuePkgJson = require.resolve('vue/package.json', { paths: [config.root] })
       const vueDir = path.dirname(vuePkgJson)
@@ -34,18 +37,36 @@ export function resolvePlugin(config: ResolvedConfig): NastiPlugin {
     name: 'nasti:resolve',
     enforce: 'pre',
 
-    resolveId(source, importer) {
+    async resolveId(source, importer) {
       // 1. alias —— 优先：直接解析到磁盘上的目标文件
       for (const [key, value] of aliasEntries) {
         if (source === key || source.startsWith(key + '/')) {
           const aliasBase = resolveAliasTarget(value, config.root)
           const sub = source.slice(key.length).replace(/^\//, '')
           const target = sub ? path.join(aliasBase, sub) : aliasBase
+          if (options.nativeResolver) {
+            // this.resolve 默认 skipSelf；让原生 resolver 对 alias 目标继续应用
+            // extensionAlias，而不是把不存在的 helper.js 当成最终文件路径。
+            const resolved = await this.resolve(target, importer)
+            if (!resolved) throw new Error(`Cannot resolve alias "${source}" to "${target}"`)
+            return resolved
+          }
           const resolved = tryResolveFile(target, extensions)
           if (resolved) return resolved
           // alias 未命中实际文件：跳出循环走下游分支，避免把 `@/x` 误当作 bare import
           break
         }
+      }
+
+      if (options.nativeResolver) {
+        // Electron 的 Rolldown 管线：相对/绝对路径及 bare imports 都交给
+        // 原生 resolver，确保 extensionAlias 在物理 .js 存在时也一致生效。
+        // 仅保留 Nasti `/src/...` 根相对路径约定。
+        if (source.startsWith('/') && !source.startsWith('//')) {
+          const resolved = await this.resolve(path.join(config.root, source.slice(1)), importer)
+          if (resolved) return resolved
+        }
+        return null
       }
 
       // 2. 项目根相对路径（Vite 约定）：`/src/...` 指向 <root>/src/...

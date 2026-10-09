@@ -98,7 +98,7 @@
     <span class="type">main</span>: <span class="string">'src/electron/main.ts'</span>,
     <span class="type">preload</span>: <span class="string">'src/electron/preload.ts'</span>,
     <span class="type">renderer</span>: <span class="string">'src/renderer/index.html'</span>,
-    <span class="type">mainFormat</span>: <span class="string">'cjs'</span>,       <span class="comment">// 'cjs' | 'esm'（Electron 41+ 支持 ESM）</span>
+    <span class="type">mainFormat</span>: <span class="string">'esm'</span>,       <span class="comment">// 输出 main.mjs；未配置时仍默认 cjs</span>
     <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>,
     <span class="type">nodeTarget</span>: <span class="string">'node22'</span>,
     <span class="type">autoRestart</span>: <span class="orange">true</span>,
@@ -206,22 +206,50 @@ npx nasti build --target electron</pre></div>
 ├── main.cjs             <span class="comment"># 主进程（mainFormat=esm 时为 main.mjs）</span>
 └── preload.cjs          <span class="comment"># Preload（preloadFormat=esm 时为 preload.mjs）</span></pre></div>
 
-    <h2>ESM 主进程（Electron 41+）</h2>
+    <h2>ESM 主进程</h2>
     <p>
-      Electron 41 开始完整支持 ESM 主进程，可通过 <code>mainFormat: 'esm'</code> 启用：
+      Electron 28 开始原生支持 ESM。Nasti 默认最低版本仍为 41，可通过
+      <code>mainFormat: 'esm'</code> 启用主进程 ESM，preload 无需跟着切换：
     </p>
     <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">target</span>: <span class="string">'electron'</span>,
   <span class="type">electron</span>: {
     <span class="type">mainFormat</span>: <span class="string">'esm'</span>,
-    <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>, <span class="comment">// preload 建议保持 cjs 以兼容 contextIsolation</span>
+    <span class="type">preloadFormat</span>: <span class="string">'cjs'</span>, <span class="comment">// preload 保持 cjs 以兼容 sandbox</span>
   },
 })</pre></div>
 
     <div class="tip">
-      <strong>注意：</strong> 低于 Electron 41 时若使用 <code>mainFormat: 'esm'</code>，
-      Electron 会拒绝加载 <code>.mjs</code> 主进程。Nasti 在检测到过低版本时会输出警告。
+      <strong>注意：</strong> 检测到 Electron 低于 28 且配置 ESM 时，Nasti 会在构建前报错。
+      低于配置的 <code>minVersion</code> 则警告，使用旧版本还需匹配 <code>nodeTarget</code>。
+      ESM preload 必须为 <code>.mjs</code> 且要求 <code>sandbox: false</code>；
+      动态 Node 导入还要求 <code>contextIsolation: true</code>。Nasti 不会自动降低沙箱安全配置。
     </div>
+
+    <p>
+      dev/build 共用 Node 编译管线，按导入类型分别选择 <code>import</code> /
+      <code>require</code> 及开发/生产条件导出，继承自定义 Node 条件（排除 browser），支持相对路径与 alias 的 NodeNext 风格
+      <code>.mjs → .mts</code>、<code>.cjs → .cts</code>、<code>.js → .ts/.tsx</code>
+      源码解析。ESM 保留顶层 <code>await</code> 和 <code>import.meta.url</code>，
+      CJS 依赖通过 Rolldown 自带的 <code>createRequire</code> 桥接加载。
+    </p>
+    <div class="code-block"><pre><span class="keyword">import</span> path <span class="keyword">from</span> <span class="string">'node:path'</span>
+<span class="keyword">import</span> { fileURLToPath } <span class="keyword">from</span> <span class="string">'node:url'</span>
+
+<span class="comment">// 相对于最终输出文件；ESM 没有隐式 __dirname</span>
+<span class="keyword">const</span> currentDir = path.dirname(fileURLToPath(<span class="keyword">import</span>.meta.url))
+<span class="keyword">const</span> preload = path.join(currentDir, <span class="string">'preload.cjs'</span>)
+
+<span class="comment">// app.ready 前必须完成的初始化要显式 await</span>
+<span class="keyword">await import</span>(<span class="string">'./setup.mjs'</span>)</pre></div>
+    <p>
+      不要在 ESM 入口顶层 <code>await app.whenReady()</code>；窗口初始化应放在
+      <code>app.whenReady().then(createWindow)</code> 中，避免入口加载与 ready 互相等待。
+    </p>
+    <p>
+      自动重启也监听入口导入的本地模块；编译失败保留旧进程。
+      <code>nasti electron --no-spawn</code> 是一次性编译，会关闭 renderer 服务器并退出。
+    </p>
 
     <h2>配置参考</h2>
     <table>
@@ -257,14 +285,40 @@ npx nasti build --target electron</pre></div>
     </p>
     <div class="code-block"><pre><span class="comment">// package.json</span>
 {
+  <span class="string">"main"</span>: <span class="string">"dist/main.mjs"</span>,
   <span class="string">"scripts"</span>: {
     <span class="string">"build"</span>: <span class="string">"nasti electron-build && electron-builder"</span>
   },
   <span class="string">"build"</span>: {
     <span class="string">"files"</span>: [<span class="string">"dist/**"</span>],
-    <span class="string">"directories"</span>: { <span class="string">"buildResources"</span>: <span class="string">"build"</span> }
+    <span class="string">"directories"</span>: {
+      <span class="string">"buildResources"</span>: <span class="string">"build"</span>,
+      <span class="string">"output"</span>: <span class="string">"release"</span>
+    }
   }
 }</pre></div>
+    <p>如果使用默认 CJS 输出，把 <code>main</code> 改为 <code>dist/main.cjs</code>。
+      外部化的依赖（包括子路径、native addon）仍需包含在分发目录中。</p>
+
+    <h2>实验性 Rust / napi-rs ASAR 后端</h2>
+    <p>
+      仓库中的独立私有 package
+      <a href="https://github.com/zixiao-labs/Nasti/tree/main/packages/electron-packager">electron-packager</a>
+      针对 JS 编译之后的文件归档阶段：并行计算 SHA-256 完整性数据，流式写入
+      <code>app.asar</code>，支持显式解包文件和目录，并通过官方
+      <code>@electron/asar</code> 做格式兼容性测试。
+    </p>
+    <p>
+      Node API 使用 <code>napi-rs AsyncTask</code>：返回 Promise，阻塞文件操作和哈希在
+      主线程之外执行，不通过 CLI 子进程调用。CLI 与绑定共用归档核心，保留用于诊断；
+      需要显式构建本机原生模块，安装依赖不会自动编译或下载它。
+    </p>
+    <div class="tip">
+      它默认不启用，也不是 electron-builder 的直接替代品。输入必须是已经准备好的完整应用目录；
+      不负责 Electron 下载、依赖收集或重建、安装包、签名、公证、自动更新与发布。
+      ASAR 完整性数据也不等于已启用 Electron 的运行时 integrity fuse。
+      请先运行 package 内的兼容性测试和多轮基准，确认瓶颈和收益后再考虑接入分发流程。
+    </div>
   </main>
 </div>
 

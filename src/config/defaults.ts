@@ -10,7 +10,7 @@ import type {
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
-  extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue'],
+  extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue'],
   conditions: ['import', 'module', 'browser', 'default'],
   mainFields: ['module', 'jsnext:main', 'jsnext', 'main'],
 }
@@ -44,7 +44,7 @@ const defaultBuild: Required<BuildConfig> = {
   cssMinify: true,
 }
 
-// Electron 41+ 捆绑 Node 22.x / Chromium 138，故主进程目标默认 node22
+// 保留 CJS 默认值；ESM 可显式开启。Node 目标使用保守的 node22。
 const defaultElectron: Required<ElectronConfig> = {
   main: 'src/electron/main.ts',
   preload: 'src/electron/preload.ts',

@@ -5,5 +5,7 @@ export default {
     main: 'src/electron/main.ts',
     preload: 'src/electron/preload.ts',
     renderer: 'src/renderer/index.html',
+    mainFormat: 'esm',
+    preloadFormat: 'cjs',
   },
 }
