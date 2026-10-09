@@ -13,15 +13,10 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
-import { rolldown } from 'rolldown'
 import pc from 'picocolors'
 import type { NastiConfig, ResolvedConfig } from '../types.js'
 import { resolveConfig } from '../config/index.js'
-import { resolvePlugin } from '../plugins/resolve.js'
-import { electronPlugin } from '../plugins/electron.js'
-import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
-import { loadEnv, buildEnvDefine } from '../core/env.js'
-import { resolveMinifyOption } from '../core/minify.js'
+import { bundleElectronNode } from './electron-node.js'
 
 export interface ElectronBuildResult {
   rendererOutDir: string
@@ -74,10 +69,10 @@ export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<Ele
         `在 nasti.config.ts 的 electron.main 指定主进程入口文件。`,
     )
   }
-  const mainFile = await bundleNode(config, mainEntry, {
-    outFile: outFileName(outDir, 'main', config.electron.mainFormat),
+  const mainFile = outFileName(outDir, 'main', config.electron.mainFormat)
+  await bundleElectronNode(config, mainEntry, {
+    outFile: mainFile,
     format: config.electron.mainFormat,
-    label: 'main',
   })
 
   // ---- 3. Preload ----
@@ -90,10 +85,9 @@ export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<Ele
     }
     const base = path.basename(entry).replace(/\.[^.]+$/, '')
     const out = outFileName(outDir, base, config.electron.preloadFormat)
-    await bundleNode(config, entry, {
+    await bundleElectronNode(config, entry, {
       outFile: out,
       format: config.electron.preloadFormat,
-      label: `preload (${base})`,
     })
     preloadFiles.push(out)
   }
@@ -108,94 +102,6 @@ export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<Ele
   console.log()
 
   return { rendererOutDir, mainFile, preloadFiles }
-}
-
-interface BundleNodeOptions {
-  outFile: string
-  format: 'cjs' | 'esm'
-  label: string
-}
-
-/**
- * Bundles a Node-targeted entry for Electron into a single output file using Rolldown and the OXC transform.
- *
- * @param config - Fully resolved build configuration used to drive transforms, defines, plugins, and output options
- * @param entry - Absolute path to the entry file to bundle
- * @param opts - Bundle options; expects `outFile` (destination path), `format` (`'cjs'` or `'esm'`), and `label` (human-readable name for logging)
- * @returns The path to the written bundle file (`opts.outFile`)
- */
-async function bundleNode(
-  config: ResolvedConfig,
-  entry: string,
-  opts: BundleNodeOptions,
-): Promise<string> {
-  const env = loadEnv(config.mode, config.root, config.envPrefix)
-  const envDefine = {
-    ...buildEnvDefine(env, config.mode),
-    __ELECTRON__: 'true',
-    __NASTI_TARGET__: JSON.stringify('electron'),
-  }
-
-  const oxcTransformPlugin = {
-    name: 'nasti:oxc-transform',
-    async transform(code: string, id: string) {
-      const result = config.framework === 'react'
-        ? await transformReactCode(id, code, {
-            react: config.react,
-            consumer: 'server',
-            development: config.mode === 'development',
-            sourcemap: !!config.build.sourcemap,
-            target: config.electron.nodeTarget,
-            onWarning: (message) => config.logger.warn(`[nasti:react] ${message}`),
-          })
-        : shouldTransform(id)
-          ? transformCode(id, code, {
-              sourcemap: !!config.build.sourcemap,
-              jsxRuntime: 'automatic',
-              jsxImportSource: 'vue',
-              target: config.electron.nodeTarget,
-            })
-          : null
-      if (!result) return null
-      return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
-    },
-  }
-
-  // 从 build.rolldownOptions 拆出 output（合并进 bundle.write()）与 transform
-  // （需与 envDefine 合并），其余 input 选项（treeshake 等）随 restInputOptions 透传。
-  // Nasti 自管的 input / platform / transform / plugins 放在 spread 之后确保覆盖。
-  const { output: userOutput, transform: userTransform, ...restInputOptions } =
-    config.build.rolldownOptions
-  // 合并用户的 transform.define 和 envDefine，确保 envDefine 优先级更高
-  const mergedDefine = { ...(userTransform?.define ?? {}), ...envDefine }
-  const bundle = await rolldown({
-    ...restInputOptions,
-    input: entry,
-    platform: 'node',
-    transform: {
-      ...userTransform,
-      target: config.electron.nodeTarget,
-      define: mergedDefine,
-    },
-    plugins: [oxcTransformPlugin, electronPlugin(config), resolvePlugin(config)] as any,
-  })
-
-  fs.mkdirSync(path.dirname(opts.outFile), { recursive: true })
-
-  await bundle.write({
-    sourcemap: !!config.build.sourcemap,
-    minify: resolveMinifyOption(config.build.minify),
-    // 允许用户微调 output；但主进程 / preload 的单文件约束由下方键强制保证
-    ...userOutput,
-    file: opts.outFile,
-    format: opts.format === 'cjs' ? 'cjs' : 'esm',
-    codeSplitting: false,
-  })
-
-  await bundle.close()
-
-  console.log(pc.dim(`  ✓ ${opts.label} → ${path.relative(config.root, opts.outFile)}`))
-  return opts.outFile
 }
 
 /**
@@ -261,14 +167,26 @@ export function normalizePreload(preload: string | string[] | undefined, root: s
  *
  * @param config - Resolved build configuration that contains `electron.minVersion` and project `root`
  */
-function assertElectronVersion(config: ResolvedConfig): void {
+export function assertElectronVersion(config: ResolvedConfig): void {
   const min = config.electron.minVersion
   const installed = detectInstalledElectron(config.root)
+  if (
+    installed !== null && installed < 28 &&
+    (config.electron.mainFormat === 'esm' || config.electron.preloadFormat === 'esm')
+  ) {
+    throw new Error(`Electron ${installed} cannot load ESM main/preload scripts; Electron ≥ 28 is required.`)
+  }
   if (installed && installed < min) {
     console.warn(
       pc.yellow(
-        `  ⚠ 检测到 Electron ${installed}，Nasti 要求 ≥ ${min}。旧版本可能缺少 ESM 主进程支持。`,
+        `  ⚠ 检测到 Electron ${installed}，低于配置的最低版本 ${min}。请确认 nodeTarget 与运行时兼容。`,
       ),
+    )
+  }
+  if (config.electron.preloadFormat === 'esm') {
+    config.logger.warn(
+      'ESM preload requires sandbox: false; dynamic Node imports also require contextIsolation: true. ' +
+      'Nasti does not change BrowserWindow security preferences. Keep preloadFormat: "cjs" for sandboxed renderers.',
     )
   }
 }

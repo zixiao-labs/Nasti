@@ -341,7 +341,9 @@ export default defineConfig({
 
 ## Electron 支持
 
-Nasti 原生支持 Electron，**最低 Electron 41**（对应 Node 22 / Chromium 138，完整 ESM 主进程）。
+Nasti 原生支持 Electron，默认最低版本为 **Electron 41**。Electron 原生 ESM 支持始于
+[28](https://www.electronjs.org/docs/latest/tutorial/esm)，不是 41；选择更旧的运行时时，
+需同时调整 `minVersion` 与 `nodeTarget`，使编译目标匹配其内置 Node 版本。
 
 ```bash
 # 安装 Electron（按需选择版本，支持 41、42、43+）
@@ -359,9 +361,9 @@ export default defineConfig({
     main: 'src/electron/main.ts',        // 主进程入口
     preload: 'src/electron/preload.ts',  // Preload 脚本（可传数组）
     renderer: 'src/renderer/index.html', // React / Vue renderer HTML
-    mainFormat: 'cjs',                   // 主进程输出格式：'cjs' | 'esm'
-    preloadFormat: 'cjs',                // Preload 输出格式
-    nodeTarget: 'node22',                // Electron 41 捆绑 Node 22
+    mainFormat: 'esm',                   // 输出 main.mjs；未配置时仍默认 cjs
+    preloadFormat: 'cjs',                // 保持 sandbox 兼容，不必随主进程改为 ESM
+    nodeTarget: 'node22',                // 保守的编译目标，可按 Electron 运行时调整
     autoRestart: true,                   // 主/preload 变更后自动重启
     minVersion: 41,                      // 最低 Electron 版本
   },
@@ -381,19 +383,31 @@ createApp(App).mount('#app')
 生产 renderer 默认使用 `base: './'`，因此 `BrowserWindow.loadFile()` 可以正确加载
 hashed JS/CSS；显式配置其他 `base` 时保留用户值。
 
+主进程和 preload 的开发/生产编译共用 Node 解析规则，分别匹配依赖的 `import` /
+`require` 及开发/生产条件导出，并继承自定义 Node 条件（排除 `browser`）；
+支持相对路径和 alias 的 `.mjs` → `.mts`、`.cjs` → `.cts`、`.js` → `.ts` /
+`.tsx` 源码解析。ESM 输出保留顶层 `await`、`import.meta.url`，由 Rolldown 提供
+CJS 依赖需要的 `createRequire` 桥接，不注入可能与用户变量冲突的全局 banner。
+`electron.external` 外部化整个包及其子路径；这些运行时依赖仍需随应用分发。
+
 开发：
 
 ```bash
 # 同时启动渲染进程 dev server + Electron，主/preload 变更自动重启
 nasti electron
+
+# 一次性编译主/preload 后关闭服务器并退出（适合 CI）
+nasti electron --no-spawn
 ```
+
+自动重启会监听主/preload 导入的本地模块，而不仅是入口文件；编译失败时不结束旧进程。
 
 生产构建（产物结构）：
 
 ```text
 dist/
 ├── renderer/            # Web 渲染层
-├── main.cjs             # 主进程（可配置为 .mjs）
+├── main.mjs             # 上述 ESM 配置；默认 CJS 配置输出 main.cjs
 └── preload.cjs          # Preload 脚本
 ```
 
@@ -403,13 +417,17 @@ dist/
 // src/electron/main.ts
 import { app, BrowserWindow } from 'electron'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// ESM 没有隐式 __dirname；此处路径相对于最终输出文件。
+const currentDir = path.dirname(fileURLToPath(import.meta.url))
 
 async function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.resolve(__dirname, 'preload.cjs'),
+      preload: path.join(currentDir, 'preload.cjs'),
       contextIsolation: true,
       sandbox: true,
     },
@@ -419,12 +437,66 @@ async function createWindow() {
   if (process.env.NASTI_DEV_SERVER_URL) {
     await win.loadURL(process.env.NASTI_DEV_SERVER_URL)
   } else {
-    await win.loadFile(path.resolve(__dirname, 'renderer/index.html'))
+    await win.loadFile(path.join(currentDir, 'renderer/index.html'))
   }
 }
 
 app.whenReady().then(createWindow)
 ```
+
+需要在 `app.ready` 前执行的异步初始化，应在 ESM 入口显式 `await`，不要只调用
+`import('./setup.mjs')` 后立即注册窗口启动。**不要在入口顶层 `await app.whenReady()`**，
+应使用 `app.whenReady().then(createWindow)`，避免入口加载与 ready 互相等待。
+Preload 若选择 `esm`，必须使用 `.mjs`
+且设置 `sandbox: false`；动态 Node 导入还要求 `contextIsolation: true`。
+Nasti 不会为了 ESM 自动降低 `BrowserWindow` 的安全配置，沙箱 preload 建议保持 CJS。
+
+### 应用封装与实验性 Rust 后端
+
+`nasti electron-build` 编译代码，不生成安装包。正式分发仍建议使用 electron-builder，
+并让应用入口与输出格式一致：
+
+```json
+{
+  "main": "dist/main.mjs",
+  "scripts": {
+    "build": "nasti electron-build && electron-builder"
+  },
+  "build": {
+    "files": ["dist/**"],
+    "directories": { "output": "release" }
+  }
+}
+```
+
+如果瓶颈在文件归档而非 JS 编译，可以试用独立的
+[`packages/electron-packager`](packages/electron-packager/README.md)。
+这是**私有、实验性 Rust / napi-rs ASAR 后端**，不是 electron-builder 的 drop-in 替代品，
+也不会默认进入 Nasti 构建链路。它针对已经暂存好的完整应用目录，并行计算 SHA-256
+完整性数据、流式写入 ASAR，支持显式解包文件/目录。Node API 通过 `napi-rs`
+的 `AsyncTask` 返回 Promise，文件与 CPU 工作不占用 Node 主线程，也不再默认启动
+CLI 子进程；共享 Rust 核心的 CLI 保留用于手工使用和诊断。
+
+```bash
+# 显式构建本机原生绑定与可选 CLI，不在安装依赖时自动编译/下载
+pnpm --filter @nasti-toolchain/electron-packager build
+```
+
+```js
+// 在已链接该 workspace package 的构建工具中使用
+import { pack } from '@nasti-toolchain/electron-packager'
+
+await pack({
+  input: '/absolute/staged-app',   // 已包含 package.json、main 和运行时依赖
+  output: '/absolute/release/app.asar', // 父目录须存在；不覆盖已有输出
+  unpack: ['node_modules/native-addon'],
+})
+```
+
+完整重写 electron-builder 涉及跨平台安装包、依赖收集与 ABI 重建、签名、公证、
+自动更新及发布，不宜只为归档性能把这些能力一起重写。当前工具不负责这些步骤，
+也不直接接受未暂存的 pnpm 符号链接依赖树。用包内的兼容性测试和基准确认收益后，
+再考虑集成后续分发流程；**Rust 实现不等于端到端打包一定更快**。
 
 > 详细说明见 [Electron 指南](https://nasti.zixiaolabs.com/pages/electron.html)。
 

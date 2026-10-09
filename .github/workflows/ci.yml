@@ -85,3 +85,46 @@ jobs:
       # 20 不支持 glob 形式，24 又会把 `test/` 当成模块路径去 require。
       - name: Test (Node ${{ matrix.node-version }})
         run: node --test
+
+  # Rust 后端独立验证；普通 Nasti 构建与 Node 20 测试不依赖 Rust。
+  electron-packager:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path packages/electron-packager/Cargo.toml --check
+
+      - name: Test Rust packager
+        run: cargo test --manifest-path packages/electron-packager/Cargo.toml --locked
+
+      - name: Lint Rust packager
+        run: cargo clippy --manifest-path packages/electron-packager/Cargo.toml --locked -- -D warnings
+
+      - name: Lint napi-rs binding
+        run: cargo clippy --manifest-path packages/electron-packager/Cargo.toml --locked --lib --features binding -- -D warnings
+
+      - name: Build Rust packager
+        run: pnpm --filter @nasti-toolchain/electron-packager build
+
+      - name: Verify official ASAR interoperability
+        run: pnpm --filter @nasti-toolchain/electron-packager test

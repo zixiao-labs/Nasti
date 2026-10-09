@@ -1,0 +1,26 @@
+{
+  "name": "@nasti-toolchain/electron-packager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.mjs" }
+  },
+  "types": "./index.d.ts",
+  "napi": { "binaryName": "nasti-electron-packager" },
+  "scripts": {
+    "build": "npm run build:binding && npm run build:cli",
+    "build:binding": "napi build --release --features binding --no-js --dts generated.d.ts -- --lib --locked",
+    "build:cli": "cargo build --release --locked",
+    "pack": "node scripts/pack.mjs",
+    "test": "node --test scripts/compat.mjs",
+    "benchmark": "node scripts/benchmark.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.8",
+    "@electron/asar": "4.0.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

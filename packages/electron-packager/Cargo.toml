@@ -1,0 +1,28 @@
+[package]
+name = "nasti-electron-packager"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+binding = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
+
+[build-dependencies]
+napi-build = { version = "2", optional = true }
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi4"], optional = true }
+napi-derive = { version = "3", optional = true }
+anyhow = "1"
+rayon = "1"
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+
+# sha2 0.10 的 AArch64 硬件 SHA 后端需要显式开启；
+# 不使用 target-cpu=native，产物仍通过运行时 CPU 检测回退。
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { version = "0.10", features = ["asm-aarch64"] }
