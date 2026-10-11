@@ -7,6 +7,11 @@ import { createRequire } from 'node:module'
 
 import { createServer } from '../dist/index.js'
 
+/**
+ * Create a temporary SSR import chain and server with automatic test cleanup.
+ * Disable native watcher subscriptions so tests can emit deterministic events.
+ * @returns The server, SSR graph, fixture paths, and a helper for writing modules.
+ */
 async function fixture(t, create, options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-ssr-graph-'))
   let server
@@ -36,6 +41,7 @@ async function fixture(t, create, options = {}) {
   return { root, server, write, dep, graph: server.environments.ssr.moduleGraph }
 }
 
+/** Return an SSR node after asserting its canonical ID and graph file indexes. */
 function node(graph, url, root) {
   const mod = graph.getModuleByUrl(url)
   assert.ok(mod, `missing graph node ${url}`)
@@ -47,11 +53,13 @@ function node(graph, url, root) {
   return mod
 }
 
+/** Assert that a dependency edge is recorded in both directions. */
 function edge(importer, dependency) {
   assert.ok(importer.importedModules.has(dependency), `${importer.url} must import ${dependency.url}`)
   assert.ok(dependency.importers.has(importer), `${dependency.url} must retain its importer`)
 }
 
+/** Assert cached transforms and edges for the fixture chain, then return its nodes. */
 function chain(graph, root) {
   const entry = node(graph, '/entry.js', root)
   const middle = node(graph, '/middle.js', root)

@@ -28,6 +28,13 @@ import { getPluginApi } from '../core/plugin-api.js'
 import { buildEnvDefine, loadEnv, ssrDefineOverrides } from '../core/env.js'
 import { clearLinkedPackageRootsCache, getLinkedPackageRoots, isUnderRoot } from './fs-allow.js'
 
+/**
+ * Create a development server with per-environment transforms and module graphs.
+ * Native server transforms and SSR loads are available before calling `listen()`.
+ * Call `close()` to release watchers, runners, and environment resources.
+ * @param inlineConfig Configuration overrides merged with the project config.
+ * @returns The configured server, with HTTP listening deferred to `listen()`.
+ */
 export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevServer> {
   const startTime = performance.now()
   const config = await resolveConfig(inlineConfig, 'serve')
@@ -115,6 +122,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     string,
     Promise<import('./runnable-environment.js').NastiModuleRunner>
   >()
+  /**
+   * Lazily initialize an environment and share its runner between transforms and
+   * SSR evaluation. Concurrent callers reuse the same initialization promise.
+   */
   async function getServerRunner(environment: NastiEnvironment) {
     let runner = serverRunners.get(environment.name)
     if (!runner) {
