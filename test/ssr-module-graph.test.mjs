@@ -283,6 +283,43 @@ for (const [format, create] of [
     for (const count of counts.values()) assert.equal(count, 1)
   })
 
+  check('failed runner initialization is shared and can be retried', async (t) => {
+    let attempts = 0
+    const plugin = {
+      name: 'fixture:retry-init',
+      applyToEnvironment(environment) {
+        if (environment.name === 'ssr') attempts++
+        return true
+      },
+    }
+    const dependency = { name: 'fixture:retry-dependency', pre: [plugin.name] }
+    const { server } = await fixture(t, create, { plugins: [plugin, dependency] })
+    // Introduce a container ordering failure after config resolution, before
+    // the lazy server environment initializes.
+    plugin.pre = [dependency.name]
+    const results = await Promise.allSettled([
+      server.transformEnvironmentRequest('ssr', '/entry.js'),
+      server.ssrLoadModule('/entry.js'),
+    ])
+    for (const result of results) {
+      assert.equal(result.status, 'rejected')
+      assert.match(result.reason.message, /circular plugin setup dependency/)
+      assert.equal(result.reason, results[0].reason)
+    }
+    assert.equal(attempts, 1)
+
+    delete plugin.pre
+    const [transformed, exports] = await Promise.all([
+      server.transformEnvironmentRequest('ssr', '/entry.js'),
+      server.ssrLoadModule('/entry.js'),
+    ])
+    assert.ok(transformed.code)
+    assert.equal(exports.value, 'middle:old')
+    assert.equal(attempts, 2)
+    assert.equal(await server.ssrLoadModule('/entry.js'), exports)
+    assert.equal(attempts, 2, 'successful initialization must remain cached')
+  })
+
   check('stale in-flight transforms cannot overwrite newer cache or edges', async (t) => {
     let started
     let release

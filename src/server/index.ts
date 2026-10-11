@@ -136,7 +136,14 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       })()
       serverRunners.set(environment.name, runner)
     }
-    return runner
+    try {
+      return await runner
+    } catch (error) {
+      if (serverRunners.get(environment.name) === runner) {
+        serverRunners.delete(environment.name)
+      }
+      throw error
+    }
   }
   for (const environment of Object.values(environments)) {
     if (environment.consumer !== 'server' || environment.options.driver) continue

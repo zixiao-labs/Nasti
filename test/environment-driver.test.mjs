@@ -11,6 +11,40 @@ import {
   resolveConfig,
 } from '../dist/index.js'
 
+test('environment initialization can retry after an asynchronous driver failure', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-driver-init-retry-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true }))
+  let attempts = 0
+  const failure = new Error('temporary driver initialization failure')
+  const driver = { name: 'fixture' }
+  const config = await resolveConfig({
+    root,
+    logLevel: 'silent',
+    environments: { ssr: { consumer: 'server', driver: 'fixture' } },
+    plugins: [{
+      name: 'fixture:retry-driver',
+      async createEnvironmentDriver() {
+        attempts++
+        await Promise.resolve()
+        if (attempts === 1) throw failure
+        return driver
+      },
+    }],
+  }, 'serve')
+  const environment = new NastiEnvironment('ssr', config)
+  t.after(() => environment.close())
+  await assert.rejects(environment.init(), (error) => error === failure)
+  assert.ok(environment.pluginContainer, 'failure occurs after partial initialization')
+  await environment.init()
+  assert.equal(environment.driver, driver)
+  assert.equal(attempts, 2)
+  const container = environment.pluginContainer
+  await environment.init()
+  assert.equal(environment.pluginContainer, container)
+  assert.equal(attempts, 2)
+})
+
 test('external environment driver receives shared plugin API and app lifecycle', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-driver-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))

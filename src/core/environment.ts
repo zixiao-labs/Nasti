@@ -85,33 +85,38 @@ export class NastiEnvironment implements EnvironmentInstance {
   async init(): Promise<void> {
     if (this.initialized) return
     this.initialized = true
-    this.plugins = resolveEnvironmentPlugins(this, this.candidatePlugins)
-    this.pluginContainer = new PluginContainer(
-      { ...this.config, plugins: this.plugins },
-      this,
-    )
-    if (this.options.driver) {
-      const claimed: Array<{ plugin: NastiPlugin; driver: EnvironmentDriver }> = []
-      for (const plugin of this.plugins) {
-        const driver = await plugin.createEnvironmentDriver?.(this, this.pluginApi)
-        if (driver) claimed.push({ plugin, driver })
+    try {
+      this.plugins = resolveEnvironmentPlugins(this, this.candidatePlugins)
+      this.pluginContainer = new PluginContainer(
+        { ...this.config, plugins: this.plugins },
+        this,
+      )
+      if (this.options.driver) {
+        const claimed: Array<{ plugin: NastiPlugin; driver: EnvironmentDriver }> = []
+        for (const plugin of this.plugins) {
+          const driver = await plugin.createEnvironmentDriver?.(this, this.pluginApi)
+          if (driver) claimed.push({ plugin, driver })
+        }
+        if (claimed.length === 0) {
+          throw new Error(
+            `[nasti] environment "${this.name}" requested driver ` +
+              `"${this.options.driver}", but no plugin provided it`,
+          )
+        }
+        if (claimed.length > 1) {
+          throw new Error(
+            `[nasti] environment "${this.name}" was claimed by multiple drivers: ` +
+              claimed.map(({ plugin, driver }) => `${plugin.name} (${driver.name})`).join(', '),
+          )
+        }
+        this.driver = claimed[0].driver
+        debug?.(`env "${this.name}" uses driver "${this.driver.name}"`)
       }
-      if (claimed.length === 0) {
-        throw new Error(
-          `[nasti] environment "${this.name}" requested driver ` +
-            `"${this.options.driver}", but no plugin provided it`,
-        )
-      }
-      if (claimed.length > 1) {
-        throw new Error(
-          `[nasti] environment "${this.name}" was claimed by multiple drivers: ` +
-            claimed.map(({ plugin, driver }) => `${plugin.name} (${driver.name})`).join(', '),
-        )
-      }
-      this.driver = claimed[0].driver
-      debug?.(`env "${this.name}" uses driver "${this.driver.name}"`)
+      debug?.(`env "${this.name}" initialized (${this.plugins.length} plugins)`)
+    } catch (error) {
+      this.initialized = false
+      throw error
     }
-    debug?.(`env "${this.name}" initialized (${this.plugins.length} plugins)`)
   }
 
   getDriverContext(): EnvironmentDriverContext {
