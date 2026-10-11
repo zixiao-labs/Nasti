@@ -219,6 +219,7 @@ export async function resolveConfig(
       extensions: (merged.resolve?.extensions ?? defaults.resolve.extensions) as string[],
       conditions: (merged.resolve?.conditions ?? defaults.resolve.conditions) as string[],
       mainFields: (merged.resolve?.mainFields ?? defaults.resolve.mainFields) as string[],
+      noExternal: merged.resolve?.noExternal ?? [],
     },
     plugins: [],
     server: { ...defaults.server, ...merged.server } as ResolvedConfig['server'],
@@ -318,6 +319,8 @@ export async function resolveConfig(
         mainFields:
           envOptions.resolve?.mainFields ??
           (consumer === 'server' ? ['module', 'main'] : [...resolved.resolve.mainFields]),
+        noExternal: envOptions.resolve?.noExternal ??
+          (resolved.resolve.noExternal === true ? true : [...resolved.resolve.noExternal]),
       },
       build: {
         ...resolved.build,

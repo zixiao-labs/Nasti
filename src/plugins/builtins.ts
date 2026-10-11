@@ -5,7 +5,7 @@
 // 过滤（core/environment.ts 的 resolveEnvironmentPlugins）。
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import type { CssEngine } from '../core/css-engine.js'
-import { resolvePlugin } from './resolve.js'
+import { resolvePlugin, ssrVirtualResolvePlugin } from './resolve.js'
 import { cssPlugin } from './css.js'
 import { cssPostPlugin } from './css-post.js'
 import { assetsPlugin } from './assets.js'
@@ -57,5 +57,8 @@ export function resolvePluginList(
     ...userPlugins,
     // cssPostPlugin 最后（enforce: 'post' 语义）：renderChunk 聚合抽取
     ...(!isServe && opts.cssEngine ? [cssPostPlugin(pluginConfig, opts.cssEngine)] : []),
+    // Resolution fallback must run after all user hooks without replacing the
+    // importer they observe; virtual sources have no native filesystem parent.
+    ...(!isServe && consumer === 'server' ? [ssrVirtualResolvePlugin(pluginConfig)] : []),
   ]
 }

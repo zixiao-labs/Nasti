@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.6.1（待发布）
+
+### SSR 开发与编译边界
+
+- 修复文件 `change` / `add` / `unlink` 后 SSR 入口及传递依赖仍返回旧 exports 的问题：同步清理 runner cache 与所有 server-consumer 环境的 transform graph。当前采用保守全量失效，不改变 client HMR 边界。
+- 防止失效前尚未完成的旧加载失败时删除新的 runner cache entry。
+- 新增 `resolve.noExternal`，支持 `true`、包/子路径字符串、`*` 通配符和 RegExp 数组，统一 SSR dev/build 的内联规则。Node 内建始终 external；显式 `build.rolldownOptions.external` 保留整体覆盖默认策略的优先级。
+- SSR 内联依赖保留环境 `mainFields` 与自定义 conditions，dev/build 使用一致的 ESM 导入条件，不因最终输出为 CJS 而选择 `require` 分支。alias 与虚拟 ID 进入真实 resolve/load/transform 管线，虚拟 importer 的 bare 依赖从项目根解析；公开/规范虚拟 ID 共用同一求值缓存。
+- 修复无扩展名虚拟模块及 query ID 的 runner parser 选择，并显式报告转换错误，不再静默返回空 exports。真实 module/cache ID 保持不变。
+- 添加真实 watcher、传递依赖、server graph、并发失效、dev/build 外部化及 ESM/CJS 公共入口回归测试。
+
+### 下游补丁迁移
+
+本版本用于替代 Wuling 的 `@nasti-toolchain/nasti@2.6.0` SSR 能力补丁。**PR 合并或版本号更新不等于 npm 已发布**。待正式 `2.6.1` 可安装后：
+
+1. 将 Nasti 依赖和适配器的严格版本基线更新为 `2.6.1`。
+2. 移除 `patchedDependencies` 中的 `@nasti-toolchain/nasti@2.6.0` 登记及对应 `.patch` 文件，正常更新锁文件；不要手工编辑 `node_modules`。
+3. 保留独立的 `@vue/compiler-sfc` package extension、dedupe/define 适配器桥接；它们不属于本次运行补丁。
+4. 通过干净的冻结安装及补丁覆盖的能力回归后，再验收运行补丁已移除并升级完成；Start 桥接测试独立验收，不得将尚未通过的 gate 标记完成。
+
+**仍未覆盖的能力**：server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未自动填充依赖 module graph。依赖这些 API 的 Start compiler 仍是独立 blocker；本次修复不代表完整 Start SSR、HTTP 或浏览器集成已通过。
+
 ## 2.6.0
 
 本次更新包含 [PR #45](https://github.com/zixiao-labs/Nasti/pull/45)，增强 Electron ESM 构建与开发流程，保留 CommonJS 默认配置。

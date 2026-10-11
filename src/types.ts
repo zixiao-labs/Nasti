@@ -241,6 +241,12 @@ export interface ResolveConfig {
   extensions?: string[]
   conditions?: string[]
   mainFields?: string[]
+  /**
+   * SSR dev/build 中必须经过 resolve/load/transform 的依赖。
+   * true 内联所有依赖；字符串匹配包及子路径，支持 * 通配符；也可使用 RegExp。
+   * Node 内建始终外部化；显式 build.rolldownOptions.external 优先。
+   */
+  noExternal?: true | (string | RegExp)[]
 }
 
 export interface ServerConfig {
