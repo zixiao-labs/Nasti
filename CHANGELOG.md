@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.6.2
+
+本次更新包含 [PR #47](https://github.com/zixiao-labs/Nasti/pull/47)，修复 SSR server transform/module graph 生命周期及初始化失败后的重试。
 
 ### SSR server transform/module graph 生命周期
 
@@ -10,7 +12,10 @@
 - 规范 ID、URL/扩展名/virtual alias 共用节点，保留语义 query，移除 HMR 时间戳；各 server 环境的 runner/graph 独立并在首次请求时并发去重初始化。
 - 图版本同步求值缓存失效，保留 `change/add/unlink` 保守全量策略；旧的进行中转换不能覆盖新图或缓存。保留 Node ESM conditions、`noExternal` 和 client HMR 行为。
 - runtime dynamic import 经已返回的 exports 再次调用也遵循图失效；已解析的内联依赖不再丢失 importer 上下文后二次外部化，保留 external callback 的逐导入边决策。
-- 增加 ESM/CJS 核心能力、隔离、依赖替换、动态导入、并发及失效回归；这不是完整 TanStack Start SSR/HTTP/浏览器集成验收，也未发布新 npm 版本。
+- 环境或 runner 初始化失败后清理失败状态，后续转换与 SSR 加载可正常重试，不永久复用被拒绝的初始化 promise。
+- 增加 ESM/CJS 核心能力、隔离、依赖替换、动态导入、并发、失效及初始化重试回归；这不是完整 TanStack Start SSR/HTTP/浏览器集成验收。
+
+**完整变更**：https://github.com/zixiao-labs/Nasti/compare/v2.6.1...v2.6.2
 
 ## 2.6.1
 
@@ -34,7 +39,7 @@
 3. 保留独立的 `@vue/compiler-sfc` package extension、dedupe/define 适配器桥接；它们不属于本次运行补丁。
 4. 通过干净的冻结安装及补丁覆盖的能力回归后，再验收运行补丁已移除并升级完成；Start 桥接测试独立验收，不得将尚未通过的 gate 标记完成。
 
-**2.6.1 发布时仍未覆盖的能力**：server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未自动填充依赖 module graph（后续修复见 Unreleased）。本版本不代表完整 Start SSR、HTTP 或浏览器集成已通过。
+**2.6.1 发布时仍未覆盖的能力**：server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未自动填充依赖 module graph（后续修复见 2.6.2）。本版本不代表完整 Start SSR、HTTP 或浏览器集成已通过。
 
 **完整变更**：https://github.com/zixiao-labs/Nasti/compare/v2.6.0...v2.6.1
 
