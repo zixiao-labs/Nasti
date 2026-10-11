@@ -652,6 +652,8 @@ export interface EnvironmentInstance {
   plugins: NastiPlugin[]
   /**
    * 在该环境的独立 transform 管线中请求模块。仅 dev 环境在初始化后可用。
+   * 原生 server consumer 返回 runner-ready 代码（非浏览器 ESM），并填充真实
+   * module graph；外部化模块返回 null。声明 driver 的环境由驱动提供管线。
    */
   transformRequest: (url: string) => Promise<{ code: string; map?: unknown } | null>
   /** 内置 CSS 管线登记模块；工具链通常读取 getCssModule(s)。 */
@@ -774,13 +776,14 @@ export interface DevServer {
   moduleGraph: ModuleGraph
   watcher: any // chokidar FSWatcher
   ws: WebSocketServer
-  /** Environment API：每个 client-consumer 环境都有独立的 transform/HMR 管线。 */
+  /** 原生 client/server 环境各有独立 transform/graph；仅 client 运行浏览器 HMR。 */
   environments: Record<string, EnvironmentInstance>
   /** 外部环境驱动启动后返回的服务 URL / middleware 信息 */
   environmentServices: Record<string, EnvironmentServeResult>
   listen: (port?: number) => Promise<DevServer>
   close: () => Promise<void>
   transformRequest: (url: string) => Promise<TransformResult>
+  /** 同 EnvironmentInstance.transformRequest；无需先 listen()。 */
   transformEnvironmentRequest: (
     environmentName: string,
     url: string,
@@ -789,6 +792,7 @@ export interface DevServer {
    * SSR：在 server consumer 环境（默认 `ssr`）中加载并执行模块，返回其导出。
    * Vite `server.ssrLoadModule` 的 back-compat shim（底层是 module runner +
    * HotChannel invoke 桥）。模块经 moduleRunnerTransform 转换后在进程内求值，
+   * 与 server transformRequest 共用转换缓存/依赖图；图失效后下次加载重新求值。
    * `import.meta.env.SSR === true`，bare import 外部化交给 node 解析。
    */
   ssrLoadModule: (url: string) => Promise<Record<string, unknown>>
@@ -798,7 +802,7 @@ export interface ModuleGraph {
   getModuleByUrl: (url: string) => ModuleNode | undefined
   getModuleById: (id: string) => ModuleNode | undefined
   getModulesByFile: (file: string) => Set<ModuleNode> | undefined
-  ensureEntryFromUrl: (url: string) => Promise<ModuleNode>
+  ensureEntryFromUrl: (url: string, id?: string) => Promise<ModuleNode>
   invalidateModule: (mod: ModuleNode, timestamp?: number) => void
   invalidateModuleAndImporters: (mod: ModuleNode, timestamp?: number) => void
   getHmrBoundaries: (

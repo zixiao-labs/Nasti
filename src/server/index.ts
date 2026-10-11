@@ -45,8 +45,8 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   const ws = createWebSocketServer(httpServer)
 
   // ── Environment API：client 环境承载 dev 运行时（per-env 容器/图/热通道）──
-  // ssr 等其余环境：server consumer 的插件列表带 consumer 标记（css 无 DOM stub），
-  // 容器在首次使用（ssrLoadModule）时初始化 —— 生命周期钩子默认 client 单次触发。
+  // server consumer 的插件列表带 consumer 标记（css 无 DOM stub），
+  // 容器/runner 在首次转换或求值时初始化；不使用浏览器转换/HMR 管线。
   const pluginApi = getPluginApi(config)
   const clientEnv = new NastiEnvironment('client', config, {
     hot: createWsHotChannel(ws, 'client'),
@@ -108,18 +108,31 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     environment.configureDevPipeline((url) => runTransformRequest(url, context))
   }
 
-  // SSR module runner（懒初始化：仅在 ssrLoadModule 首次调用时建容器/runner）
-  let ssrRunner: import('./runnable-environment.js').NastiModuleRunner | null = null
-  async function getSsrRunner() {
-    if (ssrRunner) return ssrRunner
-    const ssrEnv = environments.ssr
-    if (!ssrEnv) {
-      throw new Error('[nasti] no "ssr" environment configured (config.environments.ssr)')
+  // Public server transforms and SSR evaluation share one graph-backed runner
+  // per environment. Store the promise before awaiting initialization so parallel
+  // first requests cannot create disconnected runners/caches.
+  const serverRunners = new Map<
+    string,
+    Promise<import('./runnable-environment.js').NastiModuleRunner>
+  >()
+  async function getServerRunner(environment: NastiEnvironment) {
+    let runner = serverRunners.get(environment.name)
+    if (!runner) {
+      runner = (async () => {
+        await environment.init()
+        const { createModuleRunner } = await import('./runnable-environment.js')
+        return createModuleRunner(environment)
+      })()
+      serverRunners.set(environment.name, runner)
     }
-    await ssrEnv.init()
-    const { createModuleRunner } = await import('./runnable-environment.js')
-    ssrRunner = createModuleRunner(ssrEnv)
-    return ssrRunner
+    return runner
+  }
+  for (const environment of Object.values(environments)) {
+    if (environment.consumer !== 'server' || environment.options.driver) continue
+    environment.configureDevPipeline(async (url) => {
+      const runner = await getServerRunner(environment)
+      return runner.transformRequest(url)
+    })
   }
 
   const moduleGraph = clientEnv.moduleGraph
@@ -318,11 +331,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     })
   }
 
-  // Server environments do not run the client HMR pipeline. Importers retain
-  // evaluated exports, and the runner has no dependency graph, so clear both
-  // server transform graphs and runner caches before the next load.
+  // Server environments do not use client HMR acceptance boundaries. Keep the
+  // conservative full invalidation policy, including unresolved/added imports.
+  // Runner evaluation caches observe graph versions on their next import.
   const invalidateServerCaches = () => {
-    ssrRunner?.invalidateAll()
     for (const environment of Object.values(environments)) {
       if (environment.consumer === 'server') environment.moduleGraph.invalidateAll()
     }
@@ -428,11 +440,19 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     },
 
     async ssrLoadModule(url: string) {
-      const runner = await getSsrRunner()
+      const environment = environments.ssr
+      if (!environment) {
+        throw new Error('[nasti] no "ssr" environment configured (config.environments.ssr)')
+      }
+      const runner = await getServerRunner(environment)
       return runner.import(url)
     },
 
     async close() {
+      for (const runner of serverRunners.values()) {
+        const initialized = await runner.catch(() => null)
+        initialized?.invalidateAll()
+      }
       if (devPipelinesStarted) {
         for (const environment of Object.values(environments).reverse()) {
           if (!transformContexts.has(environment.name)) continue

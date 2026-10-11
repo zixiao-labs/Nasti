@@ -16,29 +16,37 @@ import fs from 'node:fs'
 import { builtinModules } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { moduleResolve } from 'import-meta-resolve'
-import type { ResolvedConfig, HotChannelInvokeHandlers } from '../types.js'
+import type { ResolvedConfig, HotChannelInvokeHandlers, ModuleNode } from '../types.js'
 import type { NastiEnvironment } from '../core/environment.js'
 import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides, replaceEnvInCode } from '../core/env.js'
 import { createDebugger } from '../core/debug.js'
 import { createSsrExternal, NODE_BUILTINS } from '../core/ssr-external.js'
+import { removeTimestampQuery } from '../core/url.js'
 
 const debug = createDebugger('nasti:ssr')
 
 interface FetchedModule {
   id: string
   code: string
+  map?: unknown
+  invalidationVersion: number
 }
 
 interface ModuleCacheEntry {
   exports: Record<string, unknown>
   promise: Promise<Record<string, unknown>> | null
+  invalidationVersion?: number
 }
 
 export class NastiModuleRunner {
   private environment: NastiEnvironment
   private config: ResolvedConfig
   private cache = new Map<string, ModuleCacheEntry>()
+  private pendingTransforms = new Map<
+    string,
+    { version: number; promise: Promise<FetchedModule> }
+  >()
   private envDefine: Record<string, string>
   private externalImportParent: URL
   private externalImportConditions: Set<string>
@@ -78,7 +86,33 @@ export class NastiModuleRunner {
   async import(rawUrl: string): Promise<Record<string, unknown>> {
     const resolved = await this.resolveModule(this.resolveToId(rawUrl))
     if (resolved.external) return this.importExternal(resolved.id)
+    await this.ensureModule(resolved.id, removeTimestampQuery(rawUrl))
     return this.instantiate(resolved.id)
+  }
+
+  /** Server transforms are runner-ready code, never browser import/HMR rewrites. */
+  async transformRequest(rawUrl: string): Promise<{ code: string; map?: unknown } | null> {
+    const resolved = await this.resolveModule(this.resolveToId(rawUrl))
+    if (resolved.external) return null
+    await this.ensureModule(resolved.id, removeTimestampQuery(rawUrl))
+    const fetched = await this.fetchResolvedModule(resolved.id)
+    return { code: fetched.code, map: fetched.map }
+  }
+
+  private invalidateStaleEvaluations(): void {
+    for (const [id, entry] of this.cache) {
+      const mod = this.environment.moduleGraph.getModuleById(id)
+      if (
+        entry.invalidationVersion !== undefined &&
+        entry.invalidationVersion !== mod?.invalidationVersion
+      ) {
+        // Importers retain evaluated exports. Any invalidated dependency makes
+        // the whole evaluation cache stale, even when graph invalidation was
+        // requested directly by a plugin rather than by the watcher.
+        this.cache.clear()
+        return
+      }
+    }
   }
 
   /** 文件变更时按文件失效（含其所属的虚拟子模块） */
@@ -92,30 +126,54 @@ export class NastiModuleRunner {
 
   invalidateAll(): void {
     this.cache.clear()
+    this.pendingTransforms.clear()
   }
 
   private resolveToId(rawUrl: string): string {
+    rawUrl = removeTimestampQuery(rawUrl)
     if (rawUrl.startsWith('\0') || rawUrl.startsWith('virtual:')) return rawUrl
+    for (const alias of Object.keys(this.environment.options.resolve.alias)) {
+      if (rawUrl === alias || rawUrl.startsWith(alias + '/')) return rawUrl
+    }
     if (path.isAbsolute(rawUrl) && fs.existsSync(rawUrl.split('?')[0])) return rawUrl
     const clean = rawUrl.replace(/^\//, '')
     return path.resolve(this.config.root, clean)
   }
 
   private async resolveModule(id: string, importer?: string): Promise<{ id: string; external?: boolean }> {
+    id = removeTimestampQuery(id)
     if (this.shouldExternalize(id, importer, false)) return { id, external: true }
     const resolved = await this.environment.pluginContainer!.resolveId(id, importer)
     if (resolved && typeof resolved !== 'string' && resolved.external) {
-      return { id: resolved.id, external: true }
+      return { id: removeTimestampQuery(resolved.id), external: true }
     }
-    const resolvedId = resolved
+    const resolvedId = removeTimestampQuery(resolved
       ? typeof resolved === 'string' ? resolved : resolved.id
       : id.startsWith('.') && importer
         ? path.resolve(path.dirname(importer.split('?')[0]), id)
-        : id
+        : id)
     if (this.shouldExternalize(resolvedId, importer, true)) {
       return { id: resolvedId, external: true }
     }
     return { id: this.completeExtension(resolvedId) }
+  }
+
+  private async ensureModule(id: string, requestUrl?: string): Promise<ModuleNode> {
+    let url = id
+    if (path.isAbsolute(id.split('?')[0])) {
+      const relative = path.relative(this.config.root, id.split('?')[0])
+      if (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)) {
+        const query = id.includes('?') ? id.slice(id.indexOf('?')) : ''
+        url = '/' + relative.replace(/\\/g, '/') + query
+      }
+    }
+    const graph = this.environment.moduleGraph
+    const mod = await graph.ensureEntryFromUrl(url, id)
+    if (requestUrl && requestUrl !== url) await graph.ensureEntryFromUrl(requestUrl, id)
+    // Keep query identities separate while indexing all file-backed variants
+    // under the same physical file. Virtual IDs do not represent watched files.
+    if (path.isAbsolute(id.split('?')[0])) graph.registerModule(mod, id.split('?')[0])
+    return mod
   }
 
   /**
@@ -126,9 +184,39 @@ export class NastiModuleRunner {
   async fetchModule(id: string, importer?: string): Promise<FetchedModule | { externalize: string }> {
     const resolved = await this.resolveModule(id, importer)
     if (resolved.external) return { externalize: resolved.id }
-    const container = this.environment.pluginContainer!
-    const resolvedId = resolved.id
+    return this.fetchResolvedModule(resolved.id)
+  }
 
+  private async fetchResolvedModule(id: string): Promise<FetchedModule> {
+    // Resolution/externalization belongs to the importing edge. Re-resolving a
+    // canonical ID without its importer can reverse an external callback's
+    // decision and bypass the server transform pipeline.
+    const mod = await this.ensureModule(id)
+    const cached = mod.transformResult
+    if (cached && typeof cached !== 'string') {
+      return {
+        id: mod.id,
+        code: cached.code,
+        map: cached.map,
+        invalidationVersion: mod.invalidationVersion,
+      }
+    }
+    const version = mod.invalidationVersion
+    const pending = this.pendingTransforms.get(mod.id)
+    if (pending?.version === version) return pending.promise
+    const promise = this.transformModule(mod, version)
+    const current = { version, promise }
+    this.pendingTransforms.set(mod.id, current)
+    try {
+      return await promise
+    } finally {
+      if (this.pendingTransforms.get(mod.id) === current) this.pendingTransforms.delete(mod.id)
+    }
+  }
+
+  private async transformModule(mod: ModuleNode, version: number): Promise<FetchedModule> {
+    const container = this.environment.pluginContainer!
+    const resolvedId = mod.id
     const cleanId = resolvedId.split('?')[0]
     let code: string
     const loaded = await container.load(resolvedId)
@@ -199,7 +287,18 @@ export class NastiModuleRunner {
       )
     }
     debug?.(`fetchModule ${resolvedId} (${runnerResult.deps?.length ?? 0} deps)`)
-    return { id: resolvedId, code: runnerResult.code }
+    const importedUrls = new Set<string>()
+    for (const specifier of [...runnerResult.deps, ...runnerResult.dynamicDeps]) {
+      const dependency = await this.resolveModule(specifier, resolvedId)
+      if (dependency.external) continue
+      const dependencyNode = await this.ensureModule(dependency.id)
+      importedUrls.add(dependencyNode.url)
+    }
+    const graph = this.environment.moduleGraph
+    const updated = await graph.updateModuleInfo(mod, importedUrls, new Set(), false, version)
+    const result = { code: runnerResult.code, map: runnerResult.map }
+    if (updated !== null && mod.invalidationVersion === version) mod.transformResult = result
+    return { id: resolvedId, ...result, invalidationVersion: version }
   }
 
   private completeExtension(id: string): string {
@@ -213,22 +312,29 @@ export class NastiModuleRunner {
         if (fs.existsSync(jsMatch[1] + tsExt)) return jsMatch[1] + tsExt + query
       }
     }
-    for (const ext of this.config.resolve.extensions) {
+    for (const ext of this.environment.options.resolve.extensions) {
       if (fs.existsSync(clean + ext)) return clean + ext + query
     }
     // /dir → /dir/index.*
-    for (const ext of this.config.resolve.extensions) {
+    for (const ext of this.environment.options.resolve.extensions) {
       const indexPath = path.join(clean, `index${ext}`)
-      if (fs.existsSync(indexPath)) return indexPath
+      if (fs.existsSync(indexPath)) return indexPath + query
     }
     return id
   }
 
   private async instantiate(id: string): Promise<Record<string, unknown>> {
+    // Dynamic imports can be called through previously returned exports without
+    // another top-level import(). They must observe graph invalidation too.
+    this.invalidateStaleEvaluations()
     const cached = this.cache.get(id)
     if (cached) return cached.promise ?? Promise.resolve(cached.exports)
 
-    const entry: ModuleCacheEntry = { exports: {}, promise: null }
+    const entry: ModuleCacheEntry = {
+      exports: {},
+      promise: null,
+      invalidationVersion: this.environment.moduleGraph.getModuleById(id)?.invalidationVersion,
+    }
     this.cache.set(id, entry)
     entry.promise = this.evaluate(id, entry).then(() => {
       entry.promise = null
@@ -243,19 +349,22 @@ export class NastiModuleRunner {
   }
 
   private async evaluate(id: string, entry: ModuleCacheEntry): Promise<void> {
-    // 经 invoke 桥取模块（与未来网络 transport 同一路径）
-    const fetched = await this.fetchModule(id)
-
-    if ('externalize' in fetched) {
-      const spec = fetched.externalize
-      const mod = await this.importExternal(spec)
-      entry.exports = mod
-      return
-    }
+    // instantiate receives an already-resolved, non-external canonical ID.
+    const fetched = await this.fetchResolvedModule(id)
+    entry.invalidationVersion = fetched.invalidationVersion
 
     const ssrImport = async (dep: string) => {
       const resolved = await this.resolveModule(dep, fetched.id)
       if (resolved.external) return this.importExternal(resolved.id)
+      // Non-literal dynamic imports are discovered during evaluation. Never let
+      // an old in-flight evaluation overwrite a newer transform's graph.
+      const graph = this.environment.moduleGraph
+      const importer = graph.getModuleById(fetched.id)!
+      const dependency = await this.ensureModule(resolved.id)
+      if (importer.invalidationVersion === fetched.invalidationVersion) {
+        importer.importedModules.add(dependency)
+        dependency.importers.add(importer)
+      }
       return this.instantiate(resolved.id)
     }
 

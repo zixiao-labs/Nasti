@@ -646,14 +646,32 @@ ESM 输入的条件选择不因最终产物输出为 CJS 而改变。包内 `#im
 开发 runner 是 ESM 求值器，不提供通用 CommonJS 转换；需要 native CJS 的依赖应保留
 external。`noExternal` 不等于已实现特定框架的完整适配。
 
-当前 server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未
-自动构建依赖 module graph。依赖这些 API 的框架插件仍是独立兼容性 blocker；
-本次修复不会用空图或伪造转换结果宣称该能力已支持。
+原生 server-consumer dev 环境支持 `transformRequest`，无需先启动 HTTP listener：
 
-文件 `change/add/unlink` 会同步清理 server-consumer 环境的 transform graph 和
-SSR runner cache，使下一次 `ssrLoadModule` 读取新逻辑。当前采用保守全量失效，
+```ts
+const server = await createServer({ /* Nasti config */ })
+const transformed = await server.transformEnvironmentRequest('ssr', '/src/server.ts')
+// 等价入口：server.environments.ssr.transformRequest('/src/server.ts')
+const exports = await server.ssrLoadModule('/src/server.ts')
+const graph = server.environments.ssr.moduleGraph
+const entry = graph.getModuleByUrl('/src/server.ts')
+// entry.importedModules / dependency.importers 是真实的双向依赖关系
+await server.close()
+```
+
+返回值是 **runner-ready 代码**（含 `__vite_ssr_*` runner helpers），不是可直接发送到
+浏览器的 ESM；外部化模块返回 `null`。转换和 SSR 求值共用环境的转换缓存、插件、
+consumer 派生的 env define 及 module graph，不注入浏览器 HMR/React Refresh。
+静态导入与字面量动态导入在转换时建边，非字面量动态导入在实际执行时补边；
+外部化依赖不作为本地图节点。规范 ID、根相对 URL 与扩展名/virtual alias 共用节点，
+语义 query 保持独立，HMR 时间戳 `t` 不改变模块身份。声明 driver 的环境仍由驱动接管。
+
+文件 `change/add/unlink` 会同步失效 server-consumer 环境的 transform graph，
+runner 根据图版本在下一次 `ssrLoadModule` 前丢弃旧求值缓存；插件直接调用 graph
+失效 API 也遵循同一规则。旧的进行中转换不能覆盖新缓存或依赖边。当前采用保守全量失效，
 可能重新执行无关模块；client HMR 仍按原有边界运行。外部依赖的 Node 原生模块缓存
 不由 Nasti 清理，需要热更新的源码应交给 runner 内联并处于 watcher 监听范围。
+这些核心能力不代表完整 TanStack Start compiler、HTTP、hydration 或浏览器适配已验收。
 
 ## Monaco Editor 支持
 
