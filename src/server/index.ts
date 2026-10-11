@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import connect from 'connect'
 import sirv from 'sirv'
-import { watch } from 'chokidar'
+import { watchFiles } from './watcher.js'
 import pc from 'picocolors'
 import type {
   EnvironmentServeResult,
@@ -188,8 +188,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     (r) => r !== config.root && !isUnderRoot(config.root, r),
   )
   const watchTargets = [config.root, ...linkedPackageRoots]
-  const watcher = watch(watchTargets, {
+  const watcher = watchFiles(watchTargets, {
     ignored: (filePath: string) => {
+      // Chokidar passes slash-normalized paths to ignored callbacks on Windows.
+      filePath = path.normalize(filePath)
       if (filePath === outDirAbs || filePath.startsWith(outDirAbs + path.sep)) return true
       for (const watchRoot of watchTargets) {
         if (filePath === watchRoot) return false

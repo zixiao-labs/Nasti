@@ -1,6 +1,6 @@
 {
   "name": "@nasti-toolchain/nasti",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "publishConfig": {
     "access": "public"
   },
@@ -61,7 +61,7 @@
   },
   "dependencies": {
     "cac": "7.0.0",
-    "chokidar": "^5.0.0",
+    "chokidar": "5.0.0",
     "connect": "^3.7.0",
     "dotenv": "^18.0.6",
     "import-meta-resolve": "^4.2.0",

@@ -86,6 +86,34 @@ jobs:
       - name: Test (Node ${{ matrix.node-version }})
         run: node --test
 
+  # 原生 watcher 的事件路径和时序随平台变化；保留真实磁盘快速保存回归。
+  watcher:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test native watcher lifecycle
+        run: node --test test/watcher-change.test.mjs
+
   # Rust 后端独立验证；普通 Nasti 构建与 Node 20 测试不依赖 Rust。
   electron-packager:
     strategy:

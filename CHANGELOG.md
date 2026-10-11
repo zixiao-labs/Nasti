@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.6.3
+
+### 原生文件监听与 SSR 开发失效
+
+- 修复 Chokidar 原生事件节流窗口可能丢弃最后一次源码修改的问题：SSR 读取后的即时编辑及连续快速保存不再漏发 `change`，ESM/CJS 公共入口采用同一规则。
+- 仅对原生事件命中的已监听文件执行一次尾随 metadata 检查；正常事件与补发事件共用 inode/size/mtime 快照，避免重复更新及 access-time-only 读取导致的 SSR 失效循环。不是定时轮询，也不增加第二套文件监听器。
+- 保留 Chokidar 的 add/unlink、atomic save、忽略目录及 workspace 监听范围；`unwatch` / `close` 清理待执行检查，旧的异步 stat 不能覆盖更新后的快照。
+- 动态 `watcher.add()` 保留 `ignoreInitial` 语义；恢复 atomic replacement 时同步清理待发的旧 unlink。此适配依赖原生 raw event 与 atomic 状态，Chokidar 固定为 `5.0.0`，后续升级须重新验证监听回归。
+- 添加真实磁盘快速编辑、SSR 传递依赖/图失效、删除重建、只读 metadata 及 unwatch/close 的 ESM/CJS 回归。核心监听修复不代表完整 TanStack Start SSR/HTTP/浏览器集成已验收。
+
+**完整变更**：https://github.com/zixiao-labs/Nasti/compare/v2.6.2...v2.6.3
+
 ## 2.6.2
 
 本次更新包含 [PR #47](https://github.com/zixiao-labs/Nasti/pull/47)，修复 SSR server transform/module graph 生命周期及初始化失败后的重试。

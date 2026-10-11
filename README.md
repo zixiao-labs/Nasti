@@ -673,6 +673,12 @@ runner 根据图版本在下一次 `ssrLoadModule` 前丢弃旧求值缓存；�
 不由 Nasti 清理，需要热更新的源码应交给 runner 内联并处于 watcher 监听范围。
 这些核心能力不代表完整 TanStack Start compiler、HTTP、hydration 或浏览器适配已验收。
 
+开发 watcher 对原生事件命中的已监听文件执行一次尾随 inode/size/mtime 检查，
+补足快速保存或 SSR 读取后即时编辑被 Chokidar 节流丢弃的 `change`。这不是定时轮询，
+也不递归重扫文件树；只读 access-time 变化不触发失效。正常事件和尾随检查共用快照，
+`unwatch` / `close` 会取消相关检查，不改变忽略目录及 workspace 的监听范围。
+原生 raw event / atomic 状态适配依赖固定的 Chokidar `5.0.0`；升级该依赖须重跑监听回归。
+
 ## Monaco Editor 支持
 
 内置 `monacoEditorPlugin`（对标 `vite-plugin-monaco-editor`），解决两个老大难问题：
