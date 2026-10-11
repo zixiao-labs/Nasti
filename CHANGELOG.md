@@ -1,6 +1,8 @@
 # Changelog
 
-## 2.6.1（待发布）
+## 2.6.1
+
+本次更新包含 [PR #46](https://github.com/zixiao-labs/Nasti/pull/46)，修复 SSR 开发缓存失效并统一开发/构建依赖内联规则。
 
 ### SSR 开发与编译边界
 
@@ -13,7 +15,7 @@
 
 ### 下游补丁迁移
 
-本版本用于替代 Wuling 的 `@nasti-toolchain/nasti@2.6.0` SSR 能力补丁。**PR 合并或版本号更新不等于 npm 已发布**。待正式 `2.6.1` 可安装后：
+本版本用于替代 Wuling 的 `@nasti-toolchain/nasti@2.6.0` SSR 能力补丁。**PR 合并或版本号更新不等于 npm 已发布**。请先确认正式 `2.6.1` 可从 npm 安装，再执行以下迁移：
 
 1. 将 Nasti 依赖和适配器的严格版本基线更新为 `2.6.1`。
 2. 移除 `patchedDependencies` 中的 `@nasti-toolchain/nasti@2.6.0` 登记及对应 `.patch` 文件，正常更新锁文件；不要手工编辑 `node_modules`。
@@ -21,6 +23,8 @@
 4. 通过干净的冻结安装及补丁覆盖的能力回归后，再验收运行补丁已移除并升级完成；Start 桥接测试独立验收，不得将尚未通过的 gate 标记完成。
 
 **仍未覆盖的能力**：server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未自动填充依赖 module graph。依赖这些 API 的 Start compiler 仍是独立 blocker；本次修复不代表完整 Start SSR、HTTP 或浏览器集成已通过。
+
+**完整变更**：https://github.com/zixiao-labs/Nasti/compare/v2.6.0...v2.6.1
 
 ## 2.6.0
 
