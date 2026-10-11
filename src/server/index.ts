@@ -318,11 +318,21 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     })
   }
 
+  // Server environments do not run the client HMR pipeline. Importers retain
+  // evaluated exports, and the runner has no dependency graph, so clear both
+  // server transform graphs and runner caches before the next load.
+  const invalidateServerCaches = () => {
+    ssrRunner?.invalidateAll()
+    for (const environment of Object.values(environments)) {
+      if (environment.consumer === 'server') environment.moduleGraph.invalidateAll()
+    }
+  }
+
   watcher.on('change', (file: string) => {
     if (file.includes(`${path.sep}node_modules${path.sep}`) || file.endsWith(`${path.sep}node_modules`)) {
       clearLinkedPackageRootsCache()
     }
-    ssrRunner?.invalidateFile(file)
+    invalidateServerCaches()
     queueClientEnvironmentUpdate(file)
     notifyEnvironmentDrivers(file, 'change')
   })
@@ -331,7 +341,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     if (file.includes(`${path.sep}node_modules${path.sep}`) || file.endsWith(`${path.sep}node_modules`)) {
       clearLinkedPackageRootsCache()
     }
-    ssrRunner?.invalidateFile(file)
+    invalidateServerCaches()
     queueClientEnvironmentUpdate(file)
     notifyEnvironmentDrivers(file, 'add')
   })
@@ -340,7 +350,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     if (file.includes(`${path.sep}node_modules${path.sep}`) || file.endsWith(`${path.sep}node_modules`)) {
       clearLinkedPackageRootsCache()
     }
-    ssrRunner?.invalidateFile(file)
+    invalidateServerCaches()
     notifyEnvironmentDrivers(file, 'unlink')
   })
 

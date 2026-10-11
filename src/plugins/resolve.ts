@@ -3,6 +3,8 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
+import { resolveSsrDependency } from '../core/ssr-resolve.js'
+import { isBareImport } from '../core/ssr-external.js'
 
 export function resolvePlugin(
   config: ResolvedConfig,
@@ -102,6 +104,12 @@ export function resolvePlugin(
         // BG/MT 等双 client-consumer 环境会错误命中同一套 Node 条件导出。
         if (config.command === 'build') return null
 
+        // SSR dev must honor both ESM conditions and mainFields.
+        // Virtual importers resolve from root rather than bundler CWD.
+        if (this.environment?.consumer === 'server') {
+          return resolveSsrDependency(config.root, config.resolve, source, importer)
+        }
+
         try {
           const resolved = require.resolve(source, {
             paths: [importer ? path.dirname(importer) : config.root],
@@ -127,6 +135,19 @@ export function resolvePlugin(
       // 其余真实文件留给后续专用 load 插件（assets / Vue virtual blocks）；
       // 无插件接管时由 Rolldown 或 dev middleware 的文件系统 loader 读取。
       return null
+    },
+  }
+}
+
+/** Build-only native fallback, after user resolvers have seen the real importer. */
+export function ssrVirtualResolvePlugin(config: ResolvedConfig): NastiPlugin {
+  return {
+    name: 'nasti:ssr-virtual-resolve',
+    enforce: 'post',
+    async resolveId(source, importer) {
+      if (!importer?.startsWith('\0') && !importer?.startsWith('virtual:')) return null
+      if (!isBareImport(source) && !source.startsWith('#')) return null
+      return resolveSsrDependency(config.root, config.resolve, source)
     },
   }
 }

@@ -614,6 +614,47 @@ lazy chunk。app 级产物同时出现在 `BuildResult.appOutput`。高层
 `environments.<name>.build.target` 会同时应用于 OXC 的 TS/JSX 转换和 Rolldown
 的最终输出，无需再设置底层 `rolldownOptions.transform.target`。
 
+## SSR 依赖内联与开发失效
+
+SSR 默认将 bare imports 交给 Node 原生加载。需要编译插件处理的 ESM 依赖可使用
+`environments.ssr.resolve.noExternal`（也可从 top-level `resolve` 继承）：
+
+```ts
+export default defineConfig({
+  environments: {
+    ssr: {
+      consumer: 'server',
+      entry: 'src/server.ts',
+      resolve: {
+        noExternal: ['@tanstack/start*', '@tanstack/react-start*', /^my-framework(?:\/|$)/],
+      },
+    },
+  },
+})
+```
+
+`true` 内联全部依赖；字符串匹配包和子路径，`*` 匹配任意字符。Node 内建始终
+external，alias 和 `virtual:` 模块会进入 resolve/load/transform 管线。内联的
+SSR dev 依赖使用当前环境的 ESM conditions（忽略 `require`，补齐 `node/import`）；
+虚拟 importer 的 bare 依赖从项目根目录解析，内联解析同时保留环境 `mainFields`。
+生产 server 构建也使用 `node/import`，保留自定义 conditions 并移除 `require`；
+ESM 输入的条件选择不因最终产物输出为 CJS 而改变。包内 `#imports` 按所属包解析，
+不作为输出目录的 native import；导出 `.js` 路径的 TypeScript 源包遵循 NodeNext 扩展名映射。
+
+显式 `build.rolldownOptions.external` **整体替换**默认 bare-import 策略，并优先于
+`noExternal`；数组中未匹配的依赖会内联，函数也可自行决定外部化。客户端行为不变。
+开发 runner 是 ESM 求值器，不提供通用 CommonJS 转换；需要 native CJS 的依赖应保留
+external。`noExternal` 不等于已实现特定框架的完整适配。
+
+当前 server-consumer 环境尚未提供 `transformRequest` dev pipeline，runner 也未
+自动构建依赖 module graph。依赖这些 API 的框架插件仍是独立兼容性 blocker；
+本次修复不会用空图或伪造转换结果宣称该能力已支持。
+
+文件 `change/add/unlink` 会同步清理 server-consumer 环境的 transform graph 和
+SSR runner cache，使下一次 `ssrLoadModule` 读取新逻辑。当前采用保守全量失效，
+可能重新执行无关模块；client HMR 仍按原有边界运行。外部依赖的 Node 原生模块缓存
+不由 Nasti 清理，需要热更新的源码应交给 runner 内联并处于 watcher 监听范围。
+
 ## Monaco Editor 支持
 
 内置 `monacoEditorPlugin`（对标 `vite-plugin-monaco-editor`），解决两个老大难问题：

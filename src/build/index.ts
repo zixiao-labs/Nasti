@@ -8,7 +8,6 @@
 // 参数化收敛到一处 —— Phase 3 的完整打包模式（DevEngine）复用同一函数。
 import path from 'node:path'
 import fs from 'node:fs'
-import { builtinModules } from 'node:module'
 import { rolldown } from 'rolldown'
 import type { InputOptions, OutputOptions } from 'rolldown'
 import type {
@@ -36,6 +35,8 @@ import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
 import { getPluginApi } from '../core/plugin-api.js'
+import { createSsrExternal } from '../core/ssr-external.js'
+import { getSsrConditions } from '../core/ssr-resolve.js'
 import {
   createBuildAppContext,
   inferEnvironmentEntries,
@@ -46,8 +47,6 @@ import {
 import pc from 'picocolors'
 
 const debug = createDebugger('nasti:build')
-
-const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)])
 
 export interface BuildResult {
   /** client 环境的产物（back-compat：1.x 的 BuildResult 形态） */
@@ -119,7 +118,9 @@ export function getRolldownOptions(
     resolve: {
       ...(userResolve ?? {}),
       // Environment API 是条件解析的唯一高层入口，优先于继承来的底层选项。
-      conditionNames: envOptions.resolve.conditions,
+      conditionNames: isServer
+        ? getSsrConditions(envOptions.resolve.conditions)
+        : envOptions.resolve.conditions,
       mainFields: envOptions.resolve.mainFields,
     },
     ...(isServer
@@ -127,16 +128,8 @@ export function getRolldownOptions(
           platform: (restInputOptions as InputOptions).platform ?? 'node',
           // server 产物：node 内建恒外部化；bare specifier 默认外部化
           //（同 Vite ssr.external 默认 —— 依赖由 node_modules 运行时解析），
-          // 相对/绝对/虚拟模块照常打包。需要内联依赖时经 rolldownOptions.external 覆盖。
-          external:
-            (restInputOptions as InputOptions).external ??
-            ((id: string) => {
-              if (NODE_BUILTINS.has(id)) return true
-              return !id.startsWith('.') &&
-                !path.isAbsolute(id) &&
-                !id.startsWith('\0') &&
-                !id.startsWith('virtual:')
-            }),
+          // resolve.noExternal/alias 可内联依赖；底层 external 仍优先覆盖默认策略。
+          external: createSsrExternal(envOptions.resolve, restInputOptions.external),
         }
       : {}),
   }

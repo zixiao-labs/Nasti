@@ -21,10 +21,9 @@ import type { NastiEnvironment } from '../core/environment.js'
 import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides, replaceEnvInCode } from '../core/env.js'
 import { createDebugger } from '../core/debug.js'
+import { createSsrExternal, NODE_BUILTINS } from '../core/ssr-external.js'
 
 const debug = createDebugger('nasti:ssr')
-
-const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)])
 
 interface FetchedModule {
   id: string
@@ -43,6 +42,7 @@ export class NastiModuleRunner {
   private envDefine: Record<string, string>
   private externalImportParent: URL
   private externalImportConditions: Set<string>
+  private shouldExternalize: ReturnType<typeof createSsrExternal>
 
   constructor(environment: NastiEnvironment) {
     this.environment = environment
@@ -53,6 +53,10 @@ export class NastiModuleRunner {
       ssrDefineOverrides(environment.consumer),
     )
     this.externalImportParent = pathToFileURL(path.join(this.config.root, 'package.json'))
+    this.shouldExternalize = createSsrExternal(
+      environment.options.resolve,
+      environment.options.build.rolldownOptions.external,
+    )
     // External modules are executed with native `import()`, so `require` must
     // never participate in conditional-export matching. Keep environment-specific
     // conditions (for example `react-server`) while guaranteeing Node ESM semantics.
@@ -72,8 +76,9 @@ export class NastiModuleRunner {
 
   /** 入口：加载并执行一个模块（url 为根相对或绝对路径） */
   async import(rawUrl: string): Promise<Record<string, unknown>> {
-    const id = this.resolveToId(rawUrl)
-    return this.instantiate(id)
+    const resolved = await this.resolveModule(this.resolveToId(rawUrl))
+    if (resolved.external) return this.importExternal(resolved.id)
+    return this.instantiate(resolved.id)
   }
 
   /** 文件变更时按文件失效（含其所属的虚拟子模块） */
@@ -90,9 +95,27 @@ export class NastiModuleRunner {
   }
 
   private resolveToId(rawUrl: string): string {
+    if (rawUrl.startsWith('\0') || rawUrl.startsWith('virtual:')) return rawUrl
     if (path.isAbsolute(rawUrl) && fs.existsSync(rawUrl.split('?')[0])) return rawUrl
     const clean = rawUrl.replace(/^\//, '')
     return path.resolve(this.config.root, clean)
+  }
+
+  private async resolveModule(id: string, importer?: string): Promise<{ id: string; external?: boolean }> {
+    if (this.shouldExternalize(id, importer, false)) return { id, external: true }
+    const resolved = await this.environment.pluginContainer!.resolveId(id, importer)
+    if (resolved && typeof resolved !== 'string' && resolved.external) {
+      return { id: resolved.id, external: true }
+    }
+    const resolvedId = resolved
+      ? typeof resolved === 'string' ? resolved : resolved.id
+      : id.startsWith('.') && importer
+        ? path.resolve(path.dirname(importer.split('?')[0]), id)
+        : id
+    if (this.shouldExternalize(resolvedId, importer, true)) {
+      return { id: resolvedId, external: true }
+    }
+    return { id: this.completeExtension(resolvedId) }
   }
 
   /**
@@ -101,22 +124,10 @@ export class NastiModuleRunner {
    * oxc（TS/JSX）→ moduleRunnerTransform。
    */
   async fetchModule(id: string, importer?: string): Promise<FetchedModule | { externalize: string }> {
-    // 外部化：node 内建与 bare specifier 由 node 原生解析
-    if (NODE_BUILTINS.has(id)) return { externalize: id }
-    if (!id.startsWith('.') && !path.isAbsolute(id) && !id.startsWith('\0')) {
-      return { externalize: id }
-    }
-
+    const resolved = await this.resolveModule(id, importer)
+    if (resolved.external) return { externalize: resolved.id }
     const container = this.environment.pluginContainer!
-    let resolvedId = id
-    if (id.startsWith('.') && importer) {
-      const resolved = await container.resolveId(id, importer)
-      resolvedId = resolved
-        ? typeof resolved === 'string' ? resolved : resolved.id
-        : path.resolve(path.dirname(importer.split('?')[0]), id)
-    }
-    // 扩展名补全（./App → ./App.tsx 等）
-    resolvedId = this.completeExtension(resolvedId)
+    const resolvedId = resolved.id
 
     const cleanId = resolvedId.split('?')[0]
     let code: string
@@ -177,7 +188,16 @@ export class NastiModuleRunner {
           `(installed rolldown incompatible?): ${err.message}`,
       )
     }
-    const runnerResult = await moduleRunnerTransform(resolvedId, code)
+    // OXC selects the parser from a real extension, not a module ID. Preserve
+    // query/virtual identity in the runner, but feed transformed JS a valid name.
+    const transformId = /\.[cm]?[jt]sx?$/.test(cleanId) ? cleanId : cleanId + '.js'
+    const runnerResult = await moduleRunnerTransform(transformId, code)
+    if (runnerResult.errors?.length) {
+      throw new Error(
+        `[nasti:ssr] cannot transform module "${resolvedId}": ` +
+          runnerResult.errors.map((error) => error.message).join('\n'),
+      )
+    }
     debug?.(`fetchModule ${resolvedId} (${runnerResult.deps?.length ?? 0} deps)`)
     return { id: resolvedId, code: runnerResult.code }
   }
@@ -214,7 +234,9 @@ export class NastiModuleRunner {
       entry.promise = null
       return entry.exports
     }).catch((err) => {
-      this.cache.delete(id)
+      // An older in-flight load may fail after invalidation and a new load.
+      // It must not evict the replacement entry.
+      if (this.cache.get(id) === entry) this.cache.delete(id)
       throw err
     })
     return entry.promise
@@ -232,13 +254,9 @@ export class NastiModuleRunner {
     }
 
     const ssrImport = async (dep: string) => {
-      if (NODE_BUILTINS.has(dep) || (!dep.startsWith('.') && !path.isAbsolute(dep) && !dep.startsWith('\0'))) {
-        return this.importExternal(dep)
-      }
-      const depId = dep.startsWith('.')
-        ? this.completeExtension(path.resolve(path.dirname(fetched.id.split('?')[0]), dep))
-        : this.completeExtension(dep)
-      return this.instantiate(depId)
+      const resolved = await this.resolveModule(dep, fetched.id)
+      if (resolved.external) return this.importExternal(resolved.id)
+      return this.instantiate(resolved.id)
     }
 
     const ssrExportAll = (sourceModule: Record<string, unknown>) => {

@@ -13,6 +13,7 @@ const defaultResolve: Required<ResolveConfig> = {
   extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue'],
   conditions: ['import', 'module', 'browser', 'default'],
   mainFields: ['module', 'jsnext:main', 'jsnext', 'main'],
+  noExternal: [],
 }
 
 const defaultServer: Required<ServerConfig> = {
