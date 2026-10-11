@@ -5,9 +5,9 @@
 // 过滤后的插件列表/PluginContainer/ModuleGraph/HotChannel。
 //
 // SSR、完整打包模式、多端/Electron 全部表达为 environment —— 这是其余
-// 2.0 特性共同依赖的主干。每个 client-consumer 环境拥有独立的 dev
-// transform/module graph/HMR 管线；server consumer 可由 module runner 或
-// 外部 driver 接管。
+// 2.0 特性共同依赖的主干。原生 dev 环境拥有独立的 transform/module graph；
+// client consumer 使用浏览器/HMR 管线，server consumer 使用 graph-backed
+// module runner；声明 driver 的环境由外部驱动接管。
 import type {
   EnvironmentDriver,
   EnvironmentBuildMetadata,
@@ -85,33 +85,38 @@ export class NastiEnvironment implements EnvironmentInstance {
   async init(): Promise<void> {
     if (this.initialized) return
     this.initialized = true
-    this.plugins = resolveEnvironmentPlugins(this, this.candidatePlugins)
-    this.pluginContainer = new PluginContainer(
-      { ...this.config, plugins: this.plugins },
-      this,
-    )
-    if (this.options.driver) {
-      const claimed: Array<{ plugin: NastiPlugin; driver: EnvironmentDriver }> = []
-      for (const plugin of this.plugins) {
-        const driver = await plugin.createEnvironmentDriver?.(this, this.pluginApi)
-        if (driver) claimed.push({ plugin, driver })
+    try {
+      this.plugins = resolveEnvironmentPlugins(this, this.candidatePlugins)
+      this.pluginContainer = new PluginContainer(
+        { ...this.config, plugins: this.plugins },
+        this,
+      )
+      if (this.options.driver) {
+        const claimed: Array<{ plugin: NastiPlugin; driver: EnvironmentDriver }> = []
+        for (const plugin of this.plugins) {
+          const driver = await plugin.createEnvironmentDriver?.(this, this.pluginApi)
+          if (driver) claimed.push({ plugin, driver })
+        }
+        if (claimed.length === 0) {
+          throw new Error(
+            `[nasti] environment "${this.name}" requested driver ` +
+              `"${this.options.driver}", but no plugin provided it`,
+          )
+        }
+        if (claimed.length > 1) {
+          throw new Error(
+            `[nasti] environment "${this.name}" was claimed by multiple drivers: ` +
+              claimed.map(({ plugin, driver }) => `${plugin.name} (${driver.name})`).join(', '),
+          )
+        }
+        this.driver = claimed[0].driver
+        debug?.(`env "${this.name}" uses driver "${this.driver.name}"`)
       }
-      if (claimed.length === 0) {
-        throw new Error(
-          `[nasti] environment "${this.name}" requested driver ` +
-            `"${this.options.driver}", but no plugin provided it`,
-        )
-      }
-      if (claimed.length > 1) {
-        throw new Error(
-          `[nasti] environment "${this.name}" was claimed by multiple drivers: ` +
-            claimed.map(({ plugin, driver }) => `${plugin.name} (${driver.name})`).join(', '),
-        )
-      }
-      this.driver = claimed[0].driver
-      debug?.(`env "${this.name}" uses driver "${this.driver.name}"`)
+      debug?.(`env "${this.name}" initialized (${this.plugins.length} plugins)`)
+    } catch (error) {
+      this.initialized = false
+      throw error
     }
-    debug?.(`env "${this.name}" initialized (${this.plugins.length} plugins)`)
   }
 
   getDriverContext(): EnvironmentDriverContext {

@@ -163,6 +163,10 @@ interface EnvironmentOptions {
   > 对照 Vite：`DevEnvironment.hot.setInvokeHandler({fetchModule, getBuiltins})` 是 RPC 桥，runner 回调 `fetchModule`→`transformRequest`→求值（✓核实 `server/environment.ts:146-160,230-249`）。
 - **Prod 构建**：per-env builder 出 SSR bundle（node conditions、server mainFields、builtins 外部化）。
 - `ssrLoadModule` 作为 runner 的 back-compat shim。
+- **当前核心生命周期**：原生 server dev 的公开 `transformRequest` 与 SSR 求值共用
+  graph-backed runner 转换缓存；转换时记录静态/字面量动态导入，执行时补非字面量动态边。
+  规范 ID/URL alias 共用节点，图版本阻止旧转换覆盖；watcher 保守全量失效，不应用 client
+  HMR accept 边界。外部 driver、网络 transport 与完整框架适配仍分别验收，不能由核心图回归推定完成。
 - **`import.meta.env.SSR` 必须 consumer 派生**：更新 `core/env.ts` 中的 `buildEnvDefine`，不再硬编码 `import.meta.env.SSR='false'`，而是提供 per-env define 钩子（例如接受 overrides map 或 callback），允许调用方为 server vs client 分别设置。使 `build/index.ts` 和 dev server 构造调用该钩子以为 server 运行注入 `SSR='true'`。在 §4 中记录 Phase1→Phase2 接口契约为"per-env define hook for import.meta.env.SSR"，并添加"define mechanism supports per-env overrides"到 Phase 1 退出标准（附录 C），确保 per-env define 已实现且可测试。
 - `isSsrTargetWebworker` 是 edge/worker 的先例（server consumer + browser-like resolve）。
 

@@ -45,12 +45,14 @@ export class ModuleGraph {
     return result
   }
 
-  async ensureEntryFromUrl(url: string): Promise<ModuleNode> {
+  async ensureEntryFromUrl(url: string, id?: string): Promise<ModuleNode> {
     const normalizedUrl = removeTimestampQuery(url)
-    let mod = this.urlToModuleMap.get(normalizedUrl)
-    if (mod) return mod
-
-    mod = this.createModule(normalizedUrl)
+    let mod = id ? this.idToModuleMap.get(id) : undefined
+    mod ??= this.urlToModuleMap.get(normalizedUrl)
+    mod ??= this.createModule(normalizedUrl, id)
+    if (id) this.setModuleId(mod, id)
+    // Multiple request URLs (extension aliases, absolute paths, virtual aliases)
+    // can refer to one canonical module and must share its cache and edges.
     this.urlToModuleMap.set(normalizedUrl, mod)
     return mod
   }
