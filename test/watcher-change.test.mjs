@@ -10,6 +10,11 @@ import * as esm from '../dist/index.js'
 
 const cjs = createRequire(import.meta.url)('../dist/index.cjs')
 
+function metadata(stats) {
+  if (!stats) return null
+  return { ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
+}
+
 async function fixture(t, api) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nasti-watcher-change-'))
   let server
@@ -93,8 +98,13 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       const { server, dep, mtimeSeconds } = await fixture(t, api)
       await server.ssrLoadModule('/entry.js')
       const events = []
-      server.watcher.on('change', (file) => {
-        if (path.resolve(file) === dep) events.push(file)
+      const eventMetadata = []
+      const snapshot = metadata(server.watcher.files?.get(path.resolve(dep))?.stats)
+      server.watcher.on('change', (file, stats) => {
+        if (path.resolve(file) === dep) {
+          events.push(file)
+          eventMetadata.push(metadata(stats))
+        }
       })
       // Explicit access-time updates make this independent of relatime/noatime.
       const before = await fs.stat(dep)
@@ -104,7 +114,9 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       assert.equal((await fs.stat(dep)).mtimeMs, before.mtimeMs)
       await fs.readFile(dep)
       await delay(150)
-      assert.deepEqual(events, [], 'reads must not trigger an SSR reload loop')
+      assert.deepEqual(events, [], `reads must not trigger an SSR reload loop: ${
+        JSON.stringify({ snapshot, before: metadata(before), after: metadata(await fs.stat(dep)), eventMetadata })
+      }`)
       await server.watcher.unwatch(dep)
       await fs.writeFile(dep, 'export const value = "unwatched";')
       await delay(150)
@@ -166,8 +178,12 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       await fileEvent(server, 'change', dep,
         () => fs.writeFile(dep, 'export const value = "first";'))
       const events = []
-      server.watcher.on('all', (event, file) => {
-        if (path.resolve(file) === dep) events.push(event)
+      const eventMetadata = []
+      server.watcher.on('all', (event, file, stats) => {
+        if (path.resolve(file) === dep) {
+          events.push(event)
+          eventMetadata.push(metadata(stats))
+        }
       })
       // Unit-level adverse-path setup: model a native unlink whose matching
       // add was lost. Use Chokidar's normalization API to queue its real atomic
@@ -178,7 +194,8 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       await fileEvent(server, 'change', dep, () => fs.rename(replacement, dep))
       assert.equal((await server.ssrLoadModule('/entry.js')).value, 'recovered')
       await delay(200)
-      assert.deepEqual(events, ['change'], 'no stale atomic unlink after recovery')
+      assert.deepEqual(events, ['change'],
+        `no stale atomic unlink after recovery: ${JSON.stringify(eventMetadata)}`)
       // Even when raw delivery/replacement is later than the atomic timer,
       // an extant file must retain its snapshot and stay eligible for recovery.
       await server.watcher._emit('unlink', dep)
