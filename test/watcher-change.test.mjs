@@ -12,7 +12,10 @@ const cjs = createRequire(import.meta.url)('../dist/index.cjs')
 
 function metadata(stats) {
   if (!stats) return null
-  return { ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
+  return {
+    type: stats.constructor.name,
+    ino: String(stats.ino), size: String(stats.size), mtimeMs: String(stats.mtimeMs),
+  }
 }
 
 async function fixture(t, api) {
@@ -99,7 +102,10 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       await server.ssrLoadModule('/entry.js')
       const events = []
       const eventMetadata = []
-      const snapshot = metadata(server.watcher.files?.get(path.resolve(dep))?.stats)
+      const initial = server.watcher.files?.get(path.resolve(dep))?.stats
+      assert.equal(typeof initial?.mtimeMs, 'number',
+        'initial snapshots must use the same Stats representation as native events')
+      const snapshot = metadata(initial)
       server.watcher.on('change', (file, stats) => {
         if (path.resolve(file) === dep) {
           events.push(file)

@@ -30,14 +30,16 @@ class DevWatcher extends FSWatcher {
     // The public ignored callback receives Chokidar's scan metadata even when
     // ignoreInitial suppresses add events. Capture accepted files here so both
     // startup and later watcher.add() retain normal ignoreInitial semantics,
-    // without traversing/statting the tree twice.
+    // without traversing/statting the tree twice. Readdirp supplies BigIntStats
+    // on Windows; wait for Chokidar's own Number Stats before arming each file.
+    // They match native events/rechecks and retain fractional mtime precision.
     super({
       ...options,
       ignoreInitial: true,
       alwaysStat: true,
       ignored(file, stats) {
         if (options.ignored(file, stats)) return true
-        if (stats?.isFile()) {
+        if (stats?.isFile() && typeof stats.mtimeMs === 'number') {
           const key = path.resolve(file)
           if (!files.has(key)) files.set(key, { file: path.normalize(file), stats })
         }
