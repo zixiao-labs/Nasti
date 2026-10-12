@@ -108,7 +108,7 @@ class DevWatcher extends FSWatcher {
     const [file, stats] = args
     // An old native callback can finish after unwatch; it must neither publish
     // an event nor repopulate the metadata removed by unwatch.
-    if (isUnwatched(file, this.unwatched)) return
+    if (typeof file === 'string' && isUnwatched(file, this.unwatched)) return
     if ((event === 'add' || event === 'change') && stats?.isFile()) {
       // Any stat-confirmed change (native or recovered) satisfies the atomic
       // save pair. A delayed old unlink must not follow it. This adapter is
@@ -157,6 +157,7 @@ class DevWatcher extends FSWatcher {
   }
 
   override unwatch(paths: string | string[]): this {
+    if (this.closed) return this
     for (const target of Array.isArray(paths) ? paths : [paths]) {
       const absolute = path.resolve(target)
       this.unwatched.add(absolute)
@@ -166,6 +167,11 @@ class DevWatcher extends FSWatcher {
         clearTimeout(this.pending.get(file))
         this.pending.delete(file)
         this.suppressedAtomicUnlinks.delete(file)
+      }
+      // Pending atomic events belong to the old watch generation. They must
+      // not cross an immediate unwatch -> add lifecycle.
+      for (const file of this._pendingUnlinks.keys()) {
+        if (isUnwatched(file, this.unwatched)) this._pendingUnlinks.delete(file)
       }
       // Chokidar 5 unwatch uses slash-normalized paths, but Windows closer keys
       // created while scanning directories are platform-normalized. Close both
@@ -177,6 +183,7 @@ class DevWatcher extends FSWatcher {
   }
 
   override add(paths: string | string[], originalAdd?: string, internal?: boolean): this {
+    if (this.closed) return this
     if (!originalAdd && !internal) {
       for (const target of Array.isArray(paths) ? paths : [paths]) {
         this.unwatched.delete(path.resolve(target))

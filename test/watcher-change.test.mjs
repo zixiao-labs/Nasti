@@ -156,6 +156,9 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       const events = []
       // close removes old listeners; new listeners can observe a rogue callback.
       server.watcher.on('all', (...event) => events.push(event))
+      server.watcher.unwatch(dep)
+      server.watcher.add(dep)
+      assert.deepEqual(server.watcher.getWatched(), {}, 'closed watcher APIs must remain no-ops')
       await fs.writeFile(dep, 'export const value = "closed";')
       await delay(100)
       assert.deepEqual(events, [], 'close must cancel pending native rechecks')
@@ -191,8 +194,6 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
     { timeout: 10000 }, async (t) => {
       const { server, dep } = await fixture(t, api)
       await server.ssrLoadModule('/entry.js')
-      await fileEvent(server, 'change', dep,
-        () => fs.writeFile(dep, 'export const value = "first";'))
       const events = []
       const eventMetadata = []
       server.watcher.on('all', (event, file, stats) => {
@@ -204,6 +205,8 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       // Unit-level adverse-path setup: model a native unlink whose matching
       // add was lost. Use Chokidar's normalization API to queue its real atomic
       // timer; the replacement and recovered change below are real disk events.
+      // Start from the stable fixture, not a preceding in-place save whose
+      // final write/close metadata notification can arrive later on Windows.
       await server.watcher._emit('unlink', dep)
       const replacement = `${dep}.tmp`
       await fs.writeFile(replacement, 'export const value = "recovered";')
@@ -222,6 +225,32 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       assert.equal((await server.ssrLoadModule('/entry.js')).value, 'late')
       await delay(200)
       assert.deepEqual(events, ['change', 'change'])
+    })
+
+  test(`${format}: unwatch cancels atomic state before an immediate re-add`,
+    { timeout: 10000 }, async (t) => {
+      const { server, dep } = await fixture(t, api)
+      await server.ssrLoadModule('/entry.js')
+      const events = []
+      server.watcher.on('all', (event, file) => {
+        if (path.resolve(file) === dep) events.push(event)
+      })
+      await server.watcher._emit('unlink', dep)
+      await server.watcher.unwatch(dep)
+      assert.equal(server.watcher._pendingUnlinks.has(dep), false,
+        'unwatch must discard the old atomic generation')
+      server.watcher.add(dep)
+      const deadline = Date.now() + 5000
+      while (!Object.entries(server.watcher.getWatched()).some(([directory, files]) =>
+        path.resolve(directory) === path.dirname(dep) && files.includes(path.basename(dep)))) {
+        assert.ok(Date.now() < deadline, 'immediate re-add must become watched')
+        await delay(5)
+      }
+      await delay(150)
+      assert.deepEqual(events, [], 'old atomic events must not cross re-add')
+      await fileEvent(server, 'change', dep,
+        () => fs.writeFile(dep, 'export const value = "new-generation";'))
+      assert.equal((await server.ssrLoadModule('/entry.js')).value, 'new-generation')
     })
 
   test(`${format}: dynamically added paths preserve ignoreInitial and recover edits`,
