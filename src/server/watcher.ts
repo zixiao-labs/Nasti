@@ -1,7 +1,7 @@
-import type { Stats } from 'node:fs'
+import { statSync, type Stats } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
-import { FSWatcher, type ChokidarOptions } from 'chokidar'
+import { FSWatcher, type ChokidarOptions, type FSWatcherEventMap } from 'chokidar'
 
 function sameFile(left: Stats, right: Stats): boolean {
   return left.ino === right.ino &&
@@ -23,6 +23,7 @@ type WatchOptions = ChokidarOptions & {
 class DevWatcher extends FSWatcher {
   private files: Map<string, FileSnapshot>
   private pending = new Map<string, ReturnType<typeof setTimeout>>()
+  private suppressedAtomicUnlinks = new Set<string>()
 
   constructor(options: WatchOptions) {
     const files = new Map<string, FileSnapshot>()
@@ -53,6 +54,36 @@ class DevWatcher extends FSWatcher {
       this.schedule(watched)
       if (typeof name === 'string') this.schedule(path.resolve(watched, name))
     })
+  }
+
+  override emit<E extends keyof FSWatcherEventMap>(
+    event: E,
+    ...args: E extends keyof FSWatcherEventMap ? FSWatcherEventMap[E] : never
+  ): boolean {
+    if (event === 'unlink' && typeof args[0] === 'string') {
+      const file = path.normalize(args[0])
+      if (this._pendingUnlinks.has(file)) {
+        let current: Stats | undefined
+        try {
+          current = statSync(file)
+        } catch {
+          // A missing or inaccessible file retains Chokidar's unlink behavior.
+        }
+        if (current?.isFile()) {
+          // Native add/change can arrive after the atomic timer. Validate at
+          // publication time so it cannot delete an extant file's snapshot
+          // before the trailing check. This is one stat per delayed unlink,
+          // not a timer/polling loop. Chokidar emits its paired "all" next.
+          this.suppressedAtomicUnlinks.add(file)
+          this.emitWithAll('change', [file, current])
+          return false
+        }
+      }
+    }
+    if (event === 'all' && args[0] === 'unlink' && typeof args[1] === 'string') {
+      if (this.suppressedAtomicUnlinks.delete(path.normalize(args[1]))) return false
+    }
+    return super.emit(event, ...args)
   }
 
   override emitWithAll(...[event, args]: Parameters<FSWatcher['emitWithAll']>): void {
@@ -112,6 +143,7 @@ class DevWatcher extends FSWatcher {
         this.files.delete(file)
         clearTimeout(this.pending.get(file))
         this.pending.delete(file)
+        this.suppressedAtomicUnlinks.delete(file)
       }
     }
     super.unwatch(paths)
@@ -122,6 +154,7 @@ class DevWatcher extends FSWatcher {
     for (const timer of this.pending.values()) clearTimeout(timer)
     this.pending.clear()
     this.files.clear()
+    this.suppressedAtomicUnlinks.clear()
     return super.close()
   }
 }

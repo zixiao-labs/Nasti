@@ -33,7 +33,7 @@ async function fixture(t, api) {
     root, configFile: false, logLevel: 'silent',
     server: { port: 0, host: '127.0.0.1', hmr: false },
   })
-  return { root, server, dep: path.join(root, 'dep.js') }
+  return { root, server, dep: path.join(root, 'dep.js'), mtimeSeconds: seconds }
 }
 
 async function fileEvent(server, event, file, mutate) {
@@ -90,7 +90,7 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
 
   test(`${format}: watcher ignores read-only metadata and unwatched files`,
     { timeout: 10000 }, async (t) => {
-      const { server, dep } = await fixture(t, api)
+      const { server, dep, mtimeSeconds } = await fixture(t, api)
       await server.ssrLoadModule('/entry.js')
       const events = []
       server.watcher.on('change', (file) => {
@@ -98,7 +98,10 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       })
       // Explicit access-time updates make this independent of relatime/noatime.
       const before = await fs.stat(dep)
-      await fs.utimes(dep, new Date(Date.now() + 1000), before.mtimeMs / 1000)
+      // Reuse the original seconds: converting a rounded NTFS mtimeMs back to
+      // seconds can actually change mtime, making this no longer a read-only test.
+      await fs.utimes(dep, new Date(Date.now() + 1000), mtimeSeconds)
+      assert.equal((await fs.stat(dep)).mtimeMs, before.mtimeMs)
       await fs.readFile(dep)
       await delay(150)
       assert.deepEqual(events, [], 'reads must not trigger an SSR reload loop')
@@ -176,6 +179,16 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       assert.equal((await server.ssrLoadModule('/entry.js')).value, 'recovered')
       await delay(200)
       assert.deepEqual(events, ['change'], 'no stale atomic unlink after recovery')
+      // Even when raw delivery/replacement is later than the atomic timer,
+      // an extant file must retain its snapshot and stay eligible for recovery.
+      await server.watcher._emit('unlink', dep)
+      await delay(150)
+      assert.deepEqual(events, ['change'], 'expiry must not unlink an extant file')
+      await fs.writeFile(replacement, 'export const value = "late";')
+      await fileEvent(server, 'change', dep, () => fs.rename(replacement, dep))
+      assert.equal((await server.ssrLoadModule('/entry.js')).value, 'late')
+      await delay(200)
+      assert.deepEqual(events, ['change', 'change'])
     })
 
   test(`${format}: dynamically added paths preserve ignoreInitial and recover edits`,
