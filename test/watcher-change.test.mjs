@@ -127,6 +127,16 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       await fs.writeFile(dep, 'export const value = "unwatched";')
       await delay(150)
       assert.deepEqual(events, [], 'parent raw events must respect unwatch')
+      server.watcher.add(dep)
+      const deadline = Date.now() + 5000
+      while (!Object.entries(server.watcher.getWatched()).some(([directory, files]) =>
+        path.resolve(directory) === path.dirname(dep) && files.includes(path.basename(dep)))) {
+        assert.ok(Date.now() < deadline, 'unwatched file must support add again')
+        await delay(5)
+      }
+      await fileEvent(server, 'change', dep,
+        () => fs.writeFile(dep, 'export const value = "watched-again";'))
+      assert.equal((await server.ssrLoadModule('/entry.js')).value, 'watched-again')
     })
 
   test(`${format}: close cancels a pending recheck on a still-watched file`,

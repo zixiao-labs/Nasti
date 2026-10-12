@@ -14,6 +14,14 @@ type WatchOptions = ChokidarOptions & {
   ignored: (file: string, stats?: Stats) => boolean
 }
 
+function isUnwatched(file: string, unwatched: Set<string>): boolean {
+  const key = path.resolve(file)
+  for (const target of unwatched) {
+    if (key === target || key.startsWith(target + path.sep)) return true
+  }
+  return false
+}
+
 /**
  * Chokidar 5 can discard the last native notification in its watch/change
  * throttle windows. In particular, a read's metadata notification can mask an
@@ -22,11 +30,13 @@ type WatchOptions = ChokidarOptions & {
  */
 class DevWatcher extends FSWatcher {
   private files: Map<string, FileSnapshot>
+  private unwatched: Set<string>
   private pending = new Map<string, ReturnType<typeof setTimeout>>()
   private suppressedAtomicUnlinks = new Set<string>()
 
   constructor(options: WatchOptions) {
     const files = new Map<string, FileSnapshot>()
+    const unwatched = new Set<string>()
     // The public ignored callback receives Chokidar's scan metadata even when
     // ignoreInitial suppresses add events. Capture accepted files here so both
     // startup and later watcher.add() retain normal ignoreInitial semantics,
@@ -38,6 +48,7 @@ class DevWatcher extends FSWatcher {
       ignoreInitial: true,
       alwaysStat: true,
       ignored(file, stats) {
+        if (isUnwatched(file, unwatched)) return true
         if (options.ignored(file, stats)) return true
         if (stats?.isFile() && typeof stats.mtimeMs === 'number') {
           const key = path.resolve(file)
@@ -47,6 +58,7 @@ class DevWatcher extends FSWatcher {
       },
     })
     this.files = files
+    this.unwatched = unwatched
     this.on('unlink', (file) => { this.files.delete(path.resolve(file)) })
     this.on('raw', (_event, name, details) => {
       const watchedPath = (details as { watchedPath?: unknown })?.watchedPath
@@ -65,6 +77,10 @@ class DevWatcher extends FSWatcher {
     if (event === 'unlink' && typeof args[0] === 'string') {
       const file = path.normalize(args[0])
       if (this._pendingUnlinks.has(file)) {
+        if (isUnwatched(file, this.unwatched)) {
+          this.suppressedAtomicUnlinks.add(file)
+          return false
+        }
         let current: Stats | undefined
         try {
           current = statSync(file)
@@ -90,6 +106,9 @@ class DevWatcher extends FSWatcher {
 
   override emitWithAll(...[event, args]: Parameters<FSWatcher['emitWithAll']>): void {
     const [file, stats] = args
+    // An old native callback can finish after unwatch; it must neither publish
+    // an event nor repopulate the metadata removed by unwatch.
+    if (isUnwatched(file, this.unwatched)) return
     if ((event === 'add' || event === 'change') && stats?.isFile()) {
       // Any stat-confirmed change (native or recovered) satisfies the atomic
       // save pair. A delayed old unlink must not follow it. This adapter is
@@ -140,6 +159,7 @@ class DevWatcher extends FSWatcher {
   override unwatch(paths: string | string[]): this {
     for (const target of Array.isArray(paths) ? paths : [paths]) {
       const absolute = path.resolve(target)
+      this.unwatched.add(absolute)
       for (const file of this.files.keys()) {
         if (file !== absolute && !file.startsWith(absolute + path.sep)) continue
         this.files.delete(file)
@@ -147,8 +167,22 @@ class DevWatcher extends FSWatcher {
         this.pending.delete(file)
         this.suppressedAtomicUnlinks.delete(file)
       }
+      // Chokidar 5 unwatch uses slash-normalized paths, but Windows closer keys
+      // created while scanning directories are platform-normalized. Close both
+      // spellings so unwatch also releases the underlying native file handle.
+      if (process.platform === 'win32') this._closePath(absolute)
     }
     super.unwatch(paths)
+    return this
+  }
+
+  override add(paths: string | string[], originalAdd?: string, internal?: boolean): this {
+    if (!originalAdd && !internal) {
+      for (const target of Array.isArray(paths) ? paths : [paths]) {
+        this.unwatched.delete(path.resolve(target))
+      }
+    }
+    super.add(paths, originalAdd, internal)
     return this
   }
 
@@ -156,6 +190,7 @@ class DevWatcher extends FSWatcher {
     for (const timer of this.pending.values()) clearTimeout(timer)
     this.pending.clear()
     this.files.clear()
+    this.unwatched.clear()
     this.suppressedAtomicUnlinks.clear()
     return super.close()
   }
