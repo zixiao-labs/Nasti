@@ -1,12 +1,16 @@
 # Changelog
 
-## Unreleased
+## 2.6.4
+
+本次更新包含 [PR #48](https://github.com/zixiao-labs/Nasti/pull/48)，让 production build 和自定义 dev pipeline 支持 Rolldown object-form plugin hooks。
 
 ### Plugin API
 
 - Support Rolldown object-form hooks with per-hook `order`, `filter`, and `sequential` metadata in production builds.
 - Apply object-form `resolveId`, `load`, and `transform` handlers, filters, and per-hook ordering in the custom dev pipeline.
 - Preserve the Nasti environment as hook `this`, including for object-form hooks; carry loaded module types into dev transform filters.
+
+**完整变更**：https://github.com/zixiao-labs/Nasti/compare/v2.6.3...v2.6.4
 
 ## 2.6.3
 
