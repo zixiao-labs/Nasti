@@ -77,7 +77,7 @@ export class PluginContainer {
     // ssr 标志由环境 consumer 派生（1.x 写死 false；client 环境行为不变）
     const ssr = this.environment?.consumer === 'server'
     for (const { hook } of getOrderedPluginHooks(this.plugins, 'resolveId')) {
-      if (!pluginHookFilterMatches(hook.filter, { id: source })) continue
+      if (!pluginHookFilterMatches(hook.filter, { id: source, importerId: importer, cwd: this.config.root })) continue
       const result = await hook.handler.call(
         this.ctx,
         source,
@@ -91,7 +91,7 @@ export class PluginContainer {
 
   async load(id: string): Promise<LoadResult> {
     for (const { hook } of getOrderedPluginHooks(this.plugins, 'load')) {
-      if (!pluginHookFilterMatches(hook.filter, { id })) continue
+      if (!pluginHookFilterMatches(hook.filter, { id, cwd: this.config.root })) continue
       const result = await hook.handler.call(this.ctx, id)
       if (result != null) return result
     }
@@ -103,7 +103,7 @@ export class PluginContainer {
     let currentModuleType = moduleType ?? inferModuleType(id)
     let lastResult: Exclude<TransformResult, string | null | undefined> | undefined
     for (const { hook } of getOrderedPluginHooks(this.plugins, 'transform')) {
-      if (!pluginHookFilterMatches(hook.filter, { id, code: currentCode, moduleType: currentModuleType })) {
+      if (!pluginHookFilterMatches(hook.filter, { id, code: currentCode, moduleType: currentModuleType, cwd: this.config.root })) {
         continue
       }
       const result = await hook.handler.call(this.ctx, currentCode, id)

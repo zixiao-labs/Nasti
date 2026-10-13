@@ -3,8 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { and, exclude, id, importerId, include } from 'rolldown/filter'
 
-import { build, createServer } from '../dist/index.js'
+import { build, createServer, NastiEnvironment, resolveConfig } from '../dist/index.js'
 
 function createFixture(t, prefix) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -13,6 +14,96 @@ function createFixture(t, prefix) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   return root
 }
+
+async function createPluginContainer(t, plugins) {
+  const root = createFixture(t, 'nasti-hook-filters-')
+  const config = await resolveConfig({ root, framework: 'vue', logLevel: 'silent' }, 'serve')
+  const environment = new NastiEnvironment('client', config, { plugins })
+  t.after(() => environment.close())
+  await environment.init()
+  return { container: environment.pluginContainer, root }
+}
+
+test('dev resolveId filters receive importer IDs, including missing and excluded importers', async (t) => {
+  const calls = []
+  const { container, root } = await createPluginContainer(t, [{
+    name: 'fixture:importer-filter',
+    resolveId: {
+      filter: [
+        exclude(importerId(/[\\/]blocked[\\/]/)),
+        include(and(id(/^virtual:importer$/), importerId(/[\\/]main\.js$/, { cleanUrl: true }))),
+      ],
+      handler(source, importer) {
+        calls.push(importer)
+        return `\0${source}`
+      },
+    },
+  }])
+  const importer = path.join(root, 'src/main.js')
+  assert.equal(await container.resolveId('virtual:importer', importer), '\0virtual:importer')
+  assert.equal(await container.resolveId('virtual:importer', `${importer}?raw`), '\0virtual:importer')
+  assert.equal(await container.resolveId('virtual:importer', path.join(root, 'src/blocked/main.js')), null)
+  assert.equal(await container.resolveId('virtual:importer', path.join(root, 'src/other.js')), null)
+  assert.equal(await container.resolveId('virtual:importer'), null)
+  assert.equal(await container.resolveId('virtual:other', importer), null)
+  assert.deepEqual(calls, [importer, `${importer}?raw`])
+})
+
+test('dev object id filters match globs in load and transform with include/exclude and code filters', async (t) => {
+  const { container, root } = await createPluginContainer(t, [{
+    name: 'fixture:glob-filter',
+    load: {
+      filter: { id: '**/*.js' },
+      handler() {
+        return 'LOAD_TARGET'
+      },
+    },
+    transform: {
+      filter: {
+        id: { include: ['src/**/*.js', '**/*.ts'], exclude: ['**/ignored.*', '**/vendor/**'] },
+        code: { include: 'TARGET', exclude: 'SKIP' },
+      },
+      handler(code) {
+        return code.replace('TARGET', 'MATCHED')
+      },
+    },
+  }])
+  for (const file of ['src/main.js', 'src/nested/main.js', 'src/.hidden.js']) {
+    const moduleId = path.join(root, file)
+    assert.equal(await container.load(moduleId), 'LOAD_TARGET', file)
+    assert.equal((await container.transform('export const value = "TARGET";', moduleId)).code,
+      'export const value = "MATCHED";', file)
+  }
+  assert.equal((await container.transform('TARGET', path.join(root, 'src/main.ts'))).code, 'MATCHED')
+  assert.equal(await container.load(path.join(root, 'src/main.ts')), null)
+  for (const file of ['src/ignored.js', 'src/vendor/main.js', 'other/main.js', 'src/main.css']) {
+    assert.equal(await container.transform('TARGET', path.join(root, file)), null, file)
+  }
+  assert.equal(await container.transform('OTHER', path.join(root, 'src/main.js')), null)
+  assert.equal(await container.transform('TARGET SKIP', path.join(root, 'src/main.js')), null)
+})
+
+test('dev expression id and importerId strings retain exact matching', async (t) => {
+  const { container } = await createPluginContainer(t, [{
+    name: 'fixture:exact-expression-filter',
+    resolveId: {
+      filter: [include(and(id('virtual:exact'), importerId('/src/main.js')))],
+      handler(source) {
+        return `\0${source}`
+      },
+    },
+    load: {
+      filter: [include(id('**/*.js'))],
+      handler() {
+        return 'EXACT_MATCH'
+      },
+    },
+  }])
+  assert.equal(await container.resolveId('virtual:exact', '/src/main.js'), '\0virtual:exact')
+  assert.equal(await container.resolveId('virtual:exact', '/other/src/main.js'), null)
+  assert.equal(await container.load('/src/main.js'), null)
+  assert.equal(await container.load('**/*.js'), 'EXACT_MATCH')
+})
 
 test('build preserves object hook handlers, filters, ordering, metadata, and context', async (t) => {
   const root = createFixture(t, 'nasti-object-hooks-build-')

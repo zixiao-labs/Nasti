@@ -1,3 +1,5 @@
+import path from 'node:path'
+import picomatch from 'picomatch'
 import { code as codeExpression, exprInterpreter, id as idExpression, interpreter } from 'rolldown/filter'
 import type { NastiPlugin } from '../types.js'
 
@@ -84,6 +86,8 @@ export function getOrderedPluginHooks(
 
 export interface HookFilterContext {
   id?: string
+  importerId?: string
+  cwd?: string
   code?: string
   moduleType?: string
 }
@@ -101,6 +105,7 @@ export function pluginHookFilterMatches(
       context.code,
       context.id,
       context.moduleType as Parameters<typeof interpreter>[3],
+      context.importerId,
     )
   }
   if (typeof filter !== 'object' || filter instanceof RegExp) {
@@ -128,11 +133,20 @@ function matchesGeneralFilter(
     if (typeof pattern !== 'string' && !(pattern instanceof RegExp)) {
       throw new TypeError('[nasti] plugin hook filter patterns must be strings or regular expressions')
     }
+    let expressionPattern = pattern
+    if (createExpression === idExpression && typeof pattern === 'string') {
+      // Rolldown resolves relative globs from cwd and includes dotfiles.
+      const glob = pattern.startsWith('**') || path.isAbsolute(pattern)
+        ? pattern
+        : path.resolve(context.cwd ?? process.cwd(), pattern)
+      expressionPattern = picomatch.makeRe(glob.split(path.sep).join('/'), { dot: true })
+    }
     return exprInterpreter(
-      createExpression(pattern) as Parameters<typeof exprInterpreter>[0],
+      createExpression(expressionPattern) as Parameters<typeof exprInterpreter>[0],
       context.code,
-      context.id,
+      createExpression === idExpression ? context.id?.split(path.sep).join('/') : context.id,
       context.moduleType as Parameters<typeof exprInterpreter>[3],
+      context.importerId,
     )
   }
 
