@@ -12,6 +12,7 @@ import type {
   EnvironmentInstance,
 } from '../types.js'
 import { orderPlugins } from './plugin-api.js'
+import { getOrderedPluginHooks, pluginHookFilterMatches } from './plugin-hooks.js'
 
 export class PluginContainer {
   private plugins: NastiPlugin[]
@@ -57,18 +58,14 @@ export class PluginContainer {
   }
 
   async buildStart(): Promise<void> {
-    for (const plugin of this.plugins) {
-      if (plugin.buildStart) {
-        await plugin.buildStart.call(this.ctx)
-      }
+    for (const { hook } of getOrderedPluginHooks(this.plugins, 'buildStart')) {
+      await hook.handler.call(this.ctx)
     }
   }
 
   async buildEnd(error?: Error): Promise<void> {
-    for (const plugin of this.plugins) {
-      if (plugin.buildEnd) {
-        await plugin.buildEnd.call(this.ctx, error)
-      }
+    for (const { hook } of getOrderedPluginHooks(this.plugins, 'buildEnd')) {
+      await hook.handler.call(this.ctx, error)
     }
   }
 
@@ -79,9 +76,9 @@ export class PluginContainer {
   ): Promise<ResolveIdResult> {
     // ssr 标志由环境 consumer 派生（1.x 写死 false；client 环境行为不变）
     const ssr = this.environment?.consumer === 'server'
-    for (const plugin of this.plugins) {
-      if (!plugin.resolveId) continue
-      const result = await plugin.resolveId.call(
+    for (const { hook } of getOrderedPluginHooks(this.plugins, 'resolveId')) {
+      if (!pluginHookFilterMatches(hook.filter, { id: source })) continue
+      const result = await hook.handler.call(
         this.ctx,
         source,
         importer ?? undefined,
@@ -93,26 +90,30 @@ export class PluginContainer {
   }
 
   async load(id: string): Promise<LoadResult> {
-    for (const plugin of this.plugins) {
-      if (!plugin.load) continue
-      const result = await plugin.load.call(this.ctx, id)
+    for (const { hook } of getOrderedPluginHooks(this.plugins, 'load')) {
+      if (!pluginHookFilterMatches(hook.filter, { id })) continue
+      const result = await hook.handler.call(this.ctx, id)
       if (result != null) return result
     }
     return null
   }
 
-  async transform(code: string, id: string): Promise<TransformResult> {
+  async transform(code: string, id: string, moduleType?: string): Promise<TransformResult> {
     let currentCode = code
+    let currentModuleType = moduleType ?? inferModuleType(id)
     let lastResult: Exclude<TransformResult, string | null | undefined> | undefined
-    for (const plugin of this.plugins) {
-      if (!plugin.transform) continue
-      const result = await plugin.transform.call(this.ctx, currentCode, id)
+    for (const { hook } of getOrderedPluginHooks(this.plugins, 'transform')) {
+      if (!pluginHookFilterMatches(hook.filter, { id, code: currentCode, moduleType: currentModuleType })) {
+        continue
+      }
+      const result = await hook.handler.call(this.ctx, currentCode, id)
       if (result == null) continue
       if (typeof result === 'string') {
         currentCode = result
         lastResult = undefined
       } else {
         currentCode = result.code
+        currentModuleType = result.moduleType ?? currentModuleType
         lastResult = result
       }
     }
@@ -140,9 +141,10 @@ export class PluginContainer {
     const loadResult = await this.load(id)
     if (loadResult == null) return null
     const loadedCode = typeof loadResult === 'string' ? loadResult : loadResult.code
+    const moduleType = typeof loadResult === 'string' ? undefined : loadResult.moduleType
 
     // 3. transform
-    const transformResult = await this.transform(loadedCode, id)
+    const transformResult = await this.transform(loadedCode, id, moduleType)
     const finalCode = transformResult == null
       ? loadedCode
       : typeof transformResult === 'string'
@@ -155,4 +157,13 @@ export class PluginContainer {
   getPlugins(): NastiPlugin[] {
     return this.plugins
   }
+}
+
+function inferModuleType(id: string): string {
+  const cleanId = id.split(/[?#]/, 1)[0].toLowerCase()
+  if (cleanId.endsWith('.tsx')) return 'tsx'
+  if (cleanId.endsWith('.jsx')) return 'jsx'
+  if (/\.(?:ts|mts|cts)$/.test(cleanId)) return 'ts'
+  if (cleanId.endsWith('.json')) return 'json'
+  return 'js'
 }

@@ -32,6 +32,7 @@ import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { reactPlugin } from '../plugins/react.js'
 import { transformCode, shouldTransform } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
+import { getPluginHook, type RolldownHookName } from '../core/plugin-hooks.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
 import { getPluginApi } from '../core/plugin-api.js'
@@ -169,25 +170,27 @@ export function toRolldownPlugins(
   plugins: NastiPlugin[],
   environment: NastiEnvironment,
 ): unknown[] {
-  const wrap = (hook: ((this: any, ...args: any[]) => any) | undefined) => {
-    if (!hook) return hook
-    return function (this: any, ...args: any[]) {
-      return hook.apply(attachEnvironment(this, environment), args)
+  const wrap = (plugin: NastiPlugin, name: RolldownHookName) => {
+    const hook = getPluginHook(plugin, name)
+    if (!hook) return undefined
+    const handler = function (this: any, ...args: any[]) {
+      return hook.handler.apply(attachEnvironment(this, environment), args)
     }
+    return hook.objectHook ? { ...hook.objectHook, handler } : handler
   }
 
-  return plugins.map((p) => ({
-    name: p.name,
-    resolveId: wrap(p.resolveId as any),
-    load: wrap(p.load as any),
-    transform: wrap(p.transform as any),
-    buildStart: wrap(p.buildStart as any),
-    buildEnd: wrap(p.buildEnd as any),
+  return plugins.map((plugin) => ({
+    name: plugin.name,
+    resolveId: wrap(plugin, 'resolveId'),
+    load: wrap(plugin, 'load'),
+    transform: wrap(plugin, 'transform'),
+    buildStart: wrap(plugin, 'buildStart'),
+    buildEnd: wrap(plugin, 'buildEnd'),
     // closeBundle 在 bundle.close() 时触发 —— PWA manifest/SW 等终态产物依赖
-    closeBundle: wrap(p.closeBundle as any),
-    renderChunk: wrap(p.renderChunk as any),
-    augmentChunkHash: wrap(p.augmentChunkHash as any),
-    generateBundle: wrap(p.generateBundle as any),
+    closeBundle: wrap(plugin, 'closeBundle'),
+    renderChunk: wrap(plugin, 'renderChunk'),
+    augmentChunkHash: wrap(plugin, 'augmentChunkHash'),
+    generateBundle: wrap(plugin, 'generateBundle'),
   }))
 }
 
