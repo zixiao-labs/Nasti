@@ -188,7 +188,7 @@ await build({
 
 ## Plugin API
 
-Nasti 的插件接口与 Vite 完全兼容：
+Nasti 提供 Vite 风格的插件接口，支持函数钩子，以及 Rolldown 的对象式构建钩子：
 
 ```ts
 import type { NastiPlugin } from '@nasti-toolchain/nasti'
@@ -214,6 +214,30 @@ function myPlugin(): NastiPlugin {
   }
 }
 ```
+
+对象式钩子可声明每个钩子的执行顺序和过滤条件：
+
+```ts
+const transformPlugin: NastiPlugin = {
+  name: 'transform-selected-files',
+  transform: {
+    order: 'pre',
+    filter: {
+      id: { include: /\.tsx?$/, exclude: /\.d\.ts$/ },
+      code: { include: /__TRANSFORM_ME__/, exclude: /__SKIP_TRANSFORM__/ },
+    },
+    async handler(code, id) {
+      return code.replace('__TRANSFORM_ME__', `transformed:${id}`)
+    },
+  },
+}
+```
+
+构建时，`resolveId`、`load`、`transform`、`buildStart`、`buildEnd`、
+`closeBundle`、`renderChunk`、`augmentChunkHash` 和 `generateBundle` 的对象式
+metadata 会转发给 Rolldown；开发管线对 `resolveId`、`load`、`transform` 应用
+`order` 和过滤条件。`renderChunk` 是构建期钩子。`sequential` 仅作为兼容 metadata
+接受：Rolldown 和 Nasti 的开发钩子均按顺序执行。
 
 ## React pipeline
 

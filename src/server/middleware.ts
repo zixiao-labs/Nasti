@@ -428,7 +428,8 @@ export async function transformRequest(
     if (loaded != null) {
       let code = typeof loaded === 'string' ? loaded : loaded.code
       let map = typeof loaded === 'string' ? undefined : loaded.map
-      const transformed = await pluginContainer.transform(code, url)
+      const moduleType = typeof loaded === 'string' ? undefined : loaded.moduleType
+      const transformed = await pluginContainer.transform(code, url, moduleType)
       if (transformed != null) {
         code = typeof transformed === 'string' ? transformed : transformed.code
         if (typeof transformed !== 'string' && transformed.map != null) {
@@ -492,7 +493,8 @@ export async function transformRequest(
   let map: unknown = loaded && typeof loaded !== 'string' ? loaded.map : undefined
 
   // 通过插件管道 transform
-  const pluginResult = await pluginContainer.transform(code, filePath)
+  const moduleType = loaded && typeof loaded !== 'string' ? loaded.moduleType : undefined
+  const pluginResult = await pluginContainer.transform(code, filePath, moduleType)
   if (pluginResult) {
     code = typeof pluginResult === 'string' ? pluginResult : pluginResult.code
     if (typeof pluginResult !== 'string') map = pluginResult.map
@@ -603,9 +605,10 @@ async function loadVirtualModule(
   const loadResult = await pluginContainer.load(resolvedId)
   if (loadResult == null) return null
   let code = typeof loadResult === 'string' ? loadResult : loadResult.code
+  const moduleType = typeof loadResult === 'string' ? undefined : loadResult.moduleType
 
   // Let other plugins transform the virtual source (e.g. macros, define-replace).
-  const transformed = await pluginContainer.transform(code, resolvedId)
+  const transformed = await pluginContainer.transform(code, resolvedId, moduleType)
   if (transformed != null) {
     code = typeof transformed === 'string' ? transformed : transformed.code
   }

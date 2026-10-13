@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Plugin API
+
+- Support Rolldown object-form hooks with per-hook `order`, `filter`, and `sequential` metadata in production builds.
+- Apply object-form `resolveId`, `load`, and `transform` handlers, filters, and per-hook ordering in the custom dev pipeline.
+- Preserve the Nasti environment as hook `this`, including for object-form hooks; carry loaded module types into dev transform filters.
+
 ## 2.6.3
 
 ### 原生文件监听与 SSR 开发失效

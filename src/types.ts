@@ -1,7 +1,13 @@
 // Nasti - 核心类型定义
 // 兼容 Vite Plugin 接口
 
-import type { InputOptions, MinifyOptions, OutputOptions, RenderedChunk } from 'rolldown'
+import type {
+  InputOptions,
+  MinifyOptions,
+  OutputOptions,
+  Plugin as RolldownPlugin,
+  RenderedChunk,
+} from 'rolldown'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
   SFCAsyncStyleCompileOptions,
@@ -10,6 +16,22 @@ import type {
   SFCTemplateCompileOptions,
 } from '@vue/compiler-sfc'
 import type { Logger } from './core/logger.js'
+
+type RolldownObjectHook<K extends keyof RolldownPlugin> = Extract<
+  NonNullable<RolldownPlugin[K]>,
+  { handler: unknown }
+>
+
+type NastiPluginHook<K extends keyof RolldownPlugin, Handler> =
+  | Handler
+  | (Omit<RolldownObjectHook<K>, 'handler' | 'sequential'> & {
+      handler: Handler
+      /**
+       * Deprecated Rolldown compatibility metadata. Nasti's dev pipeline is sequential,
+       * and Rolldown currently treats all plugin hooks sequentially.
+       */
+      sequential?: boolean
+    })
 
 export interface NastiConfig {
   /** 项目根目录 */
@@ -386,17 +408,31 @@ export interface NastiPlugin {
   // 通用钩子
   /** 插件初始化与跨插件 API 注册；每次 resolveConfig 只执行一次 */
   setup?: (api: PluginApi) => void | Promise<void>
-  buildStart?: (this: PluginContext) => void | Promise<void>
-  buildEnd?: (this: PluginContext, error?: Error) => void | Promise<void>
+  buildStart?: NastiPluginHook<'buildStart', (this: PluginContext) => void | Promise<void>>
+  buildEnd?: NastiPluginHook<'buildEnd', (this: PluginContext, error?: Error) => void | Promise<void>>
   /**
    * Called once after `bundle.close()` in production builds, mirroring Rollup/Vite semantics.
    * Plugins use this to emit final-stage artifacts that depend on the bundle being fully written
    * (PWA manifests, service workers, sitemaps, etc.). Not invoked in dev.
    */
-  closeBundle?: (this: PluginContext, error?: Error) => void | Promise<void>
-  resolveId?: (this: PluginContext, source: string, importer: string | undefined, options: ResolveIdOptions) => ResolveIdResult | Promise<ResolveIdResult>
-  load?: (this: PluginContext, id: string) => LoadResult | Promise<LoadResult>
-  transform?: (this: PluginContext, code: string, id: string) => TransformResult | Promise<TransformResult>
+  closeBundle?: NastiPluginHook<'closeBundle', (this: PluginContext, error?: Error) => void | Promise<void>>
+  resolveId?: NastiPluginHook<
+    'resolveId',
+    (
+      this: PluginContext,
+      source: string,
+      importer: string | undefined,
+      options: ResolveIdOptions,
+    ) => ResolveIdResult | Promise<ResolveIdResult>
+  >
+  load?: NastiPluginHook<
+    'load',
+    (this: PluginContext, id: string) => LoadResult | Promise<LoadResult>
+  >
+  transform?: NastiPluginHook<
+    'transform',
+    (this: PluginContext, code: string, id: string) => TransformResult | Promise<TransformResult>
+  >
   /**
    * Rolldown output 阶段钩子：对每个 chunk 的最终代码做变换或按 chunk 收集产物。
    * 仅在生产构建生效（dev unbundled 管线没有 chunk 概念）。
@@ -405,25 +441,36 @@ export interface NastiPlugin {
    * `this.emitFile({type:'asset'})` 经 `output.assetFileNames` 产出带 hash 的文件，
    * `this.getFileName(ref)` 可立即解析最终文件名。CSS per-chunk 抽取依赖这两点。
    */
-  renderChunk?: (
-    this: RenderChunkContext,
-    code: string,
-    chunk: RenderedChunk,
-  ) => string | { code: string; map?: unknown } | null | undefined | Promise<string | { code: string; map?: unknown } | null | undefined>
+  renderChunk?: NastiPluginHook<
+    'renderChunk',
+    (
+      this: RenderChunkContext,
+      code: string,
+      chunk: RenderedChunk,
+    ) =>
+      | string
+      | { code: string; map?: unknown }
+      | null
+      | undefined
+      | Promise<string | { code: string; map?: unknown } | null | undefined>
+  >
   /** 向 chunk hash 折叠额外输入（如该 chunk 关联的 CSS 内容），保证缓存正确性 */
-  augmentChunkHash?: (
-    this: RenderChunkContext,
-    chunk: RenderedChunk,
-  ) => string | void | Promise<string | void>
+  augmentChunkHash?: NastiPluginHook<
+    'augmentChunkHash',
+    (this: RenderChunkContext, chunk: RenderedChunk) => string | void | Promise<string | void>
+  >
   /**
    * Rolldown output 收尾钩子（write 前最后时机）。`this` 同 renderChunk，
    * 可 emitFile 补充产物（如 cssCodeSplit:false 的合并 CSS、manifest 等）。
    */
-  generateBundle?: (
-    this: RenderChunkContext,
-    options?: unknown,
-    bundle?: Record<string, unknown>,
-  ) => void | Promise<void>
+  generateBundle?: NastiPluginHook<
+    'generateBundle',
+    (
+      this: RenderChunkContext,
+      options?: unknown,
+      bundle?: Record<string, unknown>,
+    ) => void | Promise<void>
+  >
 
   // Vite 特有钩子
   config?: (config: NastiConfig, env: { mode: string; command: string }) => NastiConfig | null | void | Promise<NastiConfig | null | void>
@@ -684,7 +731,11 @@ export interface ResolveIdOptions {
 }
 
 export type ResolveIdResult = string | null | undefined | { id: string; external?: boolean }
-export type LoadResult = string | null | undefined | { code: string; map?: unknown }
+export type LoadResult =
+  | string
+  | null
+  | undefined
+  | { code: string; map?: unknown; moduleType?: string }
 export type TransformResult =
   | string
   | null
