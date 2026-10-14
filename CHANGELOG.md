@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.6.5
+
+### SSR development module loading
+
+- Fix circular module evaluation deadlocks, including cycles spanning concurrent
+  `ssrLoadModule` calls. Only cycle-closing importer waits receive partial exports;
+  other callers still await evaluation and top-level await.
+- Keep active evaluation waits scoped to cache-entry generations so invalidated
+  in-flight loads cannot create false cycles in replacement evaluations.
+- Resolve external dependencies relative to their importing filesystem module,
+  preserving nested package versions in non-hoisted installations. Virtual
+  importers retain the application-root fallback.
+- Add ESM/CJS cycle, concurrent evaluation, top-level await, invalidation, and
+  transitive external-dependency regression coverage.
+
+These runner fixes do not by themselves implement or certify Wuling's development
+HTTP host or browser hydration (OpenSpec task 4.1).
+
+**Full changelog**: https://github.com/zixiao-labs/Nasti/compare/v2.6.4...v2.6.5
+
 ## 2.6.4
 
 本次更新包含 [PR #48](https://github.com/zixiao-labs/Nasti/pull/48)，让 production build 和自定义 dev pipeline 支持 Rolldown object-form plugin hooks。

@@ -36,6 +36,9 @@ interface FetchedModule {
 interface ModuleCacheEntry {
   exports: Record<string, unknown>
   promise: Promise<Record<string, unknown>> | null
+  // Active evaluation waits, keyed by entry identity rather than module ID so
+  // invalidated evaluations cannot affect a replacement generation.
+  waits: Map<ModuleCacheEntry, number>
   invalidationVersion?: number
 }
 
@@ -323,16 +326,17 @@ export class NastiModuleRunner {
     return id
   }
 
-  private async instantiate(id: string): Promise<Record<string, unknown>> {
+  private async instantiate(id: string, importer?: ModuleCacheEntry): Promise<Record<string, unknown>> {
     // Dynamic imports can be called through previously returned exports without
     // another top-level import(). They must observe graph invalidation too.
     this.invalidateStaleEvaluations()
     const cached = this.cache.get(id)
-    if (cached) return cached.promise ?? Promise.resolve(cached.exports)
+    if (cached) return this.waitForEvaluation(cached, importer)
 
     const entry: ModuleCacheEntry = {
       exports: {},
       promise: null,
+      waits: new Map(),
       invalidationVersion: this.environment.moduleGraph.getModuleById(id)?.invalidationVersion,
     }
     this.cache.set(id, entry)
@@ -345,7 +349,36 @@ export class NastiModuleRunner {
       if (this.cache.get(id) === entry) this.cache.delete(id)
       throw err
     })
-    return entry.promise
+    return this.waitForEvaluation(entry, importer)
+  }
+
+  private async waitForEvaluation(
+    entry: ModuleCacheEntry,
+    importer?: ModuleCacheEntry,
+  ): Promise<Record<string, unknown>> {
+    if (!entry.promise) return entry.exports
+    // A top-level caller always waits. Only an evaluating importer may use
+    // partial exports, and only when its new wait would close an actual cycle.
+    // Unlike a recursion stack, this also sees separately started root imports.
+    if (!importer?.promise) return entry.promise
+    const pending = [entry]
+    const seen = new Set<ModuleCacheEntry>()
+    while (pending.length) {
+      const dependency = pending.pop()!
+      if (dependency === importer) return entry.exports
+      if (seen.has(dependency) || !dependency.promise) continue
+      seen.add(dependency)
+      pending.push(...dependency.waits.keys())
+    }
+    importer.waits.set(entry, (importer.waits.get(entry) ?? 0) + 1)
+    try {
+      return await entry.promise
+    } finally {
+      // Parallel dynamic imports can share the same edge.
+      const count = importer.waits.get(entry)!
+      if (count === 1) importer.waits.delete(entry)
+      else importer.waits.set(entry, count - 1)
+    }
   }
 
   private async evaluate(id: string, entry: ModuleCacheEntry): Promise<void> {
@@ -355,7 +388,7 @@ export class NastiModuleRunner {
 
     const ssrImport = async (dep: string) => {
       const resolved = await this.resolveModule(dep, fetched.id)
-      if (resolved.external) return this.importExternal(resolved.id)
+      if (resolved.external) return this.importExternal(resolved.id, fetched.id)
       // Non-literal dynamic imports are discovered during evaluation. Never let
       // an old in-flight evaluation overwrite a newer transform's graph.
       const graph = this.environment.moduleGraph
@@ -365,7 +398,7 @@ export class NastiModuleRunner {
         importer.importedModules.add(dependency)
         dependency.importers.add(importer)
       }
-      return this.instantiate(resolved.id)
+      return this.instantiate(resolved.id, entry)
     }
 
     const ssrExportAll = (sourceModule: Record<string, unknown>) => {
@@ -397,11 +430,11 @@ export class NastiModuleRunner {
     await fn(entry.exports, ssrImport, ssrImport, ssrExportAll, importMeta)
   }
 
-  private async importExternal(spec: string): Promise<Record<string, unknown>> {
+  private async importExternal(spec: string, importer?: string): Promise<Record<string, unknown>> {
     try {
       return await import(
         spec.startsWith('node:') || !path.isAbsolute(spec)
-          ? this.resolveExternalSpecifier(spec)
+          ? this.resolveExternalSpecifier(spec, importer)
           : pathToFileURL(spec).href
       )
     } catch (err: any) {
@@ -409,13 +442,19 @@ export class NastiModuleRunner {
     }
   }
 
-  /** bare specifier → 项目 node_modules 的 ESM URL（避免相对 Nasti 自身解析） */
-  private resolveExternalSpecifier(spec: string): string {
+  /** Resolve external edges from their importing file, not from Nasti or the app root. */
+  private resolveExternalSpecifier(spec: string, importer?: string): string {
     if (spec.startsWith('node:')) return spec
     if (NODE_BUILTINS.has(spec)) return `node:${spec}`
+    // Virtual modules have no filesystem package scope. They retain the root
+    // fallback, while transformed workspace/node_modules files need their own
+    // dependency scope (including nested versions in non-hoisted installations).
+    const parent = importer && path.isAbsolute(importer.split('?')[0])
+      ? pathToFileURL(importer.split('?')[0])
+      : this.externalImportParent
     return moduleResolve(
       spec,
-      this.externalImportParent,
+      parent,
       this.externalImportConditions,
       false,
     ).href

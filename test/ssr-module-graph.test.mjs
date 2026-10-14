@@ -283,6 +283,127 @@ for (const [format, create] of [
     for (const count of counts.values()) assert.equal(count, 1)
   })
 
+  check('circular imports expose live exports instead of awaiting themselves', async (t) => {
+    const { server, write } = await fixture(t, create)
+    write('a.js', 'import { b } from "./b.js"; export function a() { return "a"; } export const value = () => b();')
+    write('b.js', 'import { a } from "./a.js"; export function b() { return a() + "b"; }')
+    const a = await server.ssrLoadModule('/a.js')
+    assert.equal(a.value(), 'ab')
+    assert.equal(await server.ssrLoadModule('/a.js'), a)
+    assert.equal((await server.ssrLoadModule('/b.js')).b(), 'ab')
+  })
+
+  check('cycles between concurrent roots are detected across evaluation stacks', async (t) => {
+    let arrivals = 0
+    let release
+    const barrier = new Promise((resolve) => { release = resolve })
+    const { server, root, write } = await fixture(t, create, {
+      plugins: [{
+        name: 'fixture:concurrent-cycle',
+        async transform(code, id) {
+          if ([path.join(root, 'a.js'), path.join(root, 'b.js')].includes(id)) {
+            if (++arrivals === 2) release()
+            await barrier
+          }
+          return code
+        },
+      }],
+    })
+    write('a.js', 'import { b } from "./b.js"; export function a() { return "a"; } export const value = () => b();')
+    write('b.js', 'import { a } from "./a.js"; export function b() { return a() + "b"; }')
+    const [a, b, again] = await Promise.all([
+      server.ssrLoadModule('/a.js'),
+      server.ssrLoadModule('/b.js'),
+      server.ssrLoadModule('/a.js'),
+    ])
+    assert.equal(arrivals, 2)
+    assert.equal(a, again)
+    assert.equal(a.value(), 'ab')
+    assert.equal(b.b(), 'ab')
+  })
+
+  check('noncyclic concurrent imports wait for TLA and deduplicate evaluation', async (t) => {
+    let started
+    let release
+    const loading = new Promise((resolve) => { started = resolve })
+    const gate = new Promise((resolve) => { release = resolve })
+    const key = `__nasti_tla_${format}`
+    globalThis[key] = { started, gate, evaluations: 0 }
+    t.after(() => { release(); delete globalThis[key] })
+    const { server, write } = await fixture(t, create)
+    write('slow.js', `
+      const state = globalThis[${JSON.stringify(key)}];
+      state.evaluations++;
+      state.started();
+      await state.gate;
+      export const value = "ready";
+    `)
+    write('left.js', 'export { value } from "./slow.js";')
+    write('right.js', 'export { value } from "./slow.js";')
+    let settled = 0
+    const imports = ['/slow.js', '/slow.js', '/left.js', '/right.js'].map((url) =>
+      server.ssrLoadModule(url).then((exports) => { settled++; return exports }))
+    await loading
+    // Let the other roots reach the pending dependency before opening the gate.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(settled, 0, 'acyclic callers must not observe partial exports')
+    assert.equal(globalThis[key].evaluations, 1)
+    release()
+    const results = await Promise.all(imports)
+    assert.equal(results[0], results[1])
+    for (const result of results) assert.equal(result.value, 'ready')
+    assert.equal(globalThis[key].evaluations, 1)
+  })
+
+  check('invalidated in-flight waits do not create cycles in replacement evaluations', async (t) => {
+    let oldStarted
+    let newStarted
+    let releaseOld
+    let releaseNew
+    const oldLoading = new Promise((resolve) => { oldStarted = resolve })
+    const newLoading = new Promise((resolve) => { newStarted = resolve })
+    const key = `__nasti_wait_generation_${format}`
+    globalThis[key] = {
+      oldStarted,
+      newStarted,
+      oldGate: new Promise((resolve) => { releaseOld = resolve }),
+      newGate: new Promise((resolve) => { releaseNew = resolve }),
+    }
+    t.after(() => { releaseOld(); releaseNew(); delete globalThis[key] })
+    const { server, graph, write } = await fixture(t, create)
+    write('a.js', 'export { value } from "./b.js";')
+    write('b.js', `
+      const state = globalThis[${JSON.stringify(key)}];
+      state.oldStarted();
+      await state.oldGate;
+      throw new Error("old evaluation failed");
+      export const value = "old";
+    `)
+    const old = assert.rejects(server.ssrLoadModule('/a.js'), /old evaluation failed/)
+    await oldLoading // The old a -> b wait is still active.
+    write('a.js', `
+      const state = globalThis[${JSON.stringify(key)}];
+      state.newStarted();
+      await state.newGate;
+      export const value = "replacement";
+    `)
+    write('b.js', 'import { value } from "./a.js"; export const result = value;')
+    graph.invalidateModuleAndImporters(graph.getModuleByUrl('/b.js'))
+    let settled = false
+    const replacement = server.ssrLoadModule('/b.js').then((exports) => {
+      settled = true
+      return exports
+    })
+    await newLoading
+    assert.equal(settled, false, 'new b -> a is not a cycle with old a -> b')
+    releaseNew()
+    const exports = await replacement
+    assert.equal(exports.result, 'replacement')
+    releaseOld()
+    await old
+    assert.equal(await server.ssrLoadModule('/b.js'), exports)
+  })
+
   check('failed runner initialization is shared and can be retried', async (t) => {
     let attempts = 0
     const plugin = {
