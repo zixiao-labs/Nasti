@@ -26,6 +26,13 @@ import { removeTimestampQuery } from '../core/url.js'
 
 const debug = createDebugger('nasti:ssr')
 
+/** Undo Vite's module-ID transport wrapper, not URI/query encoding. */
+function unwrapModuleId(id: string): string {
+  return id.startsWith('/@id/')
+    ? id.slice('/@id/'.length).replace('__x00__', '\0')
+    : id
+}
+
 interface FetchedModule {
   id: string
   code: string
@@ -140,6 +147,7 @@ export class NastiModuleRunner {
   }
 
   private resolveToId(rawUrl: string): string {
+    if (rawUrl.startsWith('/@id/')) return removeTimestampQuery(unwrapModuleId(rawUrl))
     rawUrl = removeTimestampQuery(rawUrl)
     if (rawUrl.startsWith('\0') || rawUrl.startsWith('virtual:')) return rawUrl
     for (const alias of Object.keys(this.environment.options.resolve.alias)) {
@@ -151,7 +159,7 @@ export class NastiModuleRunner {
   }
 
   private async resolveModule(id: string, importer?: string): Promise<{ id: string; external?: boolean }> {
-    id = removeTimestampQuery(id)
+    id = removeTimestampQuery(unwrapModuleId(id))
     if (this.shouldExternalize(id, importer, false)) return { id, external: true }
     const resolved = await this.environment.pluginContainer!.resolveId(id, importer)
     if (resolved && typeof resolved !== 'string' && resolved.external) {

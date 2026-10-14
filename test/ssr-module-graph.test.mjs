@@ -76,6 +76,59 @@ for (const [format, create] of [
 ]) {
   const check = (name, fn) => test(`${format} SSR module graph: ${name}`, { timeout: 10000 }, fn)
 
+  check('Vite encoded module URLs preserve virtual query identity across SSR entry and import edges', async (t) => {
+    const base = 'virtual:tanstack-start-validate-server-fn-id'
+    const queries = ['?id=first%2Ffn&flag=one+two', '?id=second%3Ffn&flag=one%20two']
+    const ids = queries.map((query) => '\0' + base + query)
+    const urls = queries.map((query) => '/@id/__x00__' + base + query)
+    const loaded = []
+    const resolved = []
+    const { server, graph, write } = await fixture(t, create, {
+      plugins: [{
+        name: 'fixture:encoded-virtual',
+        resolveId(id) {
+          resolved.push(id)
+          if (ids.includes(id)) return id
+          if (id === 'virtual:public') return ids[0]
+        },
+        load(id) {
+          if (!ids.includes(id)) return
+          loaded.push(id)
+          return `export const id = ${JSON.stringify(id)}; export const token = {};`
+        },
+      }],
+    })
+    write('encoded.js', `
+      import * as first from ${JSON.stringify(urls[0])};
+      export { first };
+      export const literal = () => import(${JSON.stringify(urls[1])});
+      export const dynamic = (url) => import(url);
+    `)
+    const entry = await server.ssrLoadModule('/encoded.js')
+    const first = await server.ssrLoadModule(urls[0] + '&t=123')
+    assert.equal(first, entry.first)
+    assert.equal(await server.ssrLoadModule(ids[0]), first)
+    assert.equal(await server.ssrLoadModule('/@id/virtual:public'), first)
+    const second = await entry.literal()
+    assert.equal(await entry.dynamic(urls[1] + '&t=456'), second)
+    assert.equal(await entry.dynamic(ids[0]), first)
+    assert.equal(await server.ssrLoadModule(urls[1]), second)
+    assert.equal(first.id, ids[0])
+    assert.equal(second.id, ids[1])
+    assert.notEqual(first.token, second.token)
+    await server.environments.ssr.transformRequest(urls[0])
+    assert.deepEqual(loaded.sort(), [...ids].sort())
+    assert.ok(resolved.includes(ids[0]))
+    assert.ok(resolved.includes(ids[1]))
+    assert.ok(!resolved.some((id) => id.includes('/@id/')))
+    for (let i = 0; i < ids.length; i++) {
+      const mod = graph.getModuleById(ids[i])
+      assert.ok(mod)
+      assert.equal(graph.getModuleByUrl(urls[i]), mod)
+      edge(graph.getModuleByUrl('/encoded.js'), mod)
+    }
+  })
+
   check('static cyclic bodies share TLA completion and failure for every public caller', async (t) => {
     const { server, write } = await fixture(t, create)
     const key = `__nasti_cycle_${format}`
