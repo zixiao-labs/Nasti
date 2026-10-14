@@ -1,7 +1,7 @@
 // HTTP 中间件 - 请求拦截与按需转译
 import path from 'node:path'
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
+import { createRequire, isBuiltin } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import pc from 'picocolors'
@@ -24,6 +24,9 @@ import {
 import { removeTimestampQuery } from '../core/url.js'
 import { isAssetFile } from '../plugins/assets.js'
 import { isAllowedDevModulePath, isUnderRoot, getLinkedPackageRoots } from './fs-allow.js'
+import { resolvePlugin } from '../plugins/resolve.js'
+import { resolveClientDependency } from '../core/client-resolve.js'
+import { orderPlugins } from '../core/plugin-api.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -386,7 +389,7 @@ export async function transformRequest(
     if (realId && realIdValid) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
       moduleGraph.registerModule(mod, realId)
-      const code = await bundlePackageAsEsm(realId, config.root)
+      const code = await bundlePackageAsEsm(realId, ctx)
       const transformResult = { code }
       mod.transformResult = transformResult
       return transformResult
@@ -407,12 +410,24 @@ export async function transformRequest(
   if (cleanReqUrl.startsWith('/@modules/')) {
     const spec = cleanReqUrl.slice('/@modules/'.length)
     const virtual = await loadVirtualModule(spec, ctx)
-    if (virtual) {
+    if (virtual?.result) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
       moduleGraph.setModuleId(mod, virtual.id)
       mod.transformResult = virtual.result
       return virtual.result
     }
+    const entry = virtual?.id ?? await resolveClientDependency(config.root, config.resolve, spec)
+    if (entry) {
+      const mod = await moduleGraph.ensureEntryFromUrl(url)
+      moduleGraph.registerModule(mod, entry)
+      const code = await bundlePackageAsEsm(entry, ctx)
+      const transformResult = { code }
+      mod.transformResult = transformResult
+      return transformResult
+    }
+    // A failed native exports resolution must not fall back to a scanner
+    // that might choose a server or unexported entry.
+    return null
   }
 
   // 带「语义 query」的模块请求（如 Vue style 子块
@@ -424,17 +439,29 @@ export async function transformRequest(
   if (rawQuery && !/^t=\d+$/.test(rawQuery)) {
     const mod = await moduleGraph.ensureEntryFromUrl(url)
     const transformVersion = mod.invalidationVersion
-    const loaded = await pluginContainer.load(url)
+    const queryFile = resolveUrlToFile(cleanReqUrl, config.root)
+    let queryId = url
+    let loaded = await pluginContainer.load(queryId)
+    if (loaded == null && queryFile) {
+      queryId = `${queryFile}?${rawQuery}`
+      loaded = await pluginContainer.load(queryId)
+    }
     if (loaded != null) {
       let code = typeof loaded === 'string' ? loaded : loaded.code
       let map = typeof loaded === 'string' ? undefined : loaded.map
       const moduleType = typeof loaded === 'string' ? undefined : loaded.moduleType
-      const transformed = await pluginContainer.transform(code, url, moduleType)
+      const transformed = await pluginContainer.transform(code, queryId, moduleType)
       if (transformed != null) {
         code = typeof transformed === 'string' ? transformed : transformed.code
         if (typeof transformed !== 'string' && transformed.map != null) {
           map = transformed.map
         }
+      }
+      // Public CSS collection is keyed by the requested browser URL even
+      // when its loader needs the canonical filesystem/query ID.
+      if (queryId !== url) {
+        const css = ctx.environment?.getCssModule(queryId)
+        if (css) ctx.environment?.setCssModule({ ...css, id: url })
       }
       // file 关联磁盘上的父文件：父文件变更时子模块一并失效
       const parentFile = resolveUrlToFile(cleanReqUrl, config.root) ?? cleanReqUrl
@@ -476,7 +503,7 @@ export async function transformRequest(
   // node_modules 模块：用 rolldown 打成浏览器可用的 ESM
   // 解决 CJS 包（如 react）无法在浏览器中作为 ESM 使用的问题
   if (cleanReqUrl.startsWith('/@modules/')) {
-    const code = await bundlePackageAsEsm(filePath, config.root)
+    const code = await bundlePackageAsEsm(filePath, ctx)
     const transformResult = { code }
     mod.transformResult = transformResult
     return transformResult
@@ -582,25 +609,23 @@ export async function transformRequest(
 
 /**
  * Run the plugin `resolveId` → `load` → `transform` pipeline for a bare specifier
- * that arrived as `/@modules/<spec>`, and return the prepared JS module if (and
- * only if) the result is a virtual module — i.e. its resolved id either uses the
+ * that arrived as `/@modules/<spec>`. Prepare JS only for a virtual module,
+ * i.e. its resolved id either uses the
  * Vite-convention `\0` null-byte prefix or does not exist on disk.
  *
- * Real-file resolutions (e.g. an alias plugin remapping a bare specifier onto a
- * source file under the project) are intentionally skipped here so they fall
- * through to the normal `resolveUrlToFile` / `bundlePackageAsEsm` paths; this
- * keeps the npm-package loader and the React Refresh wrapper in charge of those.
+ * Return real-file resolutions without loading them here; the caller passes
+ * them through the same environment-aware dependency bundle pipeline.
  */
 async function loadVirtualModule(
   spec: string,
   ctx: TransformMiddlewareContext,
-): Promise<{ id: string; result: { code: string } } | null> {
+): Promise<{ id: string; result?: { code: string } } | null> {
   const { config, pluginContainer } = ctx
   const resolved = await pluginContainer.resolveId(spec)
   if (resolved == null) return null
   const resolvedId = typeof resolved === 'string' ? resolved : resolved.id
   const looksVirtual = resolvedId.startsWith('\0') || !fs.existsSync(resolvedId)
-  if (!looksVirtual) return null
+  if (!looksVirtual) return { id: resolvedId }
 
   const loadResult = await pluginContainer.load(resolvedId)
   if (loadResult == null) return null
@@ -630,43 +655,118 @@ async function loadVirtualModule(
 
 /** 用 rolldown 将 node_modules 包打包为浏览器可用的 ESM（含 CJS→ESM 转换） */
 // Promise 缓存：同一入口文件只打包一次，防止并发重复打包
-const esmBundleCache = new Map<string, Promise<string>>()
+const esmBundleCaches = new WeakMap<TransformMiddlewareContext, Map<string, { version: number; promise: Promise<string> }>>()
 
-async function bundlePackageAsEsm(entryFile: string, root: string): Promise<string> {
-  if (!esmBundleCache.has(entryFile)) {
-    esmBundleCache.set(entryFile, doBundlePackage(entryFile, root))
+async function bundlePackageAsEsm(entryFile: string, ctx: TransformMiddlewareContext): Promise<string> {
+  let cache = esmBundleCaches.get(ctx)
+  if (!cache) esmBundleCaches.set(ctx, cache = new Map())
+  const version = Math.max(0, ...[...(ctx.moduleGraph.getModulesByFile(entryFile) ?? [])]
+    .map((mod) => mod.invalidationVersion))
+  let entry = cache.get(entryFile)
+  if (!entry || entry.version !== version) {
+    entry = { version, promise: doBundlePackage(entryFile, ctx) }
+    cache.set(entryFile, entry)
+    const current = entry
+    entry.promise.catch(() => { if (cache!.get(entryFile) === current) cache!.delete(entryFile) })
   }
-  return esmBundleCache.get(entryFile)!
+  return entry.promise
 }
 
-async function doBundlePackage(entryFile: string, root: string): Promise<string> {
+async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContext): Promise<string> {
+  const { config, environment } = ctx
+  const root = config.root
   // 子路径入口（如 `react-aria-components/Select`）尝试生成 re-export shim，
   // 指向同包主入口。否则每个子路径会被 rolldown 各自打成独立 bundle，
   // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
   // React Aria 之类对 context identity 敏感的库会出现「provider 与 consumer
   // 看到的不是同一个 context」、`useContext` 返回 null 的运行期崩溃。
   // 详见: https://github.com/zixiao-labs/Nasti/pull/16
-  const shim = await tryGenerateSubpathShim(entryFile, root)
+  const shim = environment?.config.plugins.length
+    ? null
+    : await tryGenerateSubpathShim(entryFile, root)
   if (shim != null) return shim
 
   const { rolldown } = await import('rolldown')
+  const { toRolldownPlugins } = await import('../build/index.js')
+  if (!environment) throw new Error('[nasti] Dependency bundling requires a client environment')
+  // Keep real Rolldown plugin contexts and hook metadata, but do not rerun
+  // environment lifecycle hooks for every on-demand dependency bundle.
+  const plugins = orderPlugins(environment.plugins.map((plugin) =>
+    plugin.name === 'nasti:resolve' ? resolvePlugin(config, { nativeResolver: true }) : plugin))
+  const nativePlugins = toRolldownPlugins(plugins, environment as import('../core/environment.js').NastiEnvironment)
+    .map((plugin: any) => {
+      const hook = plugin.resolveId
+      const handler = typeof hook === 'function' ? hook : hook?.handler
+      const resolveId = handler && async function (this: any, ...args: any[]) {
+        const result = await handler.apply(this, args)
+        const id = typeof result === 'string' ? result : result?.id
+        // An application alias imported by a package is still application
+        // source: keep its browser module identity/HMR pipeline rather than
+        // duplicating the router and its route tree inside a dependency bundle.
+        if (!args[2]?.isEntry && id && path.isAbsolute(id) &&
+            isUnderRoot(id, root) && !id.includes(`${path.sep}node_modules${path.sep}`)) {
+          return { ...(typeof result === 'object' ? result : {}), id: '/' + path.relative(root, id).replace(/\\/g, '/'), external: true }
+        }
+        return result
+      }
+      return {
+        name: plugin.name,
+        resolveId: hook && (typeof hook === 'function' ? resolveId : { ...hook, handler: resolveId }),
+        load: plugin.load,
+        transform: plugin.transform,
+      }
+    })
+  const envDefine = ctx.envDefine ?? buildEnvDefine(
+    loadEnv(config.mode, root, config.envPrefix), config.mode, ssrDefineOverrides('client'),
+  )
 
   const bundle = await rolldown({
     input: entryFile,
-    // 仅将其他 npm 包外部化；相对路径（包内部文件）全部内联打包
-    external: (id: string) => {
-      if (id.startsWith('.') || id.startsWith('/') || /^[A-Za-z]:\\/.test(id)) return false
-      return true
+    platform: 'browser',
+    resolve: {
+      conditionNames: config.resolve.conditions,
+      mainFields: config.resolve.mainFields,
+      extensions: config.resolve.extensions,
     },
+    transform: {
+      ...config.build.rolldownOptions.transform,
+      define: {
+        'process.env.NODE_ENV': JSON.stringify(config.mode),
+        ...config.build.rolldownOptions.transform?.define,
+        ...envDefine,
+      },
+    },
+    plugins: [
+      ...nativePlugins,
+      {
+        name: 'nasti:client-dependency-external',
+        async resolveId(source, importer) {
+          if (isBuiltin(source)) {
+            throw new Error(`[nasti] Node builtin "${source}" cannot be imported by client dependency "${importer}"`)
+          }
+          // Private # imports belong to the importing package and must be
+          // resolved/compiled inside it, never sent to the browser as URLs.
+          if (!importer || source.startsWith('#') || source.startsWith('.') ||
+              path.isAbsolute(source) || source.startsWith('\0')) return null
+          const resolved = await resolveClientDependency(root, config.resolve, source, importer)
+          if (!resolved) return null
+          const rootResolved = await resolveClientDependency(root, config.resolve, source)
+          const id = rootResolved === resolved ? `/@modules/${source}`
+            : `/@modules/${source}?id=${encodeURIComponent(resolved)}`
+          return { id, external: true }
+        },
+      },
+    ],
   })
 
-  const result = await bundle.generate({ format: 'esm', exports: 'named' })
-  await bundle.close()
+  let result
+  try {
+    result = await bundle.generate({ format: 'esm', exports: 'named', codeSplitting: false })
+  } finally {
+    await bundle.close()
+  }
 
   let code = result.output[0].code
-
-  // 替换 process.env.NODE_ENV（rolldown 的 define 选项在此版本无效）
-  code = code.replace(/process\.env\.NODE_ENV/g, '"development"')
 
   // 将外部化的 bare specifier 改写为 /@modules/ 路径供浏览器加载。
   // 解析相对「本包自身的真实目录」进行（externalSpecToModuleUrl），以兼容 pnpm
@@ -884,7 +984,8 @@ function rewriteExternalRequires(code: string, baseDir: string, root: string): s
   const imports: string[] = []
   for (const pkg of pkgs) {
     const safe = pkg.replace(/[^a-zA-Z0-9_$]/g, '_')
-    imports.push(`import * as __ns_${safe} from "${externalSpecToModuleUrl(pkg, baseDir, root)}";`)
+    const url = pkg.startsWith('/@modules/') ? pkg : externalSpecToModuleUrl(pkg, baseDir, root)
+    imports.push(`import * as __ns_${safe} from "${url}";`)
     imports.push(`var __req_${safe} = "default" in __ns_${safe} ? __ns_${safe}["default"] : __ns_${safe};`)
     result = result.replaceAll(`__require("${pkg}")`, `__req_${safe}`)
     result = result.replaceAll(`__require('${pkg}')`, `__req_${safe}`)
@@ -1027,6 +1128,11 @@ function createModuleSpecifierResolver(
 
     // 3) 项目内绝对路径
     if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
+      // Compiler-generated absolute filesystem imports (including semantic
+      // queries) are not root-relative browser URLs.
+      const absolute = tryResolveDiskPath(baseSpec)
+      const absoluteUrl = absolute ? toServableUrl(absolute) : null
+      if (absoluteUrl) return absoluteUrl + suffix
       const resolved = tryResolveDiskPath(path.join(root, baseSpec.replace(/^\//, '')))
       const url = resolved ? toServableUrl(resolved) : null
       return url ? url + suffix : specifier

@@ -276,7 +276,10 @@ export async function resolveConfig(
       }
       if (envOptions.build) {
         const { css, ...environmentBuild } = envOptions.build
-        Object.assign(resolved.build, environmentBuild)
+        Object.assign(resolved.build, {
+          ...environmentBuild,
+          rolldownOptions: deepMerge(resolved.build.rolldownOptions, environmentBuild.rolldownOptions ?? {}),
+        })
         if (css) resolved.build.css = { ...resolved.build.css, ...css }
       }
       resolved.environments.client = {
@@ -325,6 +328,7 @@ export async function resolveConfig(
       build: {
         ...resolved.build,
         ...envOptions.build,
+        rolldownOptions: deepMerge(resolved.build.rolldownOptions, envOptions.build?.rolldownOptions ?? {}),
         css: { ...resolved.build.css, ...envOptions.build?.css },
         // 非 client 环境默认产出到 <outDir>/<envName>（如 dist/ssr），可显式覆盖
         outDir: envOptions.build?.outDir ?? path.join(resolved.build.outDir, name),

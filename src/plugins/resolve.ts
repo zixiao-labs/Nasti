@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { resolveSsrDependency } from '../core/ssr-resolve.js'
 import { isBareImport } from '../core/ssr-external.js'
+import { resolveClientDependency } from '../core/client-resolve.js'
 
 export function resolvePlugin(
   config: ResolvedConfig,
@@ -110,14 +111,7 @@ export function resolvePlugin(
           return resolveSsrDependency(config.root, config.resolve, source, importer)
         }
 
-        try {
-          const resolved = require.resolve(source, {
-            paths: [importer ? path.dirname(importer) : config.root],
-          })
-          return resolved
-        } catch {
-          return null
-        }
+        return resolveClientDependency(config.root, config.resolve, source, importer)
       }
 
       return null

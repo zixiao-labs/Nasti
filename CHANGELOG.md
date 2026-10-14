@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.6.6
+
+### Native client dependency pipeline
+
+- Compile on-demand dependency bundles through the owning client environment's
+  ordered resolve/load/transform hooks, preserving plugin context and hook filters.
+- Use native browser/package resolution with environment conditions and main fields
+  for dependency entries and transitive edges. Resolve package-private `#` imports
+  inside their owning package instead of emitting invalid browser URLs.
+- Apply environment and user defines before tree shaking; reject live Node builtin
+  imports rather than stubbing server implementations. Isolate bundle caches by
+  server/environment and discard failed or invalidated entry generations.
+- Preserve inherited Rolldown transform/define options when an environment overrides
+  output options. Keep application aliases out of dependency bundles, and normalize
+  compiler-generated absolute imports and semantic-query loader IDs.
+- Add browser-condition, compiler-hook, private-import, transitive dependency,
+  environment define isolation, and server-secret/Node-boundary regressions.
+
+The real Wuling Start development HTTP/Chrome reproduction was run against packed
+local candidates. The original `node:async_hooks`, private-import, missing define,
+and absolute split-import failures were removed, but the hydration click assertion
+still timed out. This release does **not** certify Wuling OpenSpec task 4.1.
+
+Publication follows PR review/CI and the `npm-publish` environment approval gate;
+a version bump or PR is not evidence that npm publication completed.
+
+**Full changelog**: https://github.com/zixiao-labs/Nasti/compare/v2.6.5...v2.6.6
+
 ## 2.6.5
 
 ### SSR development module loading
