@@ -76,6 +76,109 @@ for (const [format, create] of [
 ]) {
   const check = (name, fn) => test(`${format} SSR module graph: ${name}`, { timeout: 10000 }, fn)
 
+  check('static cyclic bodies share TLA completion and failure for every public caller', async (t) => {
+    const { server, write } = await fixture(t, create)
+    const key = `__nasti_cycle_${format}`
+    let release
+    t.after(() => { release?.(); delete globalThis[key] })
+    for (const fail of [false, true]) {
+      let started
+      const entered = new Promise((resolve) => { started = resolve })
+      globalThis[key] = { gate: new Promise((resolve) => { release = resolve }), started }
+      write(`a${fail}.js`, `import './b${fail}.js'; globalThis.${key}.started(); await globalThis.${key}.gate; ${fail ? 'throw new Error("cycle failure");' : 'export const value = "a";'}`)
+      write(`b${fail}.js`, `import './a${fail}.js'; export const value = "b";`)
+      const first = server.ssrLoadModule(`/a${fail}.js`)
+      await entered // b's body has completed, but its static group has not.
+      const calls = [first, ...['a', 'b', 'b'].map((name) => server.ssrLoadModule(`/${name}${fail}.js`))]
+      const results = Promise.allSettled(calls)
+      let settled = false
+      for (const call of calls) call.then(() => { settled = true }, () => { settled = true })
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      assert.equal(settled, false, 'b must not expose its completed body before a finishes')
+      release()
+      const outcomes = await results
+      assert.deepEqual(outcomes.map((result) => result.status), Array(4).fill(fail ? 'rejected' : 'fulfilled'))
+      if (fail) {
+        for (const result of outcomes) assert.match(result.reason.message, /cycle failure/)
+        await assert.rejects(server.ssrLoadModule('/btrue.js'), /cycle failure/)
+      }
+    }
+  })
+
+  check('dynamic imports never receive partial exports through a static backedge', async (t) => {
+    const { server, write } = await fixture(t, create)
+    const key = `__nasti_dynamic_${format}`
+    let release
+    let started
+    const entered = new Promise((resolve) => { started = resolve })
+    globalThis[key] = { events: [], started, gate: new Promise((resolve) => { release = resolve }) }
+    t.after(() => { delete globalThis[key] })
+    write('a.js', `globalThis.${key}.pending = import('./b.js').then(() => globalThis.${key}.events.push('dynamic')); globalThis.${key}.started(); await globalThis.${key}.gate; globalThis.${key}.events.push('a'); export const value = 'a';`)
+    write('b.js', `import './a.js'; globalThis.${key}.events.push('b'); export const value = 'b';`)
+    const load = server.ssrLoadModule('/a.js')
+    await entered
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(globalThis[key].events, [])
+    release()
+    await load
+    await globalThis[key].pending
+    assert.deepEqual(globalThis[key].events, ['a', 'b', 'dynamic'])
+    write('await-a.js', "await import('./await-b.js'); export const value = 'a';")
+    write('await-b.js', "import './await-a.js'; export const value = 'b';")
+    const pending = server.ssrLoadModule('/await-a.js')
+    const outcome = await Promise.race([
+      pending.then(() => 'fulfilled', () => 'rejected'),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 100)),
+    ])
+    assert.equal(outcome, 'pending', 'awaited dynamic cycles must not falsely succeed')
+  })
+
+  check('concurrent cyclic roots wait after either individual TLA body finishes', async (t) => {
+    const key = `__nasti_concurrent_tla_${format}`
+    const releases = {}
+    const starts = {}
+    const entered = {}
+    const gates = {}
+    for (const name of ['a', 'b']) {
+      entered[name] = new Promise((resolve) => { starts[name] = () => resolve(name) })
+      gates[name] = new Promise((resolve) => { releases[name] = resolve })
+    }
+    globalThis[key] = { starts, gates }
+    t.after(() => { releases.a(); releases.b(); delete globalThis[key] })
+    let arrivals = 0
+    let releaseTransforms
+    const barrier = new Promise((resolve) => { releaseTransforms = resolve })
+    const { server, root, write } = await fixture(t, create, {
+      plugins: [{
+        name: 'fixture:concurrent-tla',
+        async transform(code, id) {
+          if (['a', 'b'].some((name) => id === path.join(root, `${name}.js`))) {
+            if (++arrivals === 2) releaseTransforms()
+            await barrier
+          }
+          return code
+        },
+      }],
+    })
+    for (const [name, dependency] of [['a', 'b'], ['b', 'a']]) {
+      write(`${name}.js`, `import './${dependency}.js'; globalThis.${key}.starts.${name}(); await globalThis.${key}.gates.${name}; export const value = '${name}';`)
+    }
+    let settled = 0
+    const calls = ['a', 'b', 'a', 'b'].map((name) =>
+      server.ssrLoadModule(`/${name}.js`).then((exports) => { settled++; return exports }))
+    const first = await Promise.race(Object.values(entered))
+    releases[first]()
+    await entered[first === 'a' ? 'b' : 'a']
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(settled, 0, 'completed body must remain pending until its SCC finishes')
+    releases.a()
+    releases.b()
+    const results = await Promise.all(calls)
+    assert.equal(results[0], results[2])
+    assert.equal(results[1], results[3])
+    assert.deepEqual(results.map((result) => result.value), ['a', 'b', 'a', 'b'])
+  })
+
   check('evaluation alone populates canonical transitive graph and transforms', async (t) => {
     const { server, root, graph } = await fixture(t, create)
     assert.equal((await server.ssrLoadModule('/entry.js')).value, 'middle:old')
@@ -283,7 +386,7 @@ for (const [format, create] of [
     for (const count of counts.values()) assert.equal(count, 1)
   })
 
-  check('circular imports expose live exports instead of awaiting themselves', async (t) => {
+  check('direct cyclic imports support deferred reads of live exports', async (t) => {
     const { server, write } = await fixture(t, create)
     write('a.js', 'import { b } from "./b.js"; export function a() { return "a"; } export const value = () => b();')
     write('b.js', 'import { a } from "./a.js"; export function b() { return a() + "b"; }')

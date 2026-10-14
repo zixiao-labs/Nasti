@@ -34,11 +34,16 @@ interface FetchedModule {
 }
 
 interface ModuleCacheEntry {
+  id: string
   exports: Record<string, unknown>
-  promise: Promise<Record<string, unknown>> | null
-  // Active evaluation waits, keyed by entry identity rather than module ID so
-  // invalidated evaluations cannot affect a replacement generation.
-  waits: Map<ModuleCacheEntry, number>
+  promise: Promise<Record<string, unknown>>
+  resolve: (exports: Record<string, unknown>) => void
+  reject: (error: unknown) => void
+  bodyDone: boolean
+  settled: boolean
+  failure?: { error: unknown }
+  // Persistent static edges use generation identity, never module IDs.
+  dependencies: Set<ModuleCacheEntry>
   invalidationVersion?: number
 }
 
@@ -46,6 +51,8 @@ export class NastiModuleRunner {
   private environment: NastiEnvironment
   private config: ResolvedConfig
   private cache = new Map<string, ModuleCacheEntry>()
+  private evaluating = new Set<ModuleCacheEntry>()
+  private evaluationWaiters = new Set<() => void>()
   private pendingTransforms = new Map<
     string,
     { version: number; promise: Promise<FetchedModule> }
@@ -334,51 +341,95 @@ export class NastiModuleRunner {
     if (cached) return this.waitForEvaluation(cached, importer)
 
     const entry: ModuleCacheEntry = {
+      id,
       exports: {},
-      promise: null,
-      waits: new Map(),
+      promise: undefined!,
+      resolve: undefined!,
+      reject: undefined!,
+      bodyDone: false,
+      settled: false,
+      dependencies: new Set(),
       invalidationVersion: this.environment.moduleGraph.getModuleById(id)?.invalidationVersion,
     }
+    entry.promise = new Promise((resolve, reject) => {
+      entry.resolve = resolve
+      entry.reject = reject
+    })
+    // A cycle-closing internal import may never consume this public promise.
+    void entry.promise.catch(() => {})
     this.cache.set(id, entry)
-    entry.promise = this.evaluate(id, entry).then(() => {
-      entry.promise = null
-      return entry.exports
-    }).catch((err) => {
-      // An older in-flight load may fail after invalidation and a new load.
-      // It must not evict the replacement entry.
-      if (this.cache.get(id) === entry) this.cache.delete(id)
-      throw err
+    this.evaluating.add(entry)
+    void this.evaluate(id, entry).then(() => {
+      entry.bodyDone = true
+      this.advanceEvaluations()
+    }, (error) => {
+      entry.failure = { error }
+      this.advanceEvaluations()
     })
     return this.waitForEvaluation(entry, importer)
+  }
+
+  private reachable(entry: ModuleCacheEntry): Set<ModuleCacheEntry> {
+    const seen = new Set<ModuleCacheEntry>()
+    const pending = [entry]
+    while (pending.length) {
+      const current = pending.pop()!
+      if (seen.has(current)) continue
+      seen.add(current)
+      pending.push(...current.dependencies)
+    }
+    return seen
+  }
+
+  private advanceEvaluations(): void {
+    // Mutual reachability defines a static SCC. Its public completion requires
+    // all bodies in the SCC and all outgoing dependency groups to complete.
+    // Retaining edges also propagates failure to bodies that finished earlier.
+    for (const entry of this.evaluating) {
+      const dependencies = this.reachable(entry)
+      const failure = [...dependencies].find((dependency) => dependency.failure)?.failure
+      if (failure) {
+        entry.failure = failure
+        entry.settled = true
+        if (this.cache.get(entry.id) === entry) this.cache.delete(entry.id)
+        entry.reject(failure.error)
+      } else if ([...dependencies].every((dependency) => dependency.bodyDone)) {
+        entry.settled = true
+        entry.resolve(entry.exports)
+      }
+      if (entry.settled) {
+        this.evaluating.delete(entry)
+        // Settled entries summarize their dependency group with success/failure.
+        // Cached namespaces need not retain the evaluation graph indefinitely.
+        entry.dependencies.clear()
+      }
+    }
+    for (const notify of [...this.evaluationWaiters]) notify()
   }
 
   private async waitForEvaluation(
     entry: ModuleCacheEntry,
     importer?: ModuleCacheEntry,
   ): Promise<Record<string, unknown>> {
-    if (!entry.promise) return entry.exports
-    // A top-level caller always waits. Only an evaluating importer may use
-    // partial exports, and only when its new wait would close an actual cycle.
-    // Unlike a recursion stack, this also sees separately started root imports.
-    if (!importer?.promise) return entry.promise
-    const pending = [entry]
-    const seen = new Set<ModuleCacheEntry>()
-    while (pending.length) {
-      const dependency = pending.pop()!
-      if (dependency === importer) return entry.exports
-      if (seen.has(dependency) || !dependency.promise) continue
-      seen.add(dependency)
-      pending.push(...dependency.waits.keys())
-    }
-    importer.waits.set(entry, (importer.waits.get(entry) ?? 0) + 1)
-    try {
-      return await entry.promise
-    } finally {
-      // Parallel dynamic imports can share the same edge.
-      const count = importer.waits.get(entry)!
-      if (count === 1) importer.waits.delete(entry)
-      else importer.waits.set(entry, count - 1)
-    }
+    if (!importer) return entry.promise
+    if (importer.failure) throw importer.failure.error
+    const closesCycle = this.reachable(entry).has(importer)
+    importer.dependencies.add(entry)
+    this.advanceEvaluations()
+    if (closesCycle && !entry.failure) return entry.exports
+    return new Promise((resolve, reject) => {
+      const notify = () => {
+        if (entry.failure) {
+          this.evaluationWaiters.delete(notify)
+          reject(entry.failure.error)
+        } else if (entry.settled || (entry.bodyDone && this.reachable(entry).has(importer))) {
+          this.evaluationWaiters.delete(notify)
+          resolve(entry.exports)
+        }
+      }
+      this.evaluationWaiters.add(notify)
+      notify()
+    })
   }
 
   private async evaluate(id: string, entry: ModuleCacheEntry): Promise<void> {
@@ -386,7 +437,7 @@ export class NastiModuleRunner {
     const fetched = await this.fetchResolvedModule(id)
     entry.invalidationVersion = fetched.invalidationVersion
 
-    const ssrImport = async (dep: string) => {
+    const ssrImport = async (dep: string, dynamic = false) => {
       const resolved = await this.resolveModule(dep, fetched.id)
       if (resolved.external) return this.importExternal(resolved.id, fetched.id)
       // Non-literal dynamic imports are discovered during evaluation. Never let
@@ -398,7 +449,7 @@ export class NastiModuleRunner {
         importer.importedModules.add(dependency)
         dependency.importers.add(importer)
       }
-      return this.instantiate(resolved.id, entry)
+      return this.instantiate(resolved.id, dynamic ? undefined : entry)
     }
 
     const ssrExportAll = (sourceModule: Record<string, unknown>) => {
@@ -427,7 +478,7 @@ export class NastiModuleRunner {
       '__vite_ssr_import_meta__',
       `"use strict";${fetched.code}\n//# sourceURL=${fetched.id}`,
     )
-    await fn(entry.exports, ssrImport, ssrImport, ssrExportAll, importMeta)
+    await fn(entry.exports, (dep: string) => ssrImport(dep), (dep: string) => ssrImport(dep, true), ssrExportAll, importMeta)
   }
 
   private async importExternal(spec: string, importer?: string): Promise<Record<string, unknown>> {

@@ -9,11 +9,16 @@
   other callers still await evaluation and top-level await.
 - Keep active evaluation waits scoped to cache-entry generations so invalidated
   in-flight loads cannot create false cycles in replacement evaluations.
+- Wait for whole static evaluation groups before resolving public imports, and
+  propagate cyclic failures to every dependent member. Dynamic imports remain
+  separate from static cycle progress and never receive partial exports.
 - Resolve external dependencies relative to their importing filesystem module,
   preserving nested package versions in non-hoisted installations. Virtual
   importers retain the application-root fallback.
 - Add ESM/CJS cycle, concurrent evaluation, top-level await, invalidation, and
   transitive external-dependency regression coverage.
+- Verify the real Wuling Start server-entry loader against the local candidate;
+  document the runner's existing cyclic re-export/linking limitations.
 
 These runner fixes do not by themselves implement or certify Wuling's development
 HTTP host or browser hydration (OpenSpec task 4.1).

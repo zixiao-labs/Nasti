@@ -690,6 +690,14 @@ consumer 派生的 env define 及 module graph，不注入浏览器 HMR/React Re
 外部化依赖不作为本地图节点。规范 ID、根相对 URL 与扩展名/virtual alias 共用节点，
 语义 query 保持独立，HMR 时间戳 `t` 不改变模块身份。声明 driver 的环境仍由驱动接管。
 
+静态循环依赖按求值组等待：对外导入在整个循环及其依赖完成后才返回，
+组内任一模块失败会使所有成员的对外导入失败并移除其求值缓存。
+动态 `import()` 不参与静态循环解锁，也不会返回部分 exports；
+顶层 `await import()` 形成的循环可能持续等待，与普通异步依赖死锁一样。
+runner 没有完整的 ESM 实例化/linking 阶段：支持直接循环导入中延迟读取已建立的
+live exports，但不保证循环中的提前读取/TDZ 语义，也不支持依赖尚未建立的 exports
+的循环 `export *` 或具名 re-export 链；这类代码应打破循环或交给原生 ESM 执行。
+
 文件 `change/add/unlink` 会同步失效 server-consumer 环境的 transform graph，
 runner 根据图版本在下一次 `ssrLoadModule` 前丢弃旧求值缓存；插件直接调用 graph
 失效 API 也遵循同一规则。旧的进行中转换不能覆盖新缓存或依赖边。当前采用保守全量失效，
