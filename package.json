@@ -1,6 +1,6 @@
 {
   "name": "@nasti-toolchain/nasti",
-  "version": "2.6.7",
+  "version": "2.6.8",
   "publishConfig": {
     "access": "public"
   },
