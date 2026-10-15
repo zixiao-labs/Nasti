@@ -77,10 +77,10 @@ for (const [format, create] of [
   const check = (name, fn) => test(`${format} SSR module graph: ${name}`, { timeout: 10000 }, fn)
 
   check('Vite encoded module URLs preserve virtual query identity across SSR entry and import edges', async (t) => {
-    const base = 'virtual:tanstack-start-validate-server-fn-id'
+    const base = 'virtual:tanstack-start-\0validate-server-fn-id'
     const queries = ['?id=first%2Ffn&flag=one+two', '?id=second%3Ffn&flag=one%20two']
     const ids = queries.map((query) => '\0' + base + query)
-    const urls = queries.map((query) => '/@id/__x00__' + base + query)
+    const urls = ids.map((id) => '/@id/' + id.replaceAll('\0', '__x00__'))
     const loaded = []
     const resolved = []
     const { server, graph, write } = await fixture(t, create, {

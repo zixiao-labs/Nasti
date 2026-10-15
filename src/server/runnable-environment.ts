@@ -29,7 +29,7 @@ const debug = createDebugger('nasti:ssr')
 /** Undo Vite's module-ID transport wrapper, not URI/query encoding. */
 function unwrapModuleId(id: string): string {
   return id.startsWith('/@id/')
-    ? id.slice('/@id/'.length).replace('__x00__', '\0')
+    ? id.slice('/@id/'.length).replaceAll('__x00__', '\0')
     : id
 }
 
