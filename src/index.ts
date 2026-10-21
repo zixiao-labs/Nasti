@@ -9,6 +9,7 @@ export { createServer } from './server/index.js'
 export { startElectronDev, electronRendererDevPath } from './server/electron-dev.js'
 export { electronPlugin } from './plugins/electron.js'
 export { monacoEditorPlugin } from './plugins/monaco-editor.js'
+export { webgpuPlugin } from './plugins/webgpu.js'
 export { rsc } from './plugins/rsc.js'
 export type {
   RscPluginOptions,

@@ -26,6 +26,7 @@
 - **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
 - **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
 - **Monaco Editor 集成** - 内置 `monacoEditorPlugin`，预打包 Web Worker，修复 HMR 期间的 EMFILE
+- **WebGPU / vgpu** - 原生 WGSL 字符串导入，兼容 Vercel Labs `vgpu` 官方编译插件及跨 workspace shader 热更新
 - **Dev Server + HMR** - 开发服务器 + WebSocket 热模块替换
 - **TypeScript 优先** - 原生 TS 支持，零配置
 
@@ -166,6 +167,81 @@ nasti electron [root] [--port 3000] [--no-spawn] [--no-restart]
 # Electron 生产构建（等价于 nasti build --target electron）
 nasti electron-build [root] [--outDir dist] [--minify | --no-minify]
 ```
+
+## WebGPU / vgpu
+
+两种 WGSL 工作流任选其一；**不要在同一环境同时启用两个 shader 插件**。
+Nasti 负责模块打包和更新，不提供 WebGPU polyfill，也不自动修改 Electron GPU flags。
+运行时仍需支持 WebGPU 的浏览器以及 HTTPS 或 localhost，并处理 `navigator.gpu` /
+adapter 不可用的情况。
+
+### 原生 WebGPU：WGSL 字符串
+
+```ts
+// nasti.config.ts
+import { defineConfig, webgpuPlugin } from '@nasti-toolchain/nasti'
+
+export default defineConfig({
+  plugins: [webgpuPlugin()],
+})
+```
+
+```ts
+import code from './compute.wgsl'
+
+// 在取得 GPUDevice 后：
+const shader = device.createShaderModule({ code })
+```
+
+普通 `.wgsl` 默认导出原始字符串，dev/build 保持一致；`?raw` 显式导入源码，
+`?url` 返回可 `fetch()` 的资源 URL（build 中带内容 hash 并遵循 `base`）。
+相对路径、配置 alias 与 linked workspace package 中的 shader 均可使用。
+TypeScript 项目可创建 `webgpu-env.d.ts`：
+
+```ts
+/// <reference types="@nasti-toolchain/nasti/webgpu" />
+/// <reference types="@webgpu/types" />
+```
+
+`@webgpu/types` 由应用自行作为 devDependency 安装。
+原生模式不解析 WGSL 内的 import/export 扩展语法；模块化 shader 请使用 vgpu。
+
+### Vercel Labs vgpu：官方 WGSL 编译器
+
+在 **消费 shader 的应用 workspace** 安装依赖，而不是依赖 monorepo 根目录的提升：
+
+```sh
+pnpm --filter <app> add vgpu
+pnpm --filter <app> add -D @vgpu/wgsl @webgpu/types
+```
+
+```ts
+// nasti.config.ts
+import { defineConfig } from '@nasti-toolchain/nasti'
+import { wgslVitePlugin } from '@vgpu/wgsl/loader-vite'
+
+export default defineConfig({
+  plugins: [wgslVitePlugin()],
+})
+```
+
+使用 vgpu 时，`.wgsl` 默认导出官方编译器生成的 `ShaderSource`，不是原生模式的字符串。
+类型声明改用 `/// <reference types="@vgpu/wgsl/wgsl-types" />`，不要同时引用
+`@nasti-toolchain/nasti/webgpu`。WGSL 模块解析、反射与 shader minify 选项由官方插件负责；
+Nasti 跟踪 `addWatchFile` 输入，修改共享 shader 会使对应入口失效并沿 JS 的 HMR
+accept 边界传播，无边界时刷新页面。
+
+完整示例在 [`playground/webgpu`](./playground/webgpu)，使用 `vgpu` / `@vgpu/wgsl` 0.6：
+
+```sh
+pnpm build
+pnpm --filter playground-webgpu dev
+pnpm --filter playground-webgpu build
+```
+
+集成测试 `node --test test/webgpu.test.mjs` 不需要 GPU，验证模块输出、生产资源、
+错误处理以及跨 workspace 的 shader 依赖更新；不代表实际 GPU 渲染验证。
+浏览器 API 和运行时要求以 [vgpu 官方文档](https://vgpu.sh/docs/get-started/web) 为准。
 
 ## Programmatic API
 

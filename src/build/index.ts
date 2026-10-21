@@ -169,12 +169,31 @@ export function getRolldownOptions(
 export function toRolldownPlugins(
   plugins: NastiPlugin[],
   environment: NastiEnvironment,
+  watchFile?: (file: string) => void,
 ): unknown[] {
   const wrap = (plugin: NastiPlugin, name: RolldownHookName) => {
     const hook = getPluginHook(plugin, name)
     if (!hook) return undefined
     const handler = function (this: any, ...args: any[]) {
-      return hook.handler.apply(attachEnvironment(this, environment), args)
+      let context = attachEnvironment(this, environment)
+      if (watchFile) {
+        const id = name === 'load' ? args[0] : name === 'transform' ? args[1] : undefined
+        if (typeof id === 'string' && path.isAbsolute(id)) watchFile(id.split(/[?#]/, 1)[0])
+        const target = context
+        context = new Proxy(target, {
+          get(target, property) {
+            if (property === 'addWatchFile') {
+              return (file: string) => {
+                watchFile(file)
+                target.addWatchFile(file)
+              }
+            }
+            const value = Reflect.get(target, property, target)
+            return typeof value === 'function' ? value.bind(target) : value
+          },
+        })
+      }
+      return hook.handler.apply(context, args)
     }
     return hook.objectHook ? { ...hook.objectHook, handler } : handler
   }

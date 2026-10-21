@@ -524,6 +524,8 @@ export interface PluginContext {
   resolve: (source: string, importer?: string) => Promise<ResolveIdResult>
   emitFile: (file: EmittedFile) => string
   getModuleInfo: (id: string) => ModuleInfo | null
+  /** Watch an additional input; load/transform dependencies invalidate their owning module in dev. */
+  addWatchFile: (fileName: string) => void
   /**
    * Environment API：当前钩子运行所在的环境（dev 管线中可用；
    * 生产构建的 Rolldown 钩子注入在 Phase 2 接线）。

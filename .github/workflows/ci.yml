@@ -37,6 +37,11 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - name: Check WebGPU workspace playground
+        run: |
+          pnpm --filter playground-webgpu typecheck
+          pnpm --filter playground-webgpu build
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:

@@ -222,6 +222,10 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     watcher.once('error', onError)
   })
 
+  for (const environment of Object.values(environments)) {
+    environment.pluginContainer?.setWatchFileHandler((file) => watcher.add(file))
+  }
+
   // 先声明 server 变量，再赋值
   let server: DevServer
   const environmentServices: Record<string, EnvironmentServeResult> = {}
@@ -383,6 +387,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       clearLinkedPackageRootsCache()
     }
     invalidateServerCaches()
+    queueClientEnvironmentUpdate(file)
     notifyEnvironmentDrivers(file, 'unlink')
   })
 

@@ -334,6 +334,29 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
       }
     }
 
+    // fetch(shaderUrl) needs WGSL bytes, not the JavaScript import wrapper.
+    // Use the same filesystem allowlist for shaders in linked workspaces.
+    if (url.split(/[?#]/, 1)[0].endsWith('.wgsl')) {
+      const file = resolveUrlToFile(url, ctx.config.root)
+      if (file) {
+        try {
+          const real = await fs.promises.realpath(file)
+          if (isAllowedDevModulePath(real, ctx.config.root)) {
+            const source = await fs.promises.readFile(real)
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+            res.setHeader('Cache-Control', 'no-cache')
+            res.end(source)
+            return
+          }
+        } catch {
+          // A file can disappear between resolution and reading.
+        }
+        res.statusCode = 404
+        res.end('Not found')
+        return
+      }
+    }
+
     next()
   }
 }
@@ -693,7 +716,12 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
   // environment lifecycle hooks for every on-demand dependency bundle.
   const plugins = orderPlugins(environment.plugins.map((plugin) =>
     plugin.name === 'nasti:resolve' ? resolvePlugin(config, { nativeResolver: true }) : plugin))
-  const nativePlugins = toRolldownPlugins(plugins, environment as import('../core/environment.js').NastiEnvironment)
+  const watchFiles = new Set<string>()
+  const nativePlugins = toRolldownPlugins(
+    plugins,
+    environment as import('../core/environment.js').NastiEnvironment,
+    (file) => watchFiles.add(path.resolve(root, file)),
+  )
     .map((plugin: any) => {
       const hook = plugin.resolveId
       const handler = typeof hook === 'function' ? hook : hook?.handler
@@ -764,6 +792,7 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
     result = await bundle.generate({ format: 'esm', exports: 'named', codeSplitting: false })
   } finally {
     await bundle.close()
+    ctx.pluginContainer.setModuleWatchFiles(entryFile, [...watchFiles])
   }
 
   let code = result.output[0].code
@@ -1058,22 +1087,26 @@ function rewriteImports(
     return timestamp > 0 ? appendTimestampQuery(resolved, timestamp) : resolved
   }
 
-  return code
-    // import ... from '...' / export ... from '...'
-    .replace(
-      /\bfrom\s+(['"])([^'"]+)\1/g,
-      (_m, q: string, s: string) => `from ${q}${transformSpec(s)}${q}`,
-    )
-    // 副作用 import: import '...'
-    .replace(
-      /\bimport\s+(['"])([^'"]+)\1/g,
-      (_m, q: string, s: string) => `import ${q}${transformSpec(s)}${q}`,
-    )
-    // 动态 import('...')
-    .replace(
-      /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
-      (_m, q: string, s: string) => `import(${q}${transformSpec(s)}${q})`,
-    )
+  // Shader modules (and ?raw assets) contain source text in JS strings. Only
+  // rewrite actual JS import/export syntax, never examples inside those strings.
+  let masked = maskStringsAndComments(code)
+  code = code.replace(
+    /\bfrom\s+(['"])([^'"]+)\1/g,
+    (match, q: string, s: string, offset: number) =>
+      masked[offset] === 'f' ? `from ${q}${transformSpec(s)}${q}` : match,
+  )
+  masked = maskStringsAndComments(code)
+  code = code.replace(
+    /\bimport\s+(['"])([^'"]+)\1/g,
+    (match, q: string, s: string, offset: number) =>
+      masked[offset] === 'i' ? `import ${q}${transformSpec(s)}${q}` : match,
+  )
+  masked = maskStringsAndComments(code)
+  return code.replace(
+    /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
+    (match, q: string, s: string, offset: number) =>
+      masked[offset] === 'i' ? `import(${q}${transformSpec(s)}${q})` : match,
+  )
 }
 
 function createModuleSpecifierResolver(
@@ -1633,6 +1666,10 @@ function isModuleRequest(
 ): boolean {
   const cleanUrl = url.split(/[?#]/)[0]
   if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
+  if (cleanUrl.endsWith('.wgsl')) {
+    const query = new URLSearchParams(url.split('?')[1]?.split('#')[0])
+    return query.has('raw') || query.has('url') || destination === 'script'
+  }
   if (cleanUrl.startsWith('/@modules/')) return true
   if (cleanUrl.startsWith('/@fs/')) return true
   if (isAssetFile(cleanUrl)) {

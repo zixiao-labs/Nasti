@@ -2,6 +2,11 @@ packages:
   - 'playground/*'
   - 'packages/*'
 
+allowBuilds:
+  # Browser playground only: do not download/build vgpu's headless Node backend.
+  '@vgpu/adapter-node': false
+  webgpu: false
+
 # Nasti 的两个 peer（oxc-transform-react / react-server-dom-webpack）都是
 # optional —— 由下游按需安装。pnpm 的 autoInstallPeers 默认会把它们装进来，
 # 其中 react-server-dom-webpack 会连带整个 webpack + esbuild 树，而

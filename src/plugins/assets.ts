@@ -17,10 +17,14 @@ export function assetsPlugin(config: ResolvedConfig): NastiPlugin {
   return {
     name: 'nasti:assets',
 
-    resolveId(source) {
+    async resolveId(source, importer) {
       // 处理 ?url 和 ?raw 后缀
       if (source.endsWith('?url') || source.endsWith('?raw')) {
-        return source
+        const queryIndex = source.lastIndexOf('?')
+        const resolved = await this.resolve(source.slice(0, queryIndex), importer)
+        if (!resolved || (typeof resolved === 'object' && resolved.external)) return null
+        const id = typeof resolved === 'string' ? resolved : resolved.id
+        return id + source.slice(queryIndex)
       }
       return null
     },
@@ -43,8 +47,12 @@ export function assetsPlugin(config: ResolvedConfig): NastiPlugin {
         if (!fs.existsSync(file)) return null
 
         if (config.command === 'serve') {
-          // Dev 模式: 返回相对于 root 的路径
-          const url = '/' + path.relative(config.root, file)
+          // Workspace assets outside root need the same guarded /@fs/ URL as modules.
+          const relative = path.relative(config.root, file).replace(/\\/g, '/')
+          const outsideRoot = relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)
+          const url = outsideRoot
+            ? '/@fs/' + file.replace(/\\/g, '/').replace(/^\//, '')
+            : '/' + relative
           return `export default ${JSON.stringify(url)}`
         }
 

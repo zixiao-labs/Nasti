@@ -1,0 +1,20 @@
+{
+  "name": "playground-webgpu",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti dev",
+    "build": "nasti build",
+    "preview": "nasti preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "vgpu": "^0.6.0"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*",
+    "@vgpu/wgsl": "^0.6.0",
+    "@webgpu/types": "^0.1.69",
+    "typescript": "^6.0.3"
+  }
+}
