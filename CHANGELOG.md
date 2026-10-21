@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### WebGPU and Vercel Labs vgpu
+
+- Add opt-in `webgpuPlugin()` for importing plain `.wgsl` shaders as strings in
+  development and production, with TypeScript declarations at
+  `@nasti-toolchain/nasti/webgpu`.
+- Support the official `@vgpu/wgsl/loader-vite` plugin and its compiled
+  `ShaderSource` modules without adding GPU packages to Nasti's runtime dependencies.
+- Track plugin `addWatchFile` inputs in development, including transitive WGSL
+  dependencies in prebundled and linked workspace packages. Propagate shader
+  changes through HMR boundaries, discard removed dependencies, isolate concurrent
+  transforms, and recover after deleted shader inputs are recreated.
+- Resolve shader `?raw` and `?url` imports relative to their importer and through
+  aliases. Emit content-hashed, base-prefixed resource URLs in production and serve
+  raw shader bytes separately from JavaScript import wrappers in development.
+- Preserve import-like text inside shader strings instead of rewriting it as
+  JavaScript module dependencies, and retain filesystem allowlist checks for
+  outside-root shader resources.
+- Add a browser-only `playground/webgpu` workspace with direct application
+  dependencies, usage documentation, and CI build/typecheck coverage. Disable
+  install scripts for vgpu's unused headless Node backend in this workspace.
+- Add ten GPU-independent regressions covering shader output, assets, types,
+  workspace resolution, HMR, real file watching, and failure recovery.
+
+Validation on Node 24: all 164 tests, root and playground typechecks, the playground
+production build, and a development HTTP module-loading smoke check passed.
+Actual GPU rendering and the headless Node backend were not exercised; this
+integration does not provide a WebGPU polyfill or change Electron GPU flags.
+
 ## 2.6.6
 
 ### Native client dependency pipeline

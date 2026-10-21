@@ -10,6 +10,7 @@ import type {
   HmrContext,
 } from '../types.js'
 import { ModuleGraph } from '../core/module-graph.js'
+import type { NastiEnvironment } from '../core/environment.js'
 import { findNearestPackageRoot, getLinkedPackageRoots } from './fs-allow.js'
 
 export async function handleFileChange(
@@ -32,17 +33,23 @@ export async function handleFileChange(
   // /private/var）或 pnpm workspace realpath 后可能不一致，先精确匹配再试
   // realpath。workspace 包经 /@modules 预打包时只登记入口，包内其它文件变更
   // 再回退到同一 package root 下已登记的模块。
-  let mods = moduleGraph.getModulesByFile(file)
-  if (!mods || mods.size === 0) {
-    try {
-      const real = fs.realpathSync(file)
-      if (real !== file) mods = moduleGraph.getModulesByFile(real)
-      if (mods && mods.size > 0) file = real
-    } catch {
-      /* deleted / dangling */
-    }
+  const mods = new Set<ModuleNode>()
+  const collectModules = (file: string) => {
+    for (const mod of moduleGraph.getModulesByFile(file) ?? []) mods.add(mod)
+    const container = (environment as NastiEnvironment).pluginContainer
+    for (const mod of container?.getModulesByWatchFile(file) ?? []) mods.add(mod)
   }
-  if (!mods || mods.size === 0) {
+  collectModules(file)
+  try {
+    const real = fs.realpathSync(file)
+    if (real !== file) {
+      collectModules(real)
+      if (mods.size > 0) file = real
+    }
+  } catch {
+    /* deleted / dangling */
+  }
+  if (mods.size === 0) {
     const packageRoot = findNearestPackageRoot(file)
     if (
       packageRoot &&
@@ -51,10 +58,10 @@ export async function handleFileChange(
       )
     ) {
       const under = (moduleGraph as ModuleGraph).getModulesWithFileUnder(packageRoot)
-      if (under.size > 0) mods = under
+      for (const mod of under) mods.add(mod)
     }
   }
-  if (!mods || mods.size === 0) {
+  if (mods.size === 0) {
     return null
   }
 

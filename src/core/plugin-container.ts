@@ -1,6 +1,7 @@
 // Vite 兼容插件容器
 // 管理插件生命周期，实现 resolveId → load → transform 管道
 
+import path from 'node:path'
 import type {
   NastiPlugin,
   ResolvedConfig,
@@ -9,6 +10,7 @@ import type {
   LoadResult,
   TransformResult,
   ModuleInfo,
+  ModuleNode,
   EnvironmentInstance,
 } from '../types.js'
 import { orderPlugins } from './plugin-api.js'
@@ -19,6 +21,13 @@ export class PluginContainer {
   private config: ResolvedConfig
   private ctx: PluginContext
   private emittedFiles: Map<string, { fileName: string; source: string | Uint8Array }> = new Map()
+  private watchDependencies = {
+    load: new Map<string, Set<string>>(),
+    transform: new Map<string, Set<string>>(),
+    bundle: new Map<string, Set<string>>(),
+  }
+  private watchedFiles = new Set<string>()
+  private watchFileHandler?: (file: string) => void
   /** Environment API：容器所属环境（未传时为 undefined，行为同 1.x client） */
   readonly environment?: EnvironmentInstance
 
@@ -30,11 +39,17 @@ export class PluginContainer {
     this.ctx = this.createContext()
   }
 
-  private createContext(): PluginContext {
+  private createContext(dependencies?: Set<string>): PluginContext {
     const container = this
     return {
       async resolve(source: string, importer?: string) {
         return container.resolveId(source, importer)
+      },
+      addWatchFile(fileName) {
+        const file = path.resolve(container.config.root, fileName)
+        dependencies?.add(file)
+        container.watchedFiles.add(file)
+        container.watchFileHandler?.(file)
       },
       emitFile(file) {
         const fileName = file.fileName ?? file.name ?? `asset-${container.emittedFiles.size}`
@@ -50,6 +65,59 @@ export class PluginContainer {
       },
       environment: container.environment,
     }
+  }
+
+  /** Attach the server watcher, including files registered before it was ready. */
+  setWatchFileHandler(handler: (file: string) => void): void {
+    this.watchFileHandler = handler
+    for (const file of this.watchedFiles) handler(file)
+  }
+
+  private async withModuleContext<T>(
+    id: string,
+    hook: 'load' | 'transform',
+    run: (ctx: PluginContext) => Promise<T>,
+  ): Promise<T> {
+    // Per-invocation contexts keep concurrent shader transforms isolated. Replace
+    // each hook's dependencies so removed imports stop invalidating the module.
+    const dependencies = new Set<string>()
+    const previous = this.watchDependencies[hook].get(id)
+    this.watchDependencies[hook].set(id, dependencies)
+    try {
+      return await run(this.createContext(dependencies))
+    } catch (error) {
+      // Retain the last successful inputs on failure so recreating a deleted
+      // shader can recover the entry without restarting the dev server.
+      for (const file of previous ?? []) dependencies.add(file)
+      throw error
+    }
+  }
+
+  getModulesByWatchFile(file: string): Set<ModuleNode> {
+    const modules = new Set<ModuleNode>()
+    const graph = this.environment?.moduleGraph
+    if (!graph) return modules
+    file = path.resolve(file)
+    for (const dependencies of Object.values(this.watchDependencies)) {
+      for (const [id, files] of dependencies) {
+        if (!files.has(file)) continue
+        const mod = graph.getModuleById(id)
+        if (mod) modules.add(mod)
+        // Browser module IDs are URLs, while hooks receive filesystem paths.
+        for (const owner of graph.getModulesByFile(id.split(/[?#]/, 1)[0]) ?? []) {
+          modules.add(owner)
+        }
+      }
+    }
+    return modules
+  }
+
+  /** On-demand dependency bundles also own their inlined and plugin-watched inputs. */
+  setModuleWatchFiles(id: string, files: string[]): void {
+    const dependencies = new Set<string>()
+    this.watchDependencies.bundle.set(id, dependencies)
+    const ctx = this.createContext(dependencies)
+    for (const file of files) ctx.addWatchFile(file)
   }
 
   /** 返回所有通过 emitFile() 输出的文件 */
@@ -90,39 +158,43 @@ export class PluginContainer {
   }
 
   async load(id: string): Promise<LoadResult> {
-    for (const { hook } of getOrderedPluginHooks(this.plugins, 'load')) {
-      if (!pluginHookFilterMatches(hook.filter, { id, cwd: this.config.root })) continue
-      const result = await hook.handler.call(this.ctx, id)
-      if (result != null) return result
-    }
-    return null
+    return this.withModuleContext(id, 'load', async (ctx) => {
+      for (const { hook } of getOrderedPluginHooks(this.plugins, 'load')) {
+        if (!pluginHookFilterMatches(hook.filter, { id, cwd: this.config.root })) continue
+        const result = await hook.handler.call(ctx, id)
+        if (result != null) return result
+      }
+      return null
+    })
   }
 
   async transform(code: string, id: string, moduleType?: string): Promise<TransformResult> {
-    let currentCode = code
-    let currentModuleType = moduleType ?? inferModuleType(id)
-    let lastResult: Exclude<TransformResult, string | null | undefined> | undefined
-    for (const { hook } of getOrderedPluginHooks(this.plugins, 'transform')) {
-      if (!pluginHookFilterMatches(hook.filter, { id, code: currentCode, moduleType: currentModuleType, cwd: this.config.root })) {
-        continue
-      }
-      const result = await hook.handler.call(this.ctx, currentCode, id)
-      if (result == null) continue
-      if (typeof result === 'string') {
-        currentCode = result
-        lastResult = undefined
-      } else {
-        currentCode = result.code
-        currentModuleType = result.moduleType ?? currentModuleType
-        lastResult = result
-      }
-    }
-    return currentCode === code
-      ? null
-      : {
-          ...lastResult,
-          code: currentCode,
+    return this.withModuleContext(id, 'transform', async (ctx) => {
+      let currentCode = code
+      let currentModuleType = moduleType ?? inferModuleType(id)
+      let lastResult: Exclude<TransformResult, string | null | undefined> | undefined
+      for (const { hook } of getOrderedPluginHooks(this.plugins, 'transform')) {
+        if (!pluginHookFilterMatches(hook.filter, { id, code: currentCode, moduleType: currentModuleType, cwd: this.config.root })) {
+          continue
         }
+        const result = await hook.handler.call(ctx, currentCode, id)
+        if (result == null) continue
+        if (typeof result === 'string') {
+          currentCode = result
+          lastResult = undefined
+        } else {
+          currentCode = result.code
+          currentModuleType = result.moduleType ?? currentModuleType
+          lastResult = result
+        }
+      }
+      return currentCode === code
+        ? null
+        : {
+            ...lastResult,
+            code: currentCode,
+          }
+    })
   }
 
   /** 完整的模块处理管道: resolveId → load → transform */
