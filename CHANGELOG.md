@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.7.0
 
 ### WebGPU and Vercel Labs vgpu
 
@@ -22,13 +22,16 @@
 - Add a browser-only `playground/webgpu` workspace with direct application
   dependencies, usage documentation, and CI build/typecheck coverage. Disable
   install scripts for vgpu's unused headless Node backend in this workspace.
-- Add ten GPU-independent regressions covering shader output, assets, types,
-  workspace resolution, HMR, real file watching, and failure recovery.
+- Add GPU-independent regressions covering shader output, assets, types,
+  workspace resolution, HMR, real file watching, JavaScript template interpolations,
+  and playground render failure recovery.
 
-Validation on Node 24: all 164 tests, root and playground typechecks, the playground
+Validation on Node 24: all 170 tests, root and playground typechecks, the playground
 production build, and a development HTTP module-loading smoke check passed.
 Actual GPU rendering and the headless Node backend were not exercised; this
 integration does not provide a WebGPU polyfill or change Electron GPU flags.
+
+**Full changelog**: https://github.com/zixiao-labs/Nasti/compare/v2.6.8...v2.7.0
 
 ## 2.6.6
 
