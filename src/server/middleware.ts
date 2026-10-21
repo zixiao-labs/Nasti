@@ -1280,10 +1280,11 @@ function rewriteHotAcceptDeps(
   return { code, acceptedUrls, isSelfAccepting }
 }
 
-/** 用等长空格遮蔽字符串、模板字面量和注释，避免把文档文本误识别为 HMR 调用。 */
+/** 用等长空格遮蔽字符串、模板文本和注释，保留模板插值中的 JavaScript 代码。 */
 function maskStringsAndComments(code: string): string {
   // split('') 保持 UTF-16 索引与 RegExp match.index 对齐（展开运算会合并代理对）。
   const masked = code.split('')
+  const templateBraceDepths: number[] = []
   let state:
     | 'code'
     | 'single'
@@ -1304,6 +1305,19 @@ function maskStringsAndComments(code: string): string {
     const char = code[i]
     const next = code[i + 1]
     if (state === 'code') {
+      if (templateBraceDepths.length > 0) {
+        const top = templateBraceDepths.length - 1
+        if (char === '{') templateBraceDepths[top]++
+        else if (char === '}') {
+          templateBraceDepths[top]--
+          if (templateBraceDepths[top] === 0) {
+            templateBraceDepths.pop()
+            state = 'template'
+            masked[i] = ' '
+            continue
+          }
+        }
+      }
       if (char === "'") state = 'single'
       else if (char === '"') state = 'double'
       else if (char === '`') state = 'template'
@@ -1349,6 +1363,12 @@ function maskStringsAndComments(code: string): string {
     masked[i] = char === '\n' ? '\n' : ' '
     if (char === '\\') {
       if (i + 1 < code.length) masked[++i] = ' '
+      continue
+    }
+    if (state === 'template' && char === '$' && next === '{') {
+      masked[++i] = ' '
+      templateBraceDepths.push(1)
+      state = 'code'
       continue
     }
     if (

@@ -7,7 +7,9 @@ import path from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { wgslVitePlugin } from '@vgpu/wgsl/loader-vite'
+import { transformSync } from 'oxc-transform'
 
 import { build, createServer, webgpuPlugin } from '../dist/index.js'
 
@@ -93,6 +95,62 @@ async function update(server, file, mutate, event = 'change') {
   }
 }
 
+test('WebGPU playground disposes failed renders and defers successful cleanup until pagehide', async (t) => {
+  const source = fs.readFileSync(new URL('../playground/webgpu/src/main.ts', import.meta.url), 'utf-8')
+  // Inject vgpu and shader bindings so the real playground runs without a GPU.
+  const { code, errors } = transformSync('main.ts', source.replace(/^import .*$/gm, ''), {})
+  assert.equal(errors.length, 0)
+
+  for (const failure of ['surface', 'effect', 'draw', null]) {
+    await t.test(failure ?? 'successful render', async () => {
+      const calls = []
+      const listeners = []
+      const status = { textContent: '' }
+      const step = (name) => {
+        calls.push(name)
+        if (failure === name) throw new Error(`${name} failed`)
+      }
+      await runInNewContext(code, {
+        Error,
+        navigator: { gpu: {} },
+        document: { querySelector: (selector) => selector === '#status' ? status : {} },
+        window: {
+          addEventListener(...args) {
+            step('pagehide')
+            listeners.push(args)
+          },
+        },
+        async init() {
+          step('init')
+          return { dispose: () => step('dispose') }
+        },
+        surface() { step('surface') },
+        effect() {
+          step('effect')
+          return { draw: () => step('draw') }
+        },
+        gradientSource: plainShader,
+      })
+
+      if (failure) {
+        const steps = ['init', 'surface', 'effect', 'draw']
+        assert.deepEqual(calls, [...steps.slice(0, steps.indexOf(failure) + 1), 'dispose'])
+        assert.equal(listeners.length, 0)
+        assert.equal(status.textContent, `${failure} failed`)
+      } else {
+        assert.deepEqual(calls, ['init', 'surface', 'effect', 'draw', 'pagehide'])
+        assert.equal(listeners.length, 1)
+        const [event, cleanup, options] = listeners[0]
+        assert.equal(event, 'pagehide')
+        assert.equal(options.once, true)
+        assert.match(status.textContent, /Rendered with vgpu/)
+        cleanup()
+        assert.deepEqual(calls, ['init', 'surface', 'effect', 'draw', 'pagehide', 'dispose'])
+      }
+    })
+  }
+})
+
 test('WebGPU imports preserve WGSL bytes in dev, including comments that resemble JS imports', async (t) => {
   const f = fixture(t)
   const server = await f.serve([webgpuPlugin()])
@@ -124,6 +182,34 @@ test('WebGPU imports preserve WGSL bytes in dev, including comments that resembl
   f.write(privateShader, 'not a linked workspace input')
   assert.equal(await server.transformRequest(fsUrl(privateShader)), null)
   assert.equal((await fetch(baseUrl(server) + fsUrl(privateShader))).status, 404)
+})
+
+test('WebGPU dynamic imports inside template interpolations are rewritten without changing text or comments', async (t) => {
+  const f = fixture(t)
+  const source = [
+    "export const direct = `${import('./shader.wgsl')}`;",
+    "export const nested = `outer ${`inner ${({ value: { shader: import('./shader.wgsl?raw') } }).value.shader} import('./ignored-template.wgsl')`} import('./ignored-template.wgsl')`;",
+    'export const complex = `${(() => {',
+    '  const double = "} import(\'./ignored-double.wgsl\')";',
+    '  const single = \'} import("./ignored-single.wgsl")\';',
+    '  const pattern = /[{}]/;',
+    '  // } import("./ignored-line.wgsl")',
+    '  /* } import("./ignored-block.wgsl") */',
+    '  return import("./shader.wgsl?url");',
+    '})()} import("./ignored-template.wgsl")`;',
+    "export const escaped = `\\${import('./ignored-escaped.wgsl')} \\` ${import('./shader.wgsl')}`;",
+    "export const after = import('./shader.wgsl');",
+  ].join('\n')
+  f.write(path.join(f.root, 'src/main.js'), source)
+  const server = await f.serve([webgpuPlugin()])
+  const result = await server.transformRequest('/src/main.js')
+  assert.equal(result.code, source
+    .replaceAll("import('./shader.wgsl", "import('/src/shader.wgsl")
+    .replaceAll('import("./shader.wgsl', 'import("/src/shader.wgsl'))
+  const main = server.moduleGraph.getModuleByUrl('/src/main.js')
+  assert.deepEqual([...main.importedModules].map((mod) => mod.url).sort(), [
+    '/src/shader.wgsl', '/src/shader.wgsl?raw', '/src/shader.wgsl?url',
+  ])
 })
 
 test('WebGPU build supports linked packages, aliases, raw imports, and base-prefixed shader URLs', async (t) => {

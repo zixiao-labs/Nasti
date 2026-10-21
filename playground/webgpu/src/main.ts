@@ -9,9 +9,14 @@ async function render() {
     return
   }
   const gpu = await init()
-  const output = surface(gpu, document.querySelector<HTMLCanvasElement>('canvas')!)
-  const gradient = effect(gpu, gradientSource)
-  gradient.draw(output)
+  try {
+    const output = surface(gpu, document.querySelector<HTMLCanvasElement>('canvas')!)
+    const gradient = effect(gpu, gradientSource)
+    gradient.draw(output)
+  } catch (error) {
+    gpu.dispose()
+    throw error
+  }
   status.textContent = 'Rendered with vgpu. Edit color.wgsl to reload the shader.'
   window.addEventListener('pagehide', () => gpu.dispose(), { once: true })
 }
