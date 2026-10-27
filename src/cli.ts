@@ -262,7 +262,13 @@ cli
       const outDir = path.resolve(resolvedRoot, options.outDir)
 
       const app = connect()
-      app.use(sirv(outDir, { single: true, etag: true, gzip: true, brotli: true }))
+      const fs = await import('node:fs')
+      if (fs.existsSync(path.join(outDir, 'client/nasti-start.json'))) {
+        const { createTanStackStartPreview } = await import('./server/start-preview.js')
+        app.use(await createTanStackStartPreview(outDir))
+      } else {
+        app.use(sirv(outDir, { single: true, etag: true, gzip: true, brotli: true }))
+      }
 
       const port = options.port
       const host = options.host === true ? '0.0.0.0' : (options.host ?? 'localhost')

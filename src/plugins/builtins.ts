@@ -11,6 +11,7 @@ import { cssPostPlugin } from './css-post.js'
 import { assetsPlugin } from './assets.js'
 import { vuePlugin } from './vue.js'
 import { htmlPlugin } from './html.js'
+import { solidPlugin } from './solid.js'
 
 export interface BuiltinPluginOptions {
   /** build 期 CSS 抽取引擎（serve 不传，dev 走 <style> 注入路径） */
@@ -50,6 +51,7 @@ export function resolvePluginList(
     ...(config.framework === 'vue'
       ? [vuePlugin(pluginConfig, opts.environmentName ?? 'client')]
       : []),
+    ...(config.framework === 'solid' ? [solidPlugin(pluginConfig)] : []),
     resolvePlugin(pluginConfig),
     cssPlugin(pluginConfig, opts.cssEngine, consumer),
     assetsPlugin(pluginConfig),

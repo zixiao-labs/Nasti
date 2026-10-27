@@ -1,6 +1,6 @@
 {
   "name": "@nasti-toolchain/nasti",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "publishConfig": {
     "access": "public"
   },
@@ -96,10 +96,22 @@
     "lightningcss": "^1.33.0"
   },
   "peerDependencies": {
+    "@babel/core": "^7.29.7",
+    "@tanstack/redact": "~0.2.1",
+    "@tanstack/router-generator": "1.167.46",
+    "@tanstack/start-plugin-core": "1.171.55",
+    "babel-preset-solid": "^1.9.16",
     "oxc-transform-react": "^0.153.0",
-    "react-server-dom-webpack": "^19.0.0"
+    "react-server-dom-webpack": "^19.0.0",
+    "solid-refresh": "^0.7.8"
   },
   "peerDependenciesMeta": {
+    "@babel/core": { "optional": true },
+    "@tanstack/redact": { "optional": true },
+    "@tanstack/router-generator": { "optional": true },
+    "@tanstack/start-plugin-core": { "optional": true },
+    "babel-preset-solid": { "optional": true },
+    "solid-refresh": { "optional": true },
     "oxc-transform-react": {
       "optional": true
     },

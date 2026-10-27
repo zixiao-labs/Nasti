@@ -444,6 +444,7 @@ function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvi
       const result = transformCode(id, code, {
         sourcemap: !!environment.options.build.sourcemap,
         target: environment.options.build.target,
+        preserveJsx: config.framework === 'solid',
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })
@@ -454,6 +455,11 @@ function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvi
 
 export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult> {
   const config = await resolveConfig(inlineConfig, 'build')
+  return buildResolvedConfig(config)
+}
+
+/** Shared native builder; Start's dev host uses the same client/server pipeline. */
+export async function buildResolvedConfig(config: ResolvedConfig): Promise<BuildResult> {
   const logger = config.logger
   const startTime = performance.now()
 

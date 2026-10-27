@@ -43,9 +43,11 @@ export interface NastiConfig {
   /** 打包目标平台：web（默认）或 electron */
   target?: 'web' | 'electron'
   /** 框架自动检测或手动指定 */
-  framework?: 'react' | 'vue' | 'auto'
+  framework?: 'react' | 'vue' | 'solid' | 'auto'
   /** React JSX / Fast Refresh / Compiler 管线。仅在 framework 解析为 react 时生效。 */
   react?: ReactOptions
+  /** Solid DOM/SSR JSX 编译选项。 */
+  solid?: { hydratable?: boolean }
   /** 路径解析配置 */
   resolve?: ResolveConfig
   /** 插件列表 */
@@ -511,6 +513,8 @@ export interface NastiPlugin {
     context: BuildAppContext,
   ) => void | Promise<void>
   configureServer?: (server: DevServer) => void | (() => void) | Promise<void | (() => void)>
+  /** Release plugin-owned dev resources, including servers closed before listen(). */
+  closeServer?: () => void | Promise<void>
   transformIndexHtml?: (html: string) => string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] } | Promise<string | HtmlTagDescriptor[] | { html: string; tags: HtmlTagDescriptor[] }>
   handleHotUpdate?: (ctx: HmrContext) => void | ModuleNode[] | Promise<void | ModuleNode[]>
   /**
@@ -795,9 +799,10 @@ export interface ResolvedConfig {
   mode: 'development' | 'production'
   target: 'web' | 'electron'
   /** `auto` 在配置解析阶段已收敛为具体框架 */
-  framework: 'react' | 'vue'
+  framework: 'react' | 'vue' | 'solid'
   /** 解析后的 React 管线配置；Vue 项目仍保留该字段以简化插件读取。 */
   react: ResolvedReactOptions
+  solid: { hydratable: boolean }
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
   plugins: NastiPlugin[]

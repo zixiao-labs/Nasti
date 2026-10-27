@@ -1,0 +1,319 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import http from 'node:http'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
+import test from 'node:test'
+import {
+  build, createServer, createTanStackStartPreview, detectFramework,
+  tanstackStart, tanstackRouter, redact,
+  resolveConfig,
+} from '../dist/index.js'
+
+const repo = fileURLToPath(new URL('..', import.meta.url))
+const supported = Number(process.versions.node.split('.')[0]) >= 22
+const browsers = process.env.NASTI_BROWSER_TESTS === '1'
+const quietBuild = { rolldownOptions: { onLog(level, log, fallback) {
+  if (log.code !== 'MODULE_LEVEL_DIRECTIVE') fallback(level, log)
+} } }
+
+function fixture(t, framework) {
+  const monorepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-tanstack-')))
+  const root = path.join(monorepo, 'apps/web')
+  const app = path.join(repo, 'playground', `tanstack-${framework}`)
+  fs.mkdirSync(root, { recursive: true })
+  fs.cpSync(path.join(app, 'src'), path.join(root, 'src'), { recursive: true })
+  const index = path.join(root, 'src/routes/index.tsx')
+  fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace(
+    "'POST_OK'", "'POST_OK' + 'INLINE_SERVER_SECRET'.slice(0, 0)",
+  ))
+  const pkg = JSON.parse(fs.readFileSync(path.join(app, 'package.json'), 'utf8'))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(pkg))
+  const shared = path.join(monorepo, 'packages/shared')
+  fs.cpSync(path.join(repo, 'packages/tanstack-shared'), shared, { recursive: true })
+  for (const dependency of Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })) {
+    if (dependency === '@nasti-toolchain/nasti') continue
+    const link = path.join(root, 'node_modules', dependency)
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    fs.symlinkSync(dependency === '@nasti-toolchain/tanstack-shared' ? shared :
+      fs.realpathSync(path.join(app, 'node_modules', dependency)), link, 'junction')
+  }
+  t.after(() => fs.rmSync(monorepo, { recursive: true, force: true }))
+  return root
+}
+
+function config(root, framework, useRedact = false) {
+  return {
+    root, framework, logLevel: 'silent',
+    plugins: [tanstackStart({ framework }), ...(useRedact ? [redact()] : [])],
+    build: quietBuild,
+  }
+}
+
+async function listen(app) {
+  const server = http.createServer(app)
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
+  }
+}
+
+for (const [framework, useRedact] of [['react', false], ['react', true], ['solid', false]]) {
+  const name = framework + (useRedact ? ' + Redact' : '')
+  test(`native Start ${name}: production SSR, RPC, assets and client isolation`, { skip: !supported }, async (t) => {
+    const root = fixture(t, framework)
+    const settings = config(root, framework, useRedact)
+    settings.build = { ...settings.build, sourcemap: true }
+    const result = await build(settings)
+    const client = result.output.filter((item) => item.type === 'chunk').map((item) => item.code).join('\n')
+    assert.doesNotMatch(client, /NASTI_SERVER_SECRET_SENTINEL|INLINE_SERVER_SECRET|node:async_hooks|tss-serverfn-split/)
+    assert.doesNotMatch(client, /from\s*["'](?:vite|@vitejs)\b/)
+    const maps = result.output.filter((item) => item.fileName.endsWith('.map'))
+    for (const map of maps) assert.doesNotMatch(String(map.source), /NASTI_SERVER_SECRET_SENTINEL|INLINE_SERVER_SECRET/)
+    const { default: handler } = await import(pathToFileURL(path.join(root, 'dist/server/server.mjs')).href)
+    const response = await handler.fetch(new Request('http://localhost/'))
+    assert.equal(response.status, 200)
+    const html = await response.text()
+    assert.match(html, /SSR_OK/)
+    assert.match(html, /Native Nasti \+ TanStack/)
+    assert.match(html, /assets\/client\.[\w-]+\.js/)
+    assert.match(html, /stylesheet/)
+    assert.equal((await handler.fetch(new Request('http://localhost/about'))).status, 200)
+    assert.equal((await handler.fetch(new Request('http://localhost/does-not-exist'))).status, 404)
+    const preview = await listen(await createTanStackStartPreview(path.join(root, 'dist')))
+    t.after(() => preview.close())
+    assert.equal((await fetch(preview.url + '/')).status, 200)
+    const assetUrl = html.match(/src="([^"]+\.js)"/)[1]
+    const asset = await fetch(preview.url + assetUrl)
+    assert.equal(asset.status, 200)
+    assert.match(asset.headers.get('content-type'), /javascript/)
+    const serverSource = await fetch(preview.url + '/server/server.mjs')
+    assert.equal(serverSource.status, 404)
+    assert.doesNotMatch(await serverSource.text(), /NASTI_SERVER_SECRET_SENTINEL/)
+    assert.ok((await fetch(preview.url + '/_serverFn/not-registered')).status >= 400)
+    if (browsers) await checkBrowser(t, preview.url)
+  })
+
+  test(`native Start ${name}: dev HTTP and linked workspace invalidation`, { skip: !supported }, async (t) => {
+    const root = fixture(t, framework)
+    const server = await createServer({ ...config(root, framework, useRedact), server: { port: 0, host: '127.0.0.1' } })
+    t.after(() => server.close())
+    await server.listen(0)
+    const url = `http://127.0.0.1:${server.config.server.port}`
+    const response = await fetch(url)
+    assert.equal(response.status, 200)
+    const html = await response.text()
+    assert.match(html, /SSR_OK/)
+    assert.equal((await fetch(url + '/src/routes/index.tsx')).status, 404, 'raw app source is not served')
+    assert.equal((await fetch(url + '/.nasti/start/server.ts')).status, 404, 'generated server entry is private')
+    if (browsers) await checkBrowser(t, url)
+    const file = path.join(root, 'src/routes/about.lazy.tsx')
+    const changed = new Promise((resolve) => server.watcher.once('change', resolve))
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('About Nasti', 'Updated Nasti'))
+    await changed
+    const updated = await fetch(url + '/about')
+    assert.match(await updated.text(), /Updated Nasti/)
+    const shared = fs.realpathSync(path.join(root, 'node_modules/@nasti-toolchain/tanstack-shared'))
+    const serverFile = path.join(shared, 'src/secret.server.ts')
+    const linkedChange = new Promise((resolve) => {
+      const onChange = (file) => { if (file === serverFile) { server.watcher.off('change', onChange); resolve() } }
+      server.watcher.on('change', onChange)
+    })
+    fs.writeFileSync(serverFile, fs.readFileSync(serverFile, 'utf8').replace('SSR_OK', 'WORKSPACE_UPDATED'))
+    await linkedChange
+    assert.match(await (await fetch(url)).text(), /WORKSPACE_UPDATED/)
+  })
+}
+
+async function checkBrowser(t, url) {
+  const require = createRequire(path.join(repo, 'playground/tanstack-react/package.json'))
+  const { chromium } = require('playwright')
+  const browser = await chromium.launch({
+    executablePath: process.env.NASTI_CHROME_PATH || undefined,
+    headless: true,
+  })
+  try {
+    const page = await browser.newPage()
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    await page.goto(url)
+    await page.locator('#counter').click()
+    await page.waitForFunction(() => document.querySelector('#counter')?.textContent === 'Count 1')
+    await page.locator('#rpc').click()
+    await page.waitForFunction(() => document.querySelector('#rpc-result')?.textContent === 'POST_OK')
+    await page.getByRole('link', { name: 'About', exact: true }).click()
+    await page.getByRole('heading', { name: 'About Nasti', exact: true }).waitFor()
+    await page.reload()
+    await page.getByRole('heading', { name: 'About Nasti', exact: true }).waitFor()
+    assert.deepEqual(errors, [])
+    t.diagnostic('Chromium: hydration, counter click, POST RPC, navigation and deep-link reload passed')
+  } finally {
+    await browser.close()
+  }
+}
+
+test('Solid detection, JSX DOM/SSR compilation and HMR do not use React', async (t) => {
+  const root = fixture(t, 'solid')
+  fs.writeFileSync(path.join(root, 'src/main.tsx'), `
+    import { createSignal } from 'solid-js';
+    export function Counter() { const [count, setCount] = createSignal(0);
+      return <button onClick={() => setCount(count() + 1)}>{count()}</button> }
+  `)
+  fs.writeFileSync(path.join(root, 'index.html'), '<script type="module" src="/src/main.tsx"></script>')
+  assert.equal(detectFramework(root), 'solid')
+  const server = await createServer({ root, framework: 'solid', logLevel: 'silent' })
+  t.after(() => server.close())
+  const client = await server.transformRequest('/src/main.tsx')
+  assert.doesNotMatch(client.code, /react\/|RefreshRuntime|jsx-runtime/)
+  assert.match(client.code, /solid-refresh/)
+  assert.match(client.code, /__nasti_hot__/)
+  const ssr = await server.transformEnvironmentRequest('ssr', '/src/main.tsx')
+  assert.doesNotMatch(ssr.code, /solid-refresh|react\//)
+  assert.match(ssr.code, /\bssr\b/)
+})
+
+test('Router regenerates on route add/unlink and isolates generators per workspace', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  const other = fixture(t, 'solid')
+  const servers = await Promise.all([root, other].map((root, index) => createServer({
+    root, framework: index ? 'solid' : 'react', logLevel: 'silent',
+    plugins: [tanstackRouter({ routesDirectory: 'src/routes' })],
+  })))
+  t.after(() => Promise.all(servers.map((server) => server.close())))
+  const file = path.join(root, 'src/routes/added.tsx')
+  const waitForTree = async (predicate) => {
+    for (let attempts = 0; attempts < 100; attempts++) {
+      if (predicate(fs.readFileSync(path.join(root, 'src/routeTree.gen.ts'), 'utf8'))) return
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    }
+    throw new Error('Route tree update timeout')
+  }
+  fs.writeFileSync(file, `import {createFileRoute} from '@tanstack/react-router'; export const Route=createFileRoute('/added')({})`)
+  await waitForTree((code) => code.includes('/added'))
+  assert.doesNotMatch(fs.readFileSync(path.join(other, 'src/routeTree.gen.ts'), 'utf8'), /\/added/)
+  fs.unlinkSync(file)
+  await waitForTree((code) => !code.includes('/added'))
+})
+
+for (const framework of ['react', 'solid']) {
+  test(`standalone ${framework === 'react' ? 'Redact' : 'Solid'} mounts in native dev`, async (t) => {
+    const root = fixture(t, framework)
+    fs.writeFileSync(path.join(root, 'index.html'), '<html><head></head><body><div id="app"></div><script type="module" src="/src/main.tsx"></script></body></html>')
+    fs.writeFileSync(path.join(root, 'src/main.tsx'), framework === 'react' ? `
+      import {useState} from 'react'; import {createRoot} from 'react-dom/client';
+      function App() {const [count,setCount]=useState(0); return <button id="counter" onClick={()=>setCount(count+1)}>Count {count}</button>}
+      createRoot(document.getElementById('app')!).render(<App />);
+    ` : `
+      import {createSignal} from 'solid-js'; import {render} from 'solid-js/web';
+      function App() {const [count,setCount]=createSignal(0); return <button id="counter" onClick={()=>setCount(count()+1)}>Count {count()}</button>}
+      render(() => <App />, document.getElementById('app')!);
+    `)
+    const server = await createServer({
+      root, framework, logLevel: 'silent', server: { port: 0, host: '127.0.0.1' },
+      plugins: framework === 'react' ? [redact()] : [],
+    })
+    t.after(() => server.close())
+    await server.listen(0)
+    const url = `http://127.0.0.1:${server.config.server.port}`
+    assert.equal((await fetch(url)).status, 200)
+    if (!browsers) return
+    const require = createRequire(path.join(repo, 'playground/tanstack-react/package.json'))
+    const { chromium } = require('playwright')
+    const browser = await chromium.launch({ executablePath: process.env.NASTI_CHROME_PATH || undefined })
+    try {
+      const page = await browser.newPage()
+      const errors = []
+      page.on('pageerror', (error) => errors.push(error.message))
+      await page.goto(url)
+      await page.locator('#counter').click()
+      await page.waitForFunction(() => document.querySelector('#counter')?.textContent === 'Count 1')
+      if (framework === 'solid') {
+        await page.evaluate(() => { window.__nastiSamePage = true })
+        const file = path.join(root, 'src/main.tsx')
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Count ', 'Updated '))
+        await page.waitForFunction(() => document.querySelector('#counter')?.textContent.startsWith('Updated '))
+        assert.equal(await page.evaluate(() => window.__nastiSamePage), true, 'Solid update uses HMR, not page reload')
+      }
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('native Start base paths, API routes and compiler isolation', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  fs.writeFileSync(path.join(root, 'src/routes/api.ts'), `
+    import {createFileRoute} from '@tanstack/react-router';
+    export const Route = createFileRoute('/api')({
+      server: {handlers: {GET: () => new Response('API_OK' + 'API_SERVER_SECRET'.slice(0, 0))}}
+    });
+  `)
+  const settings = { ...config(root, 'react'), base: '/app/' }
+  const result = await build(settings)
+  const client = result.output.filter((item) => item.type === 'chunk').map((item) => item.code).join('\n')
+  assert.doesNotMatch(client, /API_SERVER_SECRET/)
+  const preview = await listen(await createTanStackStartPreview(path.join(root, 'dist')))
+  t.after(() => preview.close())
+  assert.match(await (await fetch(preview.url + '/app/')).text(), /SSR_OK/)
+  assert.equal(await (await fetch(preview.url + '/app/api')).text(), 'API_OK')
+  if (browsers) {
+    // checkBrowser's relative navigation is produced by Router's own basepath.
+    await checkBrowser(t, preview.url + '/app/')
+  }
+})
+
+test('native integration configuration fails explicitly instead of falling back to Vite', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  for (const override of [
+    { base: './' },
+    { target: 'electron' },
+    { experimental: { bundledDev: true } },
+    { plugins: [tanstackStart(), tanstackRouter()] },
+    { plugins: [tanstackStart(), redact({ preset: 'nano' })] },
+  ]) {
+    await assert.rejects(resolveConfig({ ...config(root, 'react'), ...override }, 'serve'), /\[nasti:/)
+  }
+  fs.writeFileSync(path.join(root, 'nasti.config.mjs'), `
+    import {tanstackStart} from ${JSON.stringify(new URL('../dist/index.js', import.meta.url).href)};
+    export default {framework: 'react', plugins: [tanstackStart()]};
+  `)
+  const composed = await resolveConfig({ root, logLevel: 'silent', plugins: [redact()] }, 'serve')
+  assert.equal(composed.experimental.bundledDev, false, 'inline Redact recognizes file-config Start')
+  const solid = fixture(t, 'solid')
+  await assert.rejects(resolveConfig({
+    root: solid, framework: 'solid', logLevel: 'silent', plugins: [redact()],
+  }, 'build'), /Redact requires/)
+})
+
+test('CommonJS entry builds the same native Start application', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  const require = createRequire(import.meta.url)
+  const nasti = require('../dist/index.cjs')
+  const result = await nasti.build({
+    root, framework: 'react', logLevel: 'silent',
+    plugins: [nasti.tanstackStart()], build: quietBuild,
+  })
+  assert.ok(result.environmentResults.ssr.entries.server)
+})
+
+test('Start rejects incompatible compiler versions and live server imports', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  const filename = path.join(root, 'src/routes/about.tsx')
+  fs.writeFileSync(filename, fs.readFileSync(filename, 'utf8').replace(
+    "import { createFileRoute }",
+    "import fs from 'node:fs'; console.log(fs); import { createFileRoute }",
+  ))
+  await assert.rejects(build(config(root, 'react')), /Server-only import/)
+  const compiler = path.join(root, 'node_modules/@tanstack/start-plugin-core')
+  fs.unlinkSync(compiler)
+  fs.mkdirSync(compiler)
+  fs.writeFileSync(path.join(compiler, 'package.json'), JSON.stringify({
+    name: '@tanstack/start-plugin-core', version: '0.0.0',
+    exports: { './package.json': './package.json' },
+  }))
+  await assert.rejects(resolveConfig(config(root, 'react'), 'build'), /Expected @tanstack\/start-plugin-core@1.171.55/)
+})

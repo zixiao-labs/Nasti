@@ -584,6 +584,7 @@ export async function transformRequest(
   } else if (shouldTransform(filePath)) {
     const result = transformCode(filePath, code, {
       sourcemap: true,
+      preserveJsx: config.framework === 'solid',
       jsxRuntime: 'automatic',
       jsxImportSource: 'vue',
       target: ctx.environment?.options.build.target ?? config.build.target,

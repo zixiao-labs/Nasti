@@ -5,6 +5,8 @@ node_modules/
 dist/
 target/
 .nasti/
+.tanstack/
+playground/tanstack-*/src/routeTree.gen.ts
 
 # IDE
 .idea/

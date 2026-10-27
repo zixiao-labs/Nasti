@@ -6,6 +6,7 @@ export interface TransformOptions {
   jsx?: boolean
   jsxRuntime?: 'automatic' | 'classic'
   jsxImportSource?: string
+  preserveJsx?: boolean
   typescript?: boolean
   sourcemap?: boolean
   reactRefresh?: boolean
@@ -50,7 +51,7 @@ export function transformCode(
 
   const result = transformSync(filename, code, {
     typescript: isTS ? {} : undefined,
-    jsx: isJSX || /\.tsx$/.test(filename)
+    jsx: options.preserveJsx ? 'preserve' : isJSX || /\.tsx$/.test(filename)
       ? {
           runtime: options.jsxRuntime ?? 'automatic',
           importSource: options.jsxImportSource ?? 'react',

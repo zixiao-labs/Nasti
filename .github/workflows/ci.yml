@@ -42,6 +42,13 @@ jobs:
           pnpm --filter playground-webgpu typecheck
           pnpm --filter playground-webgpu build
 
+      - name: Check native TanStack workspaces
+        run: |
+          pnpm --filter playground-tanstack-react build
+          pnpm --filter playground-tanstack-react typecheck
+          pnpm --filter playground-tanstack-solid build
+          pnpm --filter playground-tanstack-solid typecheck
+
       - name: Upload build output
         uses: actions/upload-artifact@v4
         with:
@@ -90,6 +97,25 @@ jobs:
       # 20 不支持 glob 形式，24 又会把 `test/` 当成模块路径去 require。
       - name: Test (Node ${{ matrix.node-version }})
         run: node --test
+
+  tanstack-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install Chromium
+        run: pnpm --filter playground-tanstack-react exec playwright install --with-deps chromium
+      - name: Verify native SSR, hydration, RPC, routing and HMR
+        run: node --test test/tanstack.test.mjs
+        env:
+          NASTI_BROWSER_TESTS: '1'
 
   # 原生 watcher 的事件路径和时序随平台变化；保留真实磁盘快速保存回归。
   watcher:
