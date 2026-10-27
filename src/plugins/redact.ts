@@ -49,6 +49,11 @@ export function redact(options: RedactOptions = {}): NastiPlugin {
             (options.preset === 'nano' && options.features?.hydration !== true))) {
         throw new Error('[nasti:redact] TanStack Start requires the Redact hydration feature.')
       }
+      if (config.plugins.some((p) => p.name === 'nasti:tanstack-start') &&
+          (options.features?.context === false ||
+            (options.preset === 'nano' && options.features?.context !== true))) {
+        throw new Error('[nasti:redact] TanStack Start requires the Redact context feature.')
+      }
       root = config.root
       // React 18 needs Redact's separate post-transform contract. Fail explicitly
       // instead of silently omitting that compatibility pass.
@@ -61,6 +66,16 @@ export function redact(options: RedactOptions = {}): NastiPlugin {
       // The official integration contains no Vite runtime import. Its resolver
       // owns feature switches and canonical realpaths; bypass Vite-only hooks.
       upstream[0].configResolved({ root })
+      // Bare replacements must reach Redact's resolver before SSR externalization.
+      for (const [name, environment] of Object.entries(config.environments)) {
+        if (environment.consumer !== 'server' || name === 'rsc' ||
+            environment.resolve.conditions.includes('react-server') ||
+            environment.resolve.noExternal === true) continue
+        environment.resolve.noExternal = [
+          ...environment.resolve.noExternal,
+          'react', 'react-dom', 'scheduler', 'use-sync-external-store', '@tanstack/redact',
+        ]
+      }
     },
     async resolveId(source, importer, resolveOptions) {
       return upstream[0].resolveId.call(this, source, importer, resolveOptions)

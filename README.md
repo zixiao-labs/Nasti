@@ -357,7 +357,7 @@ Redact 适配目前支持 React 19、`@tanstack/redact@0.2.1`，转发 `preset` 
 `features`。与官方 Start 集成一致，**普通 SSR 与客户端使用同一套 Redact
 语义**，RSC / `react-server` 环境仍保留真实 React；不能用于 Solid。
 独立 Redact SPA 自动使用 Nasti 的原生 bundled-dev 引擎，避免独立预打包的
-React 子路径产生多份 dispatcher。Start 必须保留 Redact 的 hydration feature。
+React 子路径产生多份 dispatcher。Start 必须保留 Redact 的 hydration 和 context features。
 Redact 同步渲染的调度取舍与兼容性边界仍由上游定义，不等同于 React 全量替代保证。
 
 ## React pipeline

@@ -266,6 +266,90 @@ test('native Start base paths, API routes and compiler isolation', { skip: !supp
   }
 })
 
+test('Start requires both Redact context and hydration features', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  const resolve = (options) => resolveConfig({
+    ...config(root, 'react'), plugins: [tanstackStart(), redact(options)],
+  }, 'serve')
+  for (const options of [
+    { features: { context: false } },
+    { preset: 'full', features: { context: false } },
+    { preset: 'nano', features: { hydration: true } },
+    { preset: 'nano', features: { hydration: true, context: false } },
+  ]) await assert.rejects(resolve(options), /TanStack Start requires the Redact context feature/)
+  for (const options of [
+    { features: { hydration: false } },
+    { preset: 'nano' },
+    { preset: 'nano', features: { context: true } },
+  ]) await assert.rejects(resolve(options), /TanStack Start requires the Redact hydration feature/)
+  for (const options of [
+    {},
+    { preset: 'full' },
+    { features: { context: true } },
+    { preset: 'nano', features: { context: true, hydration: true } },
+  ]) await resolve(options)
+})
+
+test('standalone Redact SSR shares its runtime across bare packages in dev and build', async (t) => {
+  const root = fixture(t, 'react')
+  fs.writeFileSync(path.join(root, 'src/main.ts'), 'export {}')
+  fs.writeFileSync(path.join(root, 'src/ssr.js'), `
+    import {createElement, useSyncExternalStore as reactStore} from 'react';
+    import {jsx} from 'react/jsx-runtime';
+    import {renderToString} from 'react-dom/server';
+    import {unstable_now} from 'scheduler';
+    import {useSyncExternalStore} from 'use-sync-external-store/shim';
+    import * as redact from '@tanstack/redact';
+    import * as redactJsx from '@tanstack/redact/jsx-runtime';
+    import * as redactServer from '@tanstack/redact/server';
+    import * as redactScheduler from '@tanstack/redact/scheduler';
+    export const sameRuntime = [
+      createElement === redact.createElement, jsx === redactJsx.jsx,
+      renderToString === redactServer.renderToString, unstable_now === redactScheduler.unstable_now,
+      useSyncExternalStore === redact.useSyncExternalStore, reactStore === useSyncExternalStore,
+    ];
+    export const html = renderToString(createElement('p', null, 'REDACT_SSR_OK'));
+  `)
+  const settings = {
+    root, framework: 'react', logLevel: 'silent', plugins: [redact()],
+    resolve: { noExternal: ['existing-inline'] },
+    environments: { client: { buildEnabled: false }, ssr: { entry: 'src/ssr.js' } },
+  }
+  const server = await createServer(settings)
+  t.after(() => server.close())
+  assert.ok(server.config.environments.ssr.resolve.noExternal.includes('existing-inline'))
+  const check = (module) => {
+    assert.deepEqual([...module.sameRuntime], Array(6).fill(true))
+    assert.equal(module.html, '<p>REDACT_SSR_OK</p>')
+  }
+  check(await server.ssrLoadModule('/src/ssr.js'))
+  const result = await build(settings)
+  const entry = result.environments.ssr.find((item) => item.type === 'chunk' && item.isEntry)
+  check(await import(pathToFileURL(path.join(root, 'dist/ssr', entry.fileName)).href))
+})
+
+test('Redact preserves SSR inline settings and excludes RSC environments', async (t) => {
+  const root = fixture(t, 'react')
+  const resolved = await resolveConfig({
+    root, framework: 'react', logLevel: 'silent', plugins: [redact({ preset: 'nano' })],
+    environments: {
+      ssr: { resolve: { noExternal: ['existing-inline'], conditions: ['node', 'import'] } },
+      worker: { consumer: 'server', resolve: { noExternal: true } },
+      rsc: { consumer: 'server', resolve: { noExternal: ['rsc-inline'] } },
+      flight: { consumer: 'server', resolve: { conditions: ['react-server'] } },
+    },
+  }, 'build')
+  const { ssr, worker, rsc, flight } = resolved.environments
+  assert.ok(ssr.resolve.noExternal.includes('existing-inline'))
+  for (const name of ['react', 'react-dom', 'scheduler', 'use-sync-external-store', '@tanstack/redact']) {
+    assert.ok(ssr.resolve.noExternal.includes(name), `${name} must reach the SSR resolver`)
+  }
+  assert.deepEqual(ssr.resolve.conditions, ['node', 'import'])
+  assert.equal(worker.resolve.noExternal, true)
+  assert.deepEqual(rsc.resolve.noExternal, ['rsc-inline'])
+  assert.deepEqual(flight.resolve.noExternal, [])
+})
+
 test('native integration configuration fails explicitly instead of falling back to Vite', { skip: !supported }, async (t) => {
   const root = fixture(t, 'react')
   for (const override of [
@@ -283,6 +367,7 @@ test('native integration configuration fails explicitly instead of falling back 
   `)
   const composed = await resolveConfig({ root, logLevel: 'silent', plugins: [redact()] }, 'serve')
   assert.equal(composed.experimental.bundledDev, false, 'inline Redact recognizes file-config Start')
+  await assert.rejects(resolveConfig({ root, logLevel: 'silent', plugins: [redact({ features: { context: false } })] }, 'serve'), /Redact context feature/)
   const solid = fixture(t, 'solid')
   await assert.rejects(resolveConfig({
     root: solid, framework: 'solid', logLevel: 'silent', plugins: [redact()],
