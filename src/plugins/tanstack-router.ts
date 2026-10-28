@@ -14,7 +14,8 @@ export interface TanStackRouterOptions {
  * Create a plugin that generates a route tree and regenerates it on dev changes.
  * Relative route/tree paths resolve from the project root, defaulting to
  * src/routes and src/routeTree.gen.ts. The React/Solid target must match Nasti's
- * framework.
+ * framework. Temporary files default to <root>/.nasti/router; explicit
+ * generator.tmpDir overrides retain the official generator's path semantics.
  * Configuration and client build hooks propagate dependency/generation errors;
  * watcher generation failures are caught, and successful updates trigger reloads.
  */
@@ -53,7 +54,9 @@ export function tanstackRouter(options: TanStackRouterOptions = {}): NastiPlugin
       }
       const { Generator, getConfig } = await importProjectPackage(config.root, '@tanstack/router-generator')
       const generatorConfig = getConfig({
-        tmpDir: '.nasti/router',
+        // getConfig resolves relative tmpDir from cwd, not the supplied root.
+        // Keep atomic renames on the project's filesystem by default.
+        tmpDir: path.resolve(config.root, '.nasti/router'),
         ...options.generator,
         target: framework,
         routesDirectory: options.routesDirectory ?? './src/routes',

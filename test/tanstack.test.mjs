@@ -175,6 +175,25 @@ test('Solid detection, JSX DOM/SSR compilation and HMR do not use React', async 
   assert.match(ssr.code, /\bssr\b/)
 })
 
+for (const framework of ['react', 'solid']) {
+  test(`Router ${framework}: temporary files stay in the project root and respect overrides`, { skip: !supported }, async (t) => {
+    const root = fixture(t, framework)
+    assert.notEqual(root, process.cwd(), 'fixture must exercise a project outside the working directory')
+    const customTmpDir = path.join(root, '.nasti/custom-router')
+    for (const tmpDir of [undefined, customTmpDir]) {
+      // Force an atomic write even if the playground already has a generated tree.
+      fs.rmSync(path.join(root, 'src/routeTree.gen.ts'), { force: true })
+      await resolveConfig({
+        root, framework, logLevel: 'silent',
+        plugins: [tanstackRouter(tmpDir ? { generator: { tmpDir } } : {})],
+      }, 'build')
+      assert.ok(fs.existsSync(tmpDir ?? path.join(root, '.nasti/router')),
+        `route generation must use ${tmpDir ?? 'the project-local default temporary directory'}`)
+      assert.match(fs.readFileSync(path.join(root, 'src/routeTree.gen.ts'), 'utf8'), /\/about/)
+    }
+  })
+}
+
 test('Router regenerates on route add/unlink and isolates generators per workspace', { skip: !supported }, async (t) => {
   const root = fixture(t, 'react')
   const other = fixture(t, 'solid')
