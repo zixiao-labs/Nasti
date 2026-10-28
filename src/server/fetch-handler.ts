@@ -2,7 +2,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
-/** Streaming Node ↔ Fetch bridge, shared by native Start dev and preview hosts. */
+/**
+ * Stream a Node HTTP request through a Fetch handler and write its response.
+ * Closing the Node response aborts the Fetch request. HEAD responses cancel any
+ * body without streaming it; multiple Set-Cookie headers are preserved.
+ * Resolves after streaming or ending the response. Request construction, handler,
+ * body cancellation, and stream errors propagate for the host to handle.
+ */
 export async function dispatchFetch(
   fetch: (request: Request) => Response | Promise<Response>,
   req: IncomingMessage,

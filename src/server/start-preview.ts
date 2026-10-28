@@ -5,7 +5,16 @@ import connect from 'connect'
 import sirv from 'sirv'
 import { dispatchFetch } from './fetch-handler.js'
 
-/** Serve only client artifacts, never the sibling server bundle or its maps. */
+/**
+ * Create a preview app serving client artifacts at the manifest's base path and
+ * forwarding remaining requests to the server bundle's Fetch handler.
+ * Only client/ is mounted as static content. Request failures end with Internal
+ * Server Error and set status 500 if headers have not been sent.
+ * @param outDir Build output root containing client/ and server/, relative to cwd
+ * if not absolute.
+ * @returns A Connect app ready to mount or listen on.
+ * @throws Manifest reading/parsing/validation or server loading/evaluation errors.
+ */
 export async function createTanStackStartPreview(outDir: string): Promise<connect.Server> {
   const directory = path.resolve(outDir)
   const metadata = JSON.parse(fs.readFileSync(path.join(directory, 'client/nasti-start.json'), 'utf8'))

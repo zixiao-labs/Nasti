@@ -41,6 +41,13 @@ export function shouldTransform(id: string): boolean {
   )
 }
 
+/**
+ * Transpile source with OXC, selecting TypeScript and JSX handling by filename.
+ * `preserveJsx` leaves JSX for a later compiler; sourcemaps default to enabled.
+ * @returns An object with transformed code and a JSON source map (null if absent).
+ * @throws Reported diagnostics become an error with the filename and messages;
+ * other OXC errors propagate unchanged.
+ */
 export function transformCode(
   filename: string,
   code: string,

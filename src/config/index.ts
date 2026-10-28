@@ -65,10 +65,11 @@ export async function loadConfigFromFile(root: string): Promise<NastiConfig> {
 }
 
 /**
- * 将 framework:auto 收敛为具体框架。
+ * Detect the framework from the project's src directory and package.json.
  *
- * 优先使用源码中的 .vue 文件消除同时安装 React/Vue 时的歧义，其次读取
- * package.json dependencies，最后回退 React 以保持 1.x 默认行为。
+ * A .vue file at most five directories below src takes priority. Across dependency
+ * fields, React takes priority over Vue; Solid is selected only when neither is
+ * declared. Otherwise, missing, unreadable, or invalid metadata falls back to React.
  */
 export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
   const sourceRoot = path.resolve(root, 'src')

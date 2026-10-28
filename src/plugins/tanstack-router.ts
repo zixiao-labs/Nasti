@@ -10,7 +10,14 @@ export interface TanStackRouterOptions {
   generator?: Record<string, unknown>
 }
 
-/** Official route generator, hosted by Nasti's native watcher and builder. */
+/**
+ * Create a plugin that generates a route tree and regenerates it on dev changes.
+ * Relative route/tree paths resolve from the project root, defaulting to
+ * src/routes and src/routeTree.gen.ts. The React/Solid target must match Nasti's
+ * framework.
+ * Configuration and client build hooks propagate dependency/generation errors;
+ * watcher generation failures are caught, and successful updates trigger reloads.
+ */
 export function tanstackRouter(options: TanStackRouterOptions = {}): NastiPlugin {
   let config: ResolvedConfig
   let generator: any

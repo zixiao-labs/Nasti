@@ -2,7 +2,12 @@ import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { importProjectPackage } from '../core/project-import.js'
 import { transformSync } from 'oxc-transform'
 
-/** Solid's JSX is a DOM/SSR compiler, not React's automatic JSX runtime. */
+/**
+ * Create a plugin that compiles JSX/TSX for Solid DOM or server rendering.
+ * Uses config.solid.hydratable and enables Refresh for client dev transforms
+ * unless HMR is disabled. Compiler tools are loaded from config.root on demand;
+ * their loading errors and OXC/Babel compilation errors propagate from transforms.
+ */
 export function solidPlugin(config: ResolvedConfig): NastiPlugin {
   let tools: Promise<any[]> | undefined
   return {

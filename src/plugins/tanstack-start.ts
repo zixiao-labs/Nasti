@@ -54,6 +54,14 @@ interface FetchEntry {
 /**
  * Native Start host. Compiler → OXC/Solid → Rolldown, never the Vite plugin.
  * Development uses the same complete two-environment build, with full reloads.
+ * Creates route and entry files under the project root and .nasti/start;
+ * production output uses client/ and server/ beneath the configured output root.
+ * Relative source and entry paths resolve from the project root; srcDirectory defaults
+ * to src. serverFns.base defaults to _serverFn beneath the app's base path.
+ * Configuration requires Node >=22.12, the pinned compiler dependencies, and
+ * exclusive ownership of native web client/ssr environments and Router setup.
+ * Configuration/build failures propagate; dev request failures end the response
+ * with Internal Server Error, setting status 500 if headers have not been sent.
  */
 export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
   const src = options.srcDirectory ?? 'src'

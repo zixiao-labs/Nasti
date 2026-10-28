@@ -3,7 +3,11 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'import-meta-resolve'
 
-/** Resolve optional tools from the consuming workspace, never Nasti's checkout. */
+/**
+ * Resolve an optional tool relative to the consuming workspace's package.json.
+ * @returns The resolved module URL.
+ * @throws An error with the original cause when resolution fails.
+ */
 export function resolveProjectImport(root: string, specifier: string): string {
   try {
     return resolve(specifier, pathToFileURL(path.join(root, 'package.json')).href)
@@ -15,11 +19,20 @@ export function resolveProjectImport(root: string, specifier: string): string {
   }
 }
 
+/**
+ * Import an optional tool from the consuming workspace and return its namespace.
+ * Rejects on resolution, loading, or module evaluation errors.
+ */
 export async function importProjectPackage(root: string, specifier: string): Promise<any> {
   return import(resolveProjectImport(root, specifier))
 }
 
-/** Start's compiler host is not a public export. Deliberately pin its contract. */
+/**
+ * Load Start's private compiler host and expose the route compiler as `compileRoute`.
+ * Requires start-plugin-core 1.171.55 and its router-plugin dependency 1.168.48.
+ * Rejects on version mismatches or resolution, manifest reading/parsing, and
+ * module loading/evaluation errors.
+ */
 export async function importStartCompiler(root: string): Promise<any> {
   const manifest = new URL(resolveProjectImport(root, '@tanstack/start-plugin-core/package.json'))
   const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'))

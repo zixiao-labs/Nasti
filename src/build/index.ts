@@ -453,12 +453,25 @@ function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvi
   }
 }
 
+/**
+ * Resolve project configuration and build the enabled environments to disk.
+ * @returns Client output, per-environment results, and app-level artifacts.
+ * @throws Propagates configuration, build, finalization, and cleanup errors.
+ */
 export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult> {
   const config = await resolveConfig(inlineConfig, 'build')
   return buildResolvedConfig(config)
 }
 
-/** Shared native builder; Start's dev host uses the same client/server pipeline. */
+/**
+ * Build enabled environments using an already resolved configuration.
+ * Start's dev host shares this pipeline. The client builds first; other enabled
+ * environments require entries or a driver. Cleans output directories according
+ * to emptyOutDir, writes artifacts, and runs app finalizers.
+ * @returns Client output, per-environment results, and app-level artifacts.
+ * @throws Propagates build and finalization errors; environment cleanup errors
+ * reject the build only when no build/finalization error already occurred.
+ */
 export async function buildResolvedConfig(config: ResolvedConfig): Promise<BuildResult> {
   const logger = config.logger
   const startTime = performance.now()

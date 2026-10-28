@@ -22,7 +22,12 @@ export interface RedactOptions {
 /**
  * Reuse Redact's alias/feature rules, not its Vite config hooks. One runtime in
  * both React client and SSR graphs is required for Start hydration parity.
- * RSC is intentionally excluded and retains real React.
+ * RSC and react-server environments are excluded and retain real React.
+ * Enables bundled dev when Start is absent and inlines React compatibility
+ * packages in eligible server environments. Configuration requires React 19;
+ * Start also requires context and hydration, explicitly enabled for nano.
+ * Configuration rejects incompatible settings and propagates dependency
+ * resolution, manifest reading/parsing, and upstream initialization errors.
  */
 export function redact(options: RedactOptions = {}): NastiPlugin {
   let upstream: any[]

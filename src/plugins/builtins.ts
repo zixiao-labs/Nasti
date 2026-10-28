@@ -23,8 +23,11 @@ export interface BuiltinPluginOptions {
 }
 
 /**
- * 拼装某一环境的完整插件列表（顺序与 1.x 完全一致）：
- *   [vue?] → resolve → css → assets → [html(serve)] → 用户插件 → [css-post(build)]
+ * Assemble built-in and user plugins using the selected environment's options.
+ * Vue/Solid compilation precedes resolve, CSS, assets, optional dev HTML, and
+ * user plugins. Builds append CSS extraction when supplied and a virtual-module
+ * resolver for server consumers. Environment filtering is performed separately.
+ * @throws If an explicitly requested environment is not configured.
  */
 export function resolvePluginList(
   config: ResolvedConfig,
