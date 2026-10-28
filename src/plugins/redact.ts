@@ -23,9 +23,9 @@ export interface RedactOptions {
  * Reuse Redact's alias/feature rules, not its Vite config hooks. One runtime in
  * both React client and SSR graphs is required for Start hydration parity.
  * RSC and react-server environments are excluded and retain real React.
- * Enables bundled dev when Start is absent and inlines React compatibility
- * packages in eligible server environments. Configuration requires React 19;
- * Start also requires context and hydration, explicitly enabled for nano.
+ * Enables bundled dev when Start is absent and inlines dependencies in eligible
+ * server environments. Configuration requires React 19; Start also requires
+ * context, hydration and class components, explicitly enabled for nano.
  * Configuration rejects incompatible settings and propagates dependency
  * resolution, manifest reading/parsing, and upstream initialization errors.
  */
@@ -59,6 +59,11 @@ export function redact(options: RedactOptions = {}): NastiPlugin {
             (options.preset === 'nano' && options.features?.context !== true))) {
         throw new Error('[nasti:redact] TanStack Start requires the Redact context feature.')
       }
+      if (config.plugins.some((p) => p.name === 'nasti:tanstack-start') &&
+          (options.features?.classComponents === false ||
+            (options.preset === 'nano' && options.features?.classComponents !== true))) {
+        throw new Error('[nasti:redact] TanStack Start requires the Redact classComponents feature.')
+      }
       root = config.root
       // React 18 needs Redact's separate post-transform contract. Fail explicitly
       // instead of silently omitting that compatibility pass.
@@ -71,15 +76,13 @@ export function redact(options: RedactOptions = {}): NastiPlugin {
       // The official integration contains no Vite runtime import. Its resolver
       // owns feature switches and canonical realpaths; bypass Vite-only hooks.
       upstream[0].configResolved({ root })
-      // Bare replacements must reach Redact's resolver before SSR externalization.
+      // External packages bypass our resolver for their own React imports.
+      // Inline the whole eligible SSR graph, including transitive consumers,
+      // so third-party packages cannot load a separate, real React runtime.
       for (const [name, environment] of Object.entries(config.environments)) {
         if (environment.consumer !== 'server' || name === 'rsc' ||
-            environment.resolve.conditions.includes('react-server') ||
-            environment.resolve.noExternal === true) continue
-        environment.resolve.noExternal = [
-          ...environment.resolve.noExternal,
-          'react', 'react-dom', 'scheduler', 'use-sync-external-store', '@tanstack/redact',
-        ]
+            environment.resolve.conditions.includes('react-server')) continue
+        environment.resolve.noExternal = true
       }
     },
     async resolveId(source, importer, resolveOptions) {

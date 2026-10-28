@@ -50,6 +50,12 @@ interface CompilerHost {
 interface FetchEntry {
   fetch(request: Request): Response | Promise<Response>
 }
+interface DevBuild {
+  directory: string
+  handler: FetchEntry
+  assets: Map<string, EnvironmentBuildOutput>
+  requests: number
+}
 
 /**
  * Native Start host. Compiler → OXC/Solid → Rolldown, never the Vite plugin.
@@ -81,11 +87,21 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
   let server: DevServer | undefined
   let generation = 0
   let closed = false
-  let pending: Promise<FetchEntry> | undefined
+  let pending: Promise<DevBuild> | undefined
   let pendingGeneration = -1
   let builds = Promise.resolve()
   const session = randomUUID()
-  const assets = new Map<string, EnvironmentBuildOutput>()
+  const generations = new Map<number, DevBuild>()
+  const pruneGenerations = () => {
+    // Keep the two newest successful builds plus any older build still serving
+    // a response. Streaming SSR can reference assets or import chunks late.
+    for (const version of [...generations.keys()].slice(0, -2)) {
+      const build = generations.get(version)!
+      if (build.requests) continue
+      fs.rmSync(build.directory, { recursive: true, force: true })
+      generations.delete(version)
+    }
+  }
   const changed = (file: string) => {
     const normalized = slash(file)
     if (normalized.includes('/.nasti/') || normalized.includes('/node_modules/') ||
@@ -118,16 +134,28 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
           },
         },
       }
-      await setupPluginApi(buildConfig, buildConfig.plugins)
-      const result = await buildResolvedConfig(buildConfig)
-      for (const output of result.output) assets.set(config.base + output.fileName, output)
-      const entry = result.environmentResults?.ssr.entries?.server
-      if (!entry) throw new Error('[nasti:start] Missing server build entry.')
-      const mod = await import(pathToFileURL(path.join(dir, 'server', entry)).href)
-      if (typeof mod.default?.fetch !== 'function') {
-        throw new Error('[nasti:start] Server entry must export default { fetch(request) }.')
+      try {
+        await setupPluginApi(buildConfig, buildConfig.plugins)
+        const result = await buildResolvedConfig(buildConfig)
+        const entry = result.environmentResults?.ssr.entries?.server
+        if (!entry) throw new Error('[nasti:start] Missing server build entry.')
+        const mod = await import(pathToFileURL(path.join(dir, 'server', entry)).href)
+        if (typeof mod.default?.fetch !== 'function') {
+          throw new Error('[nasti:start] Server entry must export default { fetch(request) }.')
+        }
+        const build: DevBuild = {
+          directory: dir,
+          handler: mod.default,
+          assets: new Map(result.output.map((output) => [config.base + output.fileName, output])),
+          requests: 0,
+        }
+        generations.set(version, build)
+        pruneGenerations()
+        return build
+      } catch (error) {
+        fs.rmSync(dir, { recursive: true, force: true })
+        throw error
       }
-      return mod.default as FetchEntry
     })
     builds = pending.then(() => {}, () => {})
     const current = pending
@@ -183,6 +211,7 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
           ...input.environments,
           client: {
             ...input.environments?.client,
+            consumer: 'client',
             entry: '.nasti/start/client.tsx',
             html: '.nasti/start/no-index.html',
           },
@@ -393,23 +422,30 @@ export async function getServerFnById(id) {
       server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
         if (req.url === '/@nasti/client') return next()
         void (async () => {
-          const handler = await currentBuild()
-          const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
-          const asset = assets.get(pathname)
-          if (asset) {
-            const types: Record<string, string> = {
-              '.js': 'application/javascript', '.mjs': 'application/javascript',
-              '.css': 'text/css', '.json': 'application/json', '.map': 'application/json',
-              '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
-              '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2',
-              '.wasm': 'application/wasm',
+          const build = await currentBuild()
+          build.requests++
+          try {
+            const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+            const asset = build.assets.get(pathname) ?? [...generations.values()].reverse()
+              .map((cached) => cached.assets.get(pathname)).find(Boolean)
+            if (asset) {
+              const types: Record<string, string> = {
+                '.js': 'application/javascript', '.mjs': 'application/javascript',
+                '.css': 'text/css', '.json': 'application/json', '.map': 'application/json',
+                '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+                '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2',
+                '.wasm': 'application/wasm',
+              }
+              res.setHeader('Content-Type', types[path.extname(pathname)] ?? 'application/octet-stream')
+              res.setHeader('Cache-Control', 'no-cache')
+              res.end(req.method === 'HEAD' ? undefined : asset.type === 'chunk' ? asset.code : asset.source)
+              return
             }
-            res.setHeader('Content-Type', types[path.extname(pathname)] ?? 'application/octet-stream')
-            res.setHeader('Cache-Control', 'no-cache')
-            res.end(req.method === 'HEAD' ? undefined : asset.type === 'chunk' ? asset.code : asset.source)
-            return
+            await dispatchFetch(build.handler.fetch, req, res)
+          } finally {
+            build.requests--
+            pruneGenerations()
           }
-          await dispatchFetch(handler.fetch, req, res)
         })().catch((error) => {
           config.logger.error('[nasti:start] Request failed', { error })
           if (!res.headersSent) res.statusCode = 500
@@ -422,7 +458,7 @@ export async function getServerFnById(id) {
       for (const event of ['add', 'change', 'unlink'] as const) server?.watcher.off(event, changed)
       await builds
       await router.closeServer!()
-      assets.clear()
+      generations.clear()
       fs.rmSync(path.join(config.root, '.nasti/start/dev', session), { recursive: true, force: true })
     },
   }

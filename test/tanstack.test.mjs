@@ -285,7 +285,7 @@ test('native Start base paths, API routes and compiler isolation', { skip: !supp
   }
 })
 
-test('Start requires both Redact context and hydration features', { skip: !supported }, async (t) => {
+test('Start requires Redact context, hydration and class component features', { skip: !supported }, async (t) => {
   const root = fixture(t, 'react')
   const resolve = (options) => resolveConfig({
     ...config(root, 'react'), plugins: [tanstackStart(), redact(options)],
@@ -302,15 +302,134 @@ test('Start requires both Redact context and hydration features', { skip: !suppo
     { preset: 'nano', features: { context: true } },
   ]) await assert.rejects(resolve(options), /TanStack Start requires the Redact hydration feature/)
   for (const options of [
+    { features: { context: true, hydration: true, classComponents: false } },
+    { preset: 'full', features: { classComponents: false } },
+    { preset: 'nano', features: { context: true, hydration: true } },
+    { preset: 'nano', features: { context: true, hydration: true, classComponents: false } },
+  ]) await assert.rejects(resolve(options), /TanStack Start requires the Redact classComponents feature/)
+  for (const options of [
     {},
     { preset: 'full' },
     { features: { context: true } },
-    { preset: 'nano', features: { context: true, hydration: true } },
+    { preset: 'nano', features: { context: true, hydration: true, classComponents: true } },
   ]) await resolve(options)
+})
+
+for (const framework of ['react', 'solid']) {
+  test(`Start ${framework} keeps the client consumer after user configuration`, { skip: !supported }, async (t) => {
+    const root = fixture(t, framework)
+    const resolved = await resolveConfig({
+      ...config(root, framework),
+      environments: { client: { consumer: 'server' } },
+    }, 'build')
+    assert.equal(resolved.environments.client.consumer, 'client')
+    assert.equal(resolved.environments.ssr.consumer, 'server')
+  })
+}
+
+test('Start dev prunes old assets while retaining previous and active generations', { skip: !supported, timeout: 60000 }, async (t) => {
+  const root = fixture(t, 'react')
+  const gate = Symbol.for(root)
+  let release
+  globalThis[gate] = new Promise((resolve) => { release = resolve })
+  const client = path.join(root, 'src/cache-client.ts')
+  fs.writeFileSync(client, 'console.log("GEN_0")')
+  fs.writeFileSync(path.join(root, 'src/cache-late.ts'), 'export const value = "LATE_OK"')
+  fs.writeFileSync(path.join(root, 'src/cache-server.ts'), `
+    import {tsrStartManifest} from 'tanstack-start-manifest:v';
+    export default {fetch(request) {
+      const asset = tsrStartManifest().routes.__root__.preloads[0];
+      if (new URL(request.url).pathname === '/stream') {
+        return new Response(new ReadableStream({async start(controller) {
+          controller.enqueue(new TextEncoder().encode('STREAM_READY\\n'));
+          await globalThis[Symbol.for(${JSON.stringify(root)})];
+          const {value} = await import('./cache-late');
+          controller.enqueue(new TextEncoder().encode(asset + value));
+          controller.close();
+        }}));
+      }
+      return new URL(request.url).pathname === '/'
+        ? new Response(asset) : new Response('Not Found', {status: 404});
+    }};
+  `)
+  const server = await createServer({
+    ...config(root, 'react'),
+    plugins: [tanstackStart({ entries: { client: 'src/cache-client.ts', server: 'src/cache-server.ts' } })],
+    server: { port: 0, host: '127.0.0.1' },
+  })
+  let sessionDir
+  t.after(async () => {
+    release()
+    delete globalThis[gate]
+    await server.close()
+    if (sessionDir) assert.equal(fs.existsSync(sessionDir), false, 'close removes the final generations')
+  })
+  await server.listen(0)
+  const url = `http://127.0.0.1:${server.config.server.port}`
+  const currentAsset = async () => {
+    const response = await fetch(url)
+    assert.equal(response.status, 200)
+    return response.text()
+  }
+  const assetUrls = [await currentAsset()]
+  const devDir = path.join(root, '.nasti/start/dev')
+  sessionDir = path.join(devDir, fs.readdirSync(devDir)[0])
+  const retained = () => fs.readdirSync(sessionDir)
+  const stream = await fetch(url + '/stream')
+  assert.equal(stream.status, 200)
+  const updateClient = async (code) => {
+    const changed = new Promise((resolve) => {
+      const onChange = (file) => {
+        if (file === client) { server.watcher.off('change', onChange); resolve() }
+      }
+      server.watcher.on('change', onChange)
+    })
+    fs.writeFileSync(client, code)
+    await changed
+  }
+  for (let version = 1; version <= 3; version++) {
+    await updateClient(`console.log("GEN_${version}")`)
+    assetUrls.push(await currentAsset())
+    assert.equal(new Set(assetUrls).size, assetUrls.length)
+    assert.equal(retained().length, Math.min(version + 1, 3))
+    for (const asset of [assetUrls[0], assetUrls[version - 1], assetUrls[version]]) {
+      assert.equal((await fetch(url + asset)).status, 200, 'active, previous and current assets remain available')
+    }
+  }
+  assert.equal((await fetch(url + assetUrls[1])).status, 404, 'inactive older assets are evicted')
+  release()
+  assert.equal(await stream.text(), 'STREAM_READY\n' + assetUrls[0] + 'LATE_OK')
+  await currentAsset()
+  assert.equal(retained().length, 2, 'completed requests release old generations')
+  assert.equal((await fetch(url + assetUrls[0])).status, 404)
+  for (const asset of assetUrls.slice(-2)) assert.equal((await fetch(url + asset)).status, 200)
+  const beforeFailure = retained().sort()
+  await updateClient('export const =')
+  const failed = await fetch(url)
+  assert.equal(failed.status, 500)
+  await failed.text()
+  assert.deepEqual(retained().sort(), beforeFailure, 'failed builds neither publish assets nor leave partial files')
+  await updateClient('console.log("GEN_4")')
+  const recovered = await currentAsset()
+  assert.notEqual(recovered, assetUrls[3])
+  assert.equal(retained().length, 2)
+  assert.equal((await fetch(url + assetUrls[3])).status, 200, 'the previous successful build survives a failed generation')
+  assert.equal((await fetch(url + assetUrls[2])).status, 404)
 })
 
 test('standalone Redact SSR shares its runtime across bare packages in dev and build', async (t) => {
   const root = fixture(t, 'react')
+  for (const [name, code] of [
+    ['fixture-react-wrapper', "export {createElement} from 'fixture-react-leaf'"],
+    ['fixture-react-leaf', "export {createElement} from 'react'"],
+  ]) {
+    const directory = path.join(root, 'node_modules', name)
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      name, type: 'module', exports: './index.js',
+    }))
+    fs.writeFileSync(path.join(directory, 'index.js'), code)
+  }
   fs.writeFileSync(path.join(root, 'src/main.ts'), 'export {}')
   fs.writeFileSync(path.join(root, 'src/ssr.js'), `
     import {createElement, useSyncExternalStore as reactStore} from 'react';
@@ -322,24 +441,33 @@ test('standalone Redact SSR shares its runtime across bare packages in dev and b
     import * as redactJsx from '@tanstack/redact/jsx-runtime';
     import * as redactServer from '@tanstack/redact/server';
     import * as redactScheduler from '@tanstack/redact/scheduler';
+    import {createElement as dependencyElement} from 'fixture-react-wrapper';
+    import {useRouter} from '@tanstack/react-router';
     export const sameRuntime = [
       createElement === redact.createElement, jsx === redactJsx.jsx,
       renderToString === redactServer.renderToString, unstable_now === redactScheduler.unstable_now,
       useSyncExternalStore === redact.useSyncExternalStore, reactStore === useSyncExternalStore,
+      dependencyElement === redact.createElement,
     ];
     export const html = renderToString(createElement('p', null, 'REDACT_SSR_OK'));
+    function RouterProbe() {
+      return createElement('p', null, useRouter({warn: false}) === null ? 'ROUTER_SSR_OK' : 'WRONG_CONTEXT');
+    }
+    export const routerHtml = renderToString(createElement(RouterProbe));
   `)
   const settings = {
     root, framework: 'react', logLevel: 'silent', plugins: [redact()],
+    build: quietBuild,
     resolve: { noExternal: ['existing-inline'] },
     environments: { client: { buildEnabled: false }, ssr: { entry: 'src/ssr.js' } },
   }
   const server = await createServer(settings)
   t.after(() => server.close())
-  assert.ok(server.config.environments.ssr.resolve.noExternal.includes('existing-inline'))
+  assert.equal(server.config.environments.ssr.resolve.noExternal, true)
   const check = (module) => {
-    assert.deepEqual([...module.sameRuntime], Array(6).fill(true))
+    assert.deepEqual([...module.sameRuntime], Array(7).fill(true))
     assert.equal(module.html, '<p>REDACT_SSR_OK</p>')
+    assert.equal(module.routerHtml, '<p>ROUTER_SSR_OK</p>')
   }
   check(await server.ssrLoadModule('/src/ssr.js'))
   const result = await build(settings)
@@ -347,7 +475,7 @@ test('standalone Redact SSR shares its runtime across bare packages in dev and b
   check(await import(pathToFileURL(path.join(root, 'dist/ssr', entry.fileName)).href))
 })
 
-test('Redact preserves SSR inline settings and excludes RSC environments', async (t) => {
+test('Redact inlines SSR dependencies and excludes RSC environments', async (t) => {
   const root = fixture(t, 'react')
   const resolved = await resolveConfig({
     root, framework: 'react', logLevel: 'silent', plugins: [redact({ preset: 'nano' })],
@@ -359,10 +487,8 @@ test('Redact preserves SSR inline settings and excludes RSC environments', async
     },
   }, 'build')
   const { ssr, worker, rsc, flight } = resolved.environments
-  assert.ok(ssr.resolve.noExternal.includes('existing-inline'))
-  for (const name of ['react', 'react-dom', 'scheduler', 'use-sync-external-store', '@tanstack/redact']) {
-    assert.ok(ssr.resolve.noExternal.includes(name), `${name} must reach the SSR resolver`)
-  }
+  assert.equal(ssr.resolve.noExternal, true)
+  assert.deepEqual(resolved.environments.client.resolve.noExternal, [])
   assert.deepEqual(ssr.resolve.conditions, ['node', 'import'])
   assert.equal(worker.resolve.noExternal, true)
   assert.deepEqual(rsc.resolve.noExternal, ['rsc-inline'])
