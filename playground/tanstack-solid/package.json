@@ -1,0 +1,25 @@
+{
+  "name": "playground-tanstack-solid",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti",
+    "build": "nasti build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nasti-toolchain/tanstack-shared": "workspace:*",
+    "@tanstack/solid-router": "1.170.43",
+    "@tanstack/solid-start": "1.169.4",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*",
+    "@tanstack/router-generator": "1.167.46",
+    "@tanstack/start-plugin-core": "1.171.55",
+    "@babel/core": "^7.29.7",
+    "babel-preset-solid": "1.9.16",
+    "solid-refresh": "0.7.8",
+    "typescript": "^6.0.3"
+  }
+}

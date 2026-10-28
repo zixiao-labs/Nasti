@@ -231,6 +231,8 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
     { timeout: 10000 }, async (t) => {
       const { server, dep } = await fixture(t, api)
       await server.ssrLoadModule('/entry.js')
+      const previous = server.watcher.files.get(path.resolve(dep))
+      assert.ok(previous, 'the old watch generation must have a file snapshot')
       const events = []
       server.watcher.on('all', (event, file) => {
         if (path.resolve(file) === dep) events.push(event)
@@ -240,6 +242,12 @@ for (const [format, api] of [['esm', esm], ['cjs', cjs]]) {
       assert.equal(server.watcher._pendingUnlinks.has(dep), false,
         'unwatch must discard the old atomic generation')
       server.watcher.add(dep)
+      // Model an old native stat callback finishing before the asynchronous
+      // re-add scan. This ordering must be safe regardless of OS event timing.
+      assert.equal(server.watcher.files.has(path.resolve(dep)), false)
+      server.watcher.emitWithAll('change', [dep, previous.stats])
+      assert.equal(server.watcher.files.has(path.resolve(dep)), false,
+        'an old native change must not seed the new watch snapshot')
       const deadline = Date.now() + 5000
       while (!Object.entries(server.watcher.getWatched()).some(([directory, files]) =>
         path.resolve(directory) === path.dirname(dep) && files.includes(path.basename(dep)))) {

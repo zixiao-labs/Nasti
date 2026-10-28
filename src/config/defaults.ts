@@ -82,6 +82,7 @@ export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | '
   target: 'web',
   framework: 'auto',
   react: defaultReact,
+  solid: { hydratable: true },
   resolve: defaultResolve,
   server: defaultServer,
   build: defaultBuild,

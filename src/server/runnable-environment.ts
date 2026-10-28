@@ -275,6 +275,7 @@ export class NastiModuleRunner {
       const result = transformCode(cleanId, code, {
         sourcemap: false,
         target: this.environment.options.build.target,
+        preserveJsx: this.config.framework === 'solid',
         jsxRuntime: 'automatic',
         jsxImportSource: 'vue',
       })

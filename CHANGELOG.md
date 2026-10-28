@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.8.0
+
+### Native TanStack and Solid integrations
+
+- Add built-in `tanstackStart()` for React and Solid using Nasti's native
+  client/SSR Rolldown pipelines, not a Vite environment driver. Provide default
+  entries, compiler transforms, hydration/CSS manifests, server-function lookup,
+  streaming development HTTP and SSR-aware `nasti preview`.
+- Pin and check the private upstream compiler host contract at
+  `@tanstack/start-plugin-core@1.171.55` and its router compiler at `1.168.48`.
+  The tested Start runtime baseline is `1.169.4`; this optional integration
+  requires Node >=22.12 without raising the main package's existing engine.
+- Add `tanstackRouter()` using the official file-route generator, with per-app
+  state and native add/change/unlink watching. Support React/Solid targets and
+  manual lazy routes; automatic component extraction/code splitting is not included.
+- Add `framework: 'solid'`, dependency-based auto-detection, `solid` export
+  conditions, DOM/SSR JSX generation and Solid Refresh via Nasti's HMR protocol.
+- Add opt-in `redact()` with upstream preset/feature resolution, React 19 and
+  Redact 0.2.1 coverage. Ordinary SSR and browser graphs use consistent Redact
+  semantics; RSC/react-server graphs retain React. Standalone Redact SPAs use
+  Nasti's native bundled-dev engine to preserve runtime identity.
+- Remove route-only server properties from the client graph with upstream AST/DCE,
+  reject live `.server`/server-only imports and client server-function resolver
+  access, and omit original client source-map contents that may contain server
+  function bodies. Dev and preview expose only public/client assets.
+- Give `configureServer` a pre-internal-middleware phase and add `closeServer`
+  cleanup, retaining returned callbacks as post-internal hooks.
+- Add private React/Solid Start playgrounds and a shared workspace source package,
+  explicit app-local dependencies, native build/typecheck CI and a Chromium
+  hydration/RPC/navigation/HMR gate. No framework tools become mandatory runtime
+  dependencies of ordinary Nasti applications.
+
+Local validation on Node 24: all 184 tests passed; all 14 native integration tests
+also passed with browser assertions enabled using system Chrome through Playwright.
+Root/React/Solid/WebGPU typechecks and the three playground builds passed. Node
+20/22 and the Linux Chromium job remain CI checks, not locally verified results.
+
+Start development is a correctness-first, whole-application native rebuild with
+full-page refresh, not state-preserving Start HMR. The integration does not yet
+implement RSC, prerender/SPA mode, automatic route splitting, advanced
+`hydrateWhen` compilation, custom compiler/serialization adapter plugins or
+third-party deployment plugins. See the playground guide for exact boundaries.
+
 ## 2.7.0
 
 ### WebGPU and Vercel Labs vgpu

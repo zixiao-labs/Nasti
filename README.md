@@ -23,6 +23,8 @@
 - **Vite 插件兼容** - 直接使用现有 Vite/Rollup 插件（resolveId / load / transform）
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR；测试版支持 Vue 3.6 Vapor Mode（可选依赖 `@vue/compiler-sfc`）
+- **内置 Solid 支持** - 原生 DOM / SSR JSX 编译、`solid` 条件导出与 Solid Refresh
+- **原生 TanStack** - Router 文件路由、React / Solid Start 双环境构建与 HTTP，以及可选 Redact；不转调 Vite
 - **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
 - **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
 - **Monaco Editor 集成** - 内置 `monacoEditorPlugin`，预打包 Web Worker，修复 HMR 期间的 EMFILE
@@ -66,7 +68,7 @@ my-project/
 import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
-  // 框架: 'react' | 'vue' | 'auto'（自动检测）
+  // 框架: 'react' | 'vue' | 'solid' | 'auto'（自动检测）
   framework: 'react',
 
   server: {
@@ -314,6 +316,51 @@ const transformPlugin: NastiPlugin = {
 metadata 会转发给 Rolldown；开发管线对 `resolveId`、`load`、`transform` 应用
 `order` 和过滤条件。`renderChunk` 是构建期钩子。`sequential` 仅作为兼容 metadata
 接受：Rolldown 和 Nasti 的开发钩子均按顺序执行。
+
+## TanStack Start / Router / Redact 与 Solid（2.8）
+
+这些适配随 Nasti 主包提供，按需启用；**不启动 Vite，不使用 Vite driver**。
+框架运行时和可选编译器必须安装在消费它们的应用 workspace，不能依赖 monorepo
+根目录的提升。示例和完整边界见
+[`playground/tanstack-react/README.md`](playground/tanstack-react/README.md)。
+
+```ts
+import { defineConfig, tanstackStart, redact } from '@nasti-toolchain/nasti'
+
+export default defineConfig({
+  framework: 'react',
+  plugins: [tanstackStart(), redact()], // 不使用 Redact 时省略 redact()
+})
+```
+
+Start 的当前验证基线为 React / Solid Start `1.169.4`，需要 Node `>=22.12`，
+以及应用内显式安装的 `@tanstack/start-plugin-core@1.171.55`、
+`@tanstack/router-generator@1.167.46`。原生适配复用上游的**私有编译器 host**，
+而非其 Vite 插件；编译器版本不匹配会立即报错，升级前须重跑集成测试。
+默认查找 `src/router.ts[x]` 的 `getRouter()`、`src/routes/`，
+自动提供 client / server / start 默认入口，不需要 `index.html`。
+
+`nasti build` 输出 `dist/client/` 和 `dist/server/server.mjs`；
+后者导出 `{ fetch(request) }`。`nasti preview` 自动识别该结构并提供 SSR，
+只对外服务 client 文件。开发模式也走完整的原生双环境构建，源码或 linked
+workspace 变化后刷新页面，**不保留组件状态**。
+当前不包括 Start RSC、自动 route code splitting、prerender / SPA mode、
+第三方部署插件或 Vite 插件的框架专用钩子；手工 lazy routes 可以照常使用。
+
+独立 Router SPA 使用 `plugins: [tanstackRouter()]`，保留自己的 `index.html` /
+客户端入口，不要与 `tanstackStart()` 重复注册。Solid 应用改为
+`framework: 'solid'`，Start 使用 `tanstackStart({ framework: 'solid' })`，
+并在应用内安装 `solid-js`、`@babel/core`、`babel-preset-solid`、`solid-refresh`。
+普通 Solid SPA 使用原生模块服务与 Solid Refresh，服务端 JSX 则编译为 SSR。
+
+Redact 适配目前支持 React 19、`@tanstack/redact@0.2.1`，转发 `preset` 和
+`features`。与官方 Start 集成一致，**普通 SSR 与客户端使用同一套 Redact
+语义**，RSC / `react-server` 环境仍保留真实 React；不能用于 Solid。
+独立 Redact SPA 自动使用 Nasti 的原生 bundled-dev 引擎，避免独立预打包的
+React 子路径产生多份 dispatcher。普通 SSR 依赖会内联，确保第三方包内部的 React
+导入也由 Redact 解析。Start 必须保留 `hydration`、`context` 和 `classComponents`
+features，`nano` preset 下需显式开启。
+Redact 同步渲染的调度取舍与兼容性边界仍由上游定义，不等同于 React 全量替代保证。
 
 ## React pipeline
 
@@ -779,7 +826,8 @@ runner 根据图版本在下一次 `ssrLoadModule` 前丢弃旧求值缓存；�
 失效 API 也遵循同一规则。旧的进行中转换不能覆盖新缓存或依赖边。当前采用保守全量失效，
 可能重新执行无关模块；client HMR 仍按原有边界运行。外部依赖的 Node 原生模块缓存
 不由 Nasti 清理，需要热更新的源码应交给 runner 内联并处于 watcher 监听范围。
-这些核心能力不代表完整 TanStack Start compiler、HTTP、hydration 或浏览器适配已验收。
+这些底层能力本身不代表完整框架适配；2.8 的内置 Start 支持范围与验收见上文
+TanStack 章节及对应 playground。
 
 开发 watcher 对原生事件命中的已监听文件执行一次尾随 inode/size/mtime 检查，
 补足快速保存或 SSR 读取后即时编辑被 Chokidar 节流丢弃的 `change`。这不是定时轮询，

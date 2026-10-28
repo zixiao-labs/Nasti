@@ -6,6 +6,7 @@ export interface TransformOptions {
   jsx?: boolean
   jsxRuntime?: 'automatic' | 'classic'
   jsxImportSource?: string
+  preserveJsx?: boolean
   typescript?: boolean
   sourcemap?: boolean
   reactRefresh?: boolean
@@ -40,6 +41,13 @@ export function shouldTransform(id: string): boolean {
   )
 }
 
+/**
+ * Transpile source with OXC, selecting TypeScript and JSX handling by filename.
+ * `preserveJsx` leaves JSX for a later compiler; sourcemaps default to enabled.
+ * @returns An object with transformed code and a JSON source map (null if absent).
+ * @throws Reported diagnostics become an error with the filename and messages;
+ * other OXC errors propagate unchanged.
+ */
 export function transformCode(
   filename: string,
   code: string,
@@ -50,7 +58,7 @@ export function transformCode(
 
   const result = transformSync(filename, code, {
     typescript: isTS ? {} : undefined,
-    jsx: isJSX || /\.tsx$/.test(filename)
+    jsx: options.preserveJsx ? 'preserve' : isJSX || /\.tsx$/.test(filename)
       ? {
           runtime: options.jsxRuntime ?? 'automatic',
           importSource: options.jsxImportSource ?? 'react',

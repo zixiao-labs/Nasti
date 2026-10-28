@@ -110,14 +110,18 @@ class DevWatcher extends FSWatcher {
     // an event nor repopulate the metadata removed by unwatch.
     if (typeof file === 'string' && isUnwatched(file, this.unwatched)) return
     if ((event === 'add' || event === 'change') && stats?.isFile()) {
-      // Any stat-confirmed change (native or recovered) satisfies the atomic
-      // save pair. A delayed old unlink must not follow it. This adapter is
-      // deliberately pinned to Chokidar 5.0.0's pending-unlink state.
-      if (event === 'change') this._pendingUnlinks.delete(path.normalize(file))
       // Chokidar's ignored callback uses forward slashes on Windows, but its
       // public events and atomic-state keys use platform-normalized paths.
       const key = path.resolve(file)
       const previous = this.files.get(key)
+      // add() re-enables events before its asynchronous scan arms the snapshot.
+      // A late native change from the old watch must not publish or seed state
+      // in that gap. Only the scan or a genuine add can arm a new file.
+      if (event === 'change' && !previous) return
+      // Any stat-confirmed change (native or recovered) satisfies the atomic
+      // save pair. A delayed old unlink must not follow it. This adapter is
+      // deliberately pinned to Chokidar 5.0.0's pending-unlink state.
+      if (event === 'change') this._pendingUnlinks.delete(path.normalize(file))
       // Native and trailing events use the same snapshot. Access-time-only
       // notifications must not invalidate SSR or cause a read/reload loop.
       if (event === 'change' && previous && sameFile(previous.stats, stats)) return

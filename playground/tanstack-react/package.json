@@ -1,0 +1,27 @@
+{
+  "name": "playground-tanstack-react",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti",
+    "build": "nasti build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nasti-toolchain/tanstack-shared": "workspace:*",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.4",
+    "@tanstack/redact": "0.2.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*",
+    "@tanstack/router-generator": "1.167.46",
+    "@tanstack/start-plugin-core": "1.171.55",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "playwright": "^1.58.2",
+    "typescript": "^6.0.3"
+  }
+}

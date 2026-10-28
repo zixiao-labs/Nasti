@@ -474,6 +474,15 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     },
 
     async close() {
+      let pluginCloseError: unknown
+      for (const plugin of [...config.plugins].reverse()) {
+        try {
+          await plugin.closeServer?.()
+        } catch (error) {
+          pluginCloseError ??= error
+          logCloseError(`plugin "${plugin.name}"`, error)
+        }
+      }
       for (const runner of serverRunners.values()) {
         const initialized = await runner.catch(() => null)
         initialized?.invalidateAll()
@@ -504,6 +513,7 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       if (environmentCloseFailed) {
         throw firstEnvironmentCloseError
       }
+      if (pluginCloseError) throw pluginCloseError
     },
   }
 
@@ -535,15 +545,9 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     throw error
   }
 
-  // 外部环境驱动中间件优先于 Nasti 的转换和静态文件服务。
-  app.use(transformMiddleware(transformContexts.get('client')!))
-
-  const publicDir = path.resolve(config.root, 'public')
-  app.use(sirv(publicDir, { dev: true, etag: true }))
-  app.use(sirv(config.root, { dev: true, etag: true }))
-
-  // 执行插件的 configureServer 钩子（此时 server 已完全初始化，
-  // 插件可安全访问 server.middlewares / server.watcher 等）
+  // Vite-compatible pre phase: server is initialized, but native source/static
+  // handlers have not been registered. Frameworks can own HTTP without mutating
+  // Connect's private stack or exposing server sources through the static root.
   const postMiddlewares: Array<() => void> = []
   for (const plugin of allPlugins) {
     if (plugin.configureServer) {
@@ -553,6 +557,12 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       }
     }
   }
+  // 外部环境驱动与插件 pre 中间件优先于 Nasti 的转换和静态文件服务。
+  app.use(transformMiddleware(transformContexts.get('client')!))
+  const publicDir = path.resolve(config.root, 'public')
+  app.use(sirv(publicDir, { dev: true, etag: true }))
+  app.use(sirv(config.root, { dev: true, etag: true }))
+
   // 插件返回的函数会在内置中间件之后执行
   for (const run of postMiddlewares) run()
 

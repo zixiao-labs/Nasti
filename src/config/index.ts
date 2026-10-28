@@ -65,12 +65,13 @@ export async function loadConfigFromFile(root: string): Promise<NastiConfig> {
 }
 
 /**
- * 将 framework:auto 收敛为具体框架。
+ * Detect the framework from the project's src directory and package.json.
  *
- * 优先使用源码中的 .vue 文件消除同时安装 React/Vue 时的歧义，其次读取
- * package.json dependencies，最后回退 React 以保持 1.x 默认行为。
+ * A .vue file at most five directories below src takes priority. Across dependency
+ * fields, React takes priority over Vue; Solid is selected only when neither is
+ * declared. Otherwise, missing, unreadable, or invalid metadata falls back to React.
  */
-export function detectFramework(root: string): 'react' | 'vue' {
+export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
   const sourceRoot = path.resolve(root, 'src')
   if (containsVueFile(sourceRoot)) return 'vue'
 
@@ -86,6 +87,7 @@ export function detectFramework(root: string): 'react' | 'vue' {
       }
       const hasVue = 'vue' in dependencies || '@vue/runtime-dom' in dependencies
       const hasReact = 'react' in dependencies || 'react-dom' in dependencies
+      if ('solid-js' in dependencies && !hasReact && !hasVue) return 'solid'
       if (hasVue && !hasReact) return 'vue'
       if (hasReact) return 'react'
       if (hasVue) return 'vue'
@@ -201,7 +203,7 @@ export async function resolveConfig(
     framework:
       (merged.framework ?? defaults.framework) === 'auto'
         ? detectFramework(root)
-        : (merged.framework as 'react' | 'vue'),
+        : (merged.framework as 'react' | 'vue' | 'solid'),
     react: {
       include: merged.react?.include ?? defaultReact.include,
       exclude: merged.react?.exclude ?? defaultReact.exclude,
@@ -212,6 +214,7 @@ export async function resolveConfig(
           ? {}
           : (merged.react?.compiler ?? defaultReact.compiler),
     },
+    solid: { hydratable: merged.solid?.hydratable ?? true },
     command,
     resolve: {
       // tsconfig paths 优先级最低：tsconfig < defaults < user config
@@ -237,6 +240,11 @@ export async function resolveConfig(
     experimental: {
       bundledDev: merged.experimental?.bundledDev ?? defaults.experimental.bundledDev,
     },
+  }
+  if (resolved.framework === 'solid') {
+    // Solid libraries publish uncompiled JSX under the `solid` condition.
+    // Their default JS exports are DOM-only and cannot be used for SSR.
+    resolved.resolve.conditions = ['solid', mode, ...resolved.resolve.conditions]
   }
 
   // ── Environment API：解析 environments map（默认 client + ssr）──────────

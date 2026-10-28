@@ -1,0 +1,9 @@
+{
+  "name": "@nasti-toolchain/tanstack-shared",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/secret.server.ts"
+  }
+}

@@ -10,6 +10,13 @@ export { startElectronDev, electronRendererDevPath } from './server/electron-dev
 export { electronPlugin } from './plugins/electron.js'
 export { monacoEditorPlugin } from './plugins/monaco-editor.js'
 export { webgpuPlugin } from './plugins/webgpu.js'
+export { tanstackRouter } from './plugins/tanstack-router.js'
+export type { TanStackRouterOptions } from './plugins/tanstack-router.js'
+export { tanstackStart } from './plugins/tanstack-start.js'
+export type { TanStackStartOptions } from './plugins/tanstack-start.js'
+export { createTanStackStartPreview } from './server/start-preview.js'
+export { redact } from './plugins/redact.js'
+export type { RedactOptions } from './plugins/redact.js'
 export { rsc } from './plugins/rsc.js'
 export type {
   RscPluginOptions,

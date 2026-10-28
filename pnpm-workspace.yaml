@@ -7,9 +7,13 @@ allowBuilds:
   '@vgpu/adapter-node': false
   webgpu: false
 
-# Nasti 的两个 peer（oxc-transform-react / react-server-dom-webpack）都是
+# Nasti 的框架/编译器 peers 都是
 # optional —— 由下游按需安装。pnpm 的 autoInstallPeers 默认会把它们装进来，
 # 其中 react-server-dom-webpack 会连带整个 webpack + esbuild 树，而
 # src/plugins/rsc.ts 只是生成 import 语句、测试里也按 external 处理，
 # 根本用不到实体包。故关闭自动安装。
 autoInstallPeers: false
+
+minimumReleaseAgeExclude:
+  # Explicit integration baseline; do not exempt the package or scope generally.
+  - '@tanstack/redact@0.2.1'
