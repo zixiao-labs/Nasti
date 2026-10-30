@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.8.1
 
 ### Fix npm installation with optional React Compiler peers
 
