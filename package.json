@@ -60,7 +60,8 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "test": "pnpm build && pnpm test:run",
-    "test:run": "node --test"
+    "test:run": "node --test",
+    "test:install": "pnpm build && node scripts/npm-install-smoke.mjs"
   },
   "dependencies": {
     "cac": "7.0.0",
@@ -101,7 +102,7 @@
     "@tanstack/router-generator": "1.167.46",
     "@tanstack/start-plugin-core": "1.171.55",
     "babel-preset-solid": "^1.9.16",
-    "oxc-transform-react": "^0.153.0",
+    "oxc-transform-react": "^0.152.0 || ^0.153.0",
     "react-server-dom-webpack": "^19.0.0",
     "solid-refresh": "^0.7.8"
   },

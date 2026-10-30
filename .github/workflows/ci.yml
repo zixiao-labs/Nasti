@@ -98,6 +98,28 @@ jobs:
       - name: Test (Node ${{ matrix.node-version }})
         run: node --test
 
+  npm-install:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        npm-version: [10, 11]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Setup npm ${{ matrix.npm-version }}
+        run: npm install --global npm@${{ matrix.npm-version }}
+      - name: Verify packed-package installation and React Compiler compatibility
+        run: node scripts/npm-install-smoke.mjs
+
   tanstack-browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
