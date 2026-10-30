@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fix npm installation with optional React Compiler peers
+
+- Accept both `oxc-transform-react` 0.152.x and 0.153.x as optional peers.
+  Nasti's compiler adapter supports both; the compiler is independent of the
+  regular `oxc-transform` / `oxc-parser` pipeline, which remains on 0.153.x.
+  This avoids npm's `ERESOLVE` when it explores Redact's optional
+  `vinext` → `@vitejs/plugin-react` chain, whose compiler peer requires 0.152.x,
+  even in applications that do not enable Redact or React Compiler.
+- Keep compiler installation opt-in and peer validation enabled. Add packed-package
+  npm 10/11 smoke checks for plain React and both supported compiler versions,
+  including production builds and development transforms outside the workspace.
+
 ## 2.8.0
 
 ### Native TanStack and Solid integrations
