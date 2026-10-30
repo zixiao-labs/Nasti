@@ -13,7 +13,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8'))
 const write = (dir, name, content) => fs.writeFileSync(path.join(dir, name), content)
 
 function npm(args, cwd) {
-  return execFileSync('npm', [...args, '--loglevel=error'], {
+  // Windows invokes npm.cmd through a shell, which joins args without quoting.
+  const npmArgs = process.platform === 'win32'
+    ? args.map((arg) => arg.includes(' ') ? `"${arg}"` : arg)
+    : args
+  return execFileSync('npm', [...npmArgs, '--loglevel=error'], {
     cwd, encoding: 'utf8', timeout: 180000,
     shell: process.platform === 'win32',
   })
@@ -79,6 +83,10 @@ try {
       }
       const result = await build(options)
       assert.ok(result.output.some((item) => item.type === 'chunk'))
+      const bundledCode = result.output.filter((item) => item.type === 'chunk').map((item) => item.code).join('\\n')
+      // Compiler-generated memo-cache slots survive bundling with minify: false.
+      const compilerCache = /\\$\\[\\d+\\]/
+      assert.equal(compilerCache.test(bundledCode), ${!!compiler}, 'production Compiler memo-cache output')
       assert.ok(fs.existsSync('dist/index.html'))
       const server = await createServer(options)
       try {
@@ -86,8 +94,7 @@ try {
         assert.ok(transformed?.code)
         assert.match(transformed.code, /react\\/jsx-dev-runtime|react\\/jsx-runtime/)
         assert.doesNotMatch(transformed.code, /: \\{ name: string \\}/)
-        if (${!!compiler}) assert.match(transformed.code, /react\\/compiler-runtime/)
-        else assert.doesNotMatch(transformed.code, /react\\/compiler-runtime/)
+        assert.equal(compilerCache.test(transformed.code), ${!!compiler}, 'development Compiler memo-cache output')
       } finally {
         await server.close()
       }
