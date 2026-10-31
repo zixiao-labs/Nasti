@@ -833,6 +833,9 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
   let result
   try {
     result = await bundle.generate({ format: 'esm', exports: 'named', codeSplitting: false })
+    for (const file of await bundle.watchFiles) {
+      if (path.isAbsolute(file)) watchFiles.add(file)
+    }
   } finally {
     await bundle.close()
     ctx.pluginContainer.setModuleWatchFiles(entryFile, [...watchFiles])

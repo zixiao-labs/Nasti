@@ -136,6 +136,55 @@ for (const [framework, useRedact] of [['react', false], ['react', true], ['solid
   })
 }
 
+test('Start tracks loaded client dependency inputs without tracking server files', { skip: !supported, timeout: 30000 }, async (t) => {
+  const root = fixture(t, 'react')
+  const shared = fs.realpathSync(path.join(root, 'node_modules/@nasti-toolchain/tanstack-shared'))
+  const entry = path.join(shared, 'src/index.ts')
+  const internal = path.join(shared, 'src/internal.ts')
+  const serverFile = path.join(shared, 'src/secret.server.ts')
+  const extra = path.join(shared, 'src/extra.txt')
+  fs.writeFileSync(entry, "export { sharedLabel } from './internal'\n")
+  fs.writeFileSync(internal, "export const sharedLabel = 'Initial label'\n")
+  fs.writeFileSync(extra, 'plugin input')
+  let onUpdate
+  const settings = config(root, 'react')
+  settings.plugins.push({
+    name: 'fixture:watch-input',
+    transform(code, id) {
+      if (id === internal) this.addWatchFile(extra)
+    },
+    handleHotUpdateApp(context) { onUpdate?.(context) },
+  })
+  const server = await createServer({ ...settings, server: { port: 0, host: '127.0.0.1' } })
+  t.after(() => server.close())
+  await server.listen(0)
+  const url = `http://127.0.0.1:${server.config.server.port}`
+  assert.equal((await fetch(url)).status, 200)
+  const moduleUrl = '/@modules/@nasti-toolchain/tanstack-shared'
+  assert.match((await server.transformRequest(moduleUrl)).code, /Initial label/)
+  const mod = server.moduleGraph.getModuleByUrl(moduleUrl)
+  const container = server.environments.client.pluginContainer
+  assert.ok(container.getModulesByWatchFile(internal).has(mod))
+  assert.ok(container.getModulesByWatchFile(extra).has(mod))
+  assert.equal(container.getModulesByWatchFile(serverFile).size, 0)
+
+  const beforeServerEdit = mod.invalidationVersion
+  server.watcher.emit('change', serverFile)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(mod.invalidationVersion, beforeServerEdit, 'server-only edits do not invalidate the client entry')
+
+  fs.writeFileSync(internal, "export const sharedLabel = 'Updated label'\n")
+  const update = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('client input did not trigger HMR')), 10000)
+    onUpdate = (context) => { clearTimeout(timer); resolve(context) }
+  })
+  server.watcher.emit('change', internal)
+  const context = await update
+  assert.ok(context.environments.client.modules.includes(mod))
+  assert.ok(mod.invalidationVersion > beforeServerEdit)
+  assert.match((await server.transformRequest(moduleUrl)).code, /Updated label/)
+})
+
 test('Start filters only known non-RSC client directives', () => {
   const plugin = tanstackStart()
   const warning = (id, directive = 'use client') => ({
