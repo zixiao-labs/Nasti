@@ -13,6 +13,7 @@ export type RolldownHookName =
   | 'renderChunk'
   | 'augmentChunkHash'
   | 'generateBundle'
+  | 'onLog'
 
 export interface PluginHook {
   handler: (...args: any[]) => any

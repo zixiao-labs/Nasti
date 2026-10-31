@@ -109,6 +109,7 @@ export function warnLargeChunks(
   config: ResolvedConfig,
   logger: Logger,
 ): void {
+  if (config.build.minify === false) return
   const limit = config.build.chunkSizeWarningLimit
   const large = output.filter(
     (f) => f.type === 'chunk' && byteLength(f.code) / 1000 > limit,

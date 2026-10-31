@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Reduce development log noise and preserve Start state
+
+- Route Rolldown diagnostics through Nasti's logger without losing user handlers
+  or fatal escalation. Filter only redundant non-RSC TanStack client directives.
+  Keep gzip/output tables and minified-size warnings out of Start dev rebuilds.
+- Serve Start's isolated client graph with React/Solid Refresh, including manual
+  lazy routes. Preserve state for compatible component and server-function edits;
+  refresh loader data on server-only changes. Retain reload fallbacks for route
+  topology/env changes and incompatible boundaries. Server compilation remains a
+  serialized full build, not a fully incremental SSR evaluator.
+- Restore visible connection logs and add timed Refresh lifecycle logs that await
+  actual update application. Ignore unrelated documentation changes and expose
+  debug-only invalidation/404 diagnostics. Configure 404 components in examples.
+
 ## 2.8.1
 
 ### Fix npm installation with optional React Compiler peers

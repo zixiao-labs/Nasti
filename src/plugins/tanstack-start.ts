@@ -7,12 +7,19 @@ import { isBuiltin } from 'node:module'
 import type {
   DevServer, EnvironmentBuildOutput, EnvironmentInstance, NastiPlugin, ResolvedConfig,
 } from '../types.js'
+import type { NastiEnvironment } from '../core/environment.js'
 import { importStartCompiler, resolveProjectImport } from '../core/project-import.js'
 import { setupPluginApi } from '../core/plugin-api.js'
 import { detectFramework } from '../config/index.js'
 import { tanstackRouter, type TanStackRouterOptions } from './tanstack-router.js'
 import { dispatchFetch } from '../server/fetch-handler.js'
+import { createDebugger } from '../core/debug.js'
+import { REACT_REFRESH_GLOBAL_PREAMBLE } from '../server/middleware.js'
+import { removeTimestampQuery } from '../core/url.js'
+import { START_REFRESH_RUNTIME } from './solid-start-refresh.js'
 import sirv from 'sirv'
+
+const debug = createDebugger('nasti:start')
 
 export interface TanStackStartOptions {
   framework?: 'react' | 'solid'
@@ -39,13 +46,15 @@ interface ServerFunction {
   isClientReferenced?: boolean
 }
 interface Compiler {
-  compile(input: { code: string; id: string }): Promise<{ code: string; map?: unknown } | null>
+  compile(input: { code: string; id: string; detectedKinds: Set<string> }): Promise<{ code: string; map?: unknown } | null>
   ingestModule(input: { code: string; id: string }): unknown
 }
 interface CompilerHost {
   createStartCompiler(options: Record<string, unknown>): Compiler
   mergeServerFnsById(current: Record<string, ServerFunction>, next: Record<string, ServerFunction>): void
   compileRoute(options: Record<string, unknown>): { code: string } | null
+  routeHmrPlugins(options: { targetFramework: 'react' | 'solid' }): unknown[] | undefined
+  detectKindsInCode(code: string, env: 'client' | 'server'): Set<string>
 }
 interface FetchEntry {
   fetch(request: Request): Response | Promise<Response>
@@ -59,7 +68,8 @@ interface DevBuild {
 
 /**
  * Native Start host. Compiler → OXC/Solid → Rolldown, never the Vite plugin.
- * Development uses the same complete two-environment build, with full reloads.
+ * Development rebuilds the server/manifest pair and serves a compiled client
+ * module graph with React/Solid Refresh; route topology changes reload the page.
  * Creates route and entry files under the project root and .nasti/start;
  * production output uses client/ and server/ beneath the configured output root.
  * Relative source and entry paths resolve from the project root; srcDirectory defaults
@@ -90,6 +100,9 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
   let pending: Promise<DevBuild> | undefined
   let pendingGeneration = -1
   let builds = Promise.resolve()
+  let dependencies: Set<string> | undefined
+  let clientModules = new Set<string>()
+  let buildFailed = false
   const session = randomUUID()
   const generations = new Map<number, DevBuild>()
   const pruneGenerations = () => {
@@ -102,15 +115,50 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
       generations.delete(version)
     }
   }
-  const changed = (file: string) => {
+  const clientUrl = (file: string) => {
+    const relative = path.relative(config.root, file)
+    return !relative.startsWith('..') && !path.isAbsolute(relative)
+      ? '/' + slash(relative)
+      : '/@fs/' + slash(file).replace(/^\//, '')
+  }
+  const changed = (file: string, event: 'add' | 'change' | 'unlink') => {
     const normalized = slash(file)
     if (normalized.includes('/.nasti/') || normalized.includes('/node_modules/') ||
         normalized.includes('/.git/') ||
         normalized === slash(path.resolve(config.root, options.router?.generatedRouteTree ?? `${src}/routeTree.gen.ts`)) ||
         normalized.startsWith(slash(path.resolve(config.root, config.build.outDir)) + '/')) return
+    const routes = slash(path.resolve(config.root, options.router?.routesDirectory ?? `${src}/routes`))
+    const routeChanged = normalized.startsWith(routes + '/')
+    const envChanged = path.dirname(file) === config.root && /^\.env(?:\.|$)/.test(path.basename(file))
+    // New routes and env files are inputs even before they enter the module graph.
+    // After a failed build, keep accepting changes so new/missing imports can recover.
+    if (dependencies && !buildFailed && !dependencies.has(normalized) && !routeChanged && !envChanged) return
+    debug?.(`invalidate ${path.relative(config.root, file)} (${routeChanged ? 'route' : envChanged ? 'env' : buildFailed ? 'recovery' : 'dependency'})`)
     generation++
-    server?.ws.send({ type: 'full-reload' })
+    // Server-only edits are picked up by the next SSR/RPC request. Loaded client
+    // modules use core HMR; topology and environment changes still reload.
+    if (buildFailed || envChanged || (routeChanged && event !== 'change')) {
+      if (routeChanged && event !== 'change') server?.moduleGraph.invalidateAll()
+      server?.ws.send({ type: 'full-reload' })
+    } else if (server?.moduleGraph.getModuleByUrl('/.nasti/start/client.tsx')) {
+      const client = server.environments.client as NastiEnvironment
+      const affectsClient = client.moduleGraph.getModulesByFile(file)?.size ||
+        client.pluginContainer?.getModulesByWatchFile(file).size
+      if (!affectsClient) {
+        // Refresh loader data after a server-only edit without remounting the
+        // document. RPC requests and this rebuild share the same generation.
+        void Promise.resolve().then(currentBuild).then(() => {
+          server?.ws.send({ type: 'custom', event: 'nasti:start:server-update' })
+        }).catch((error: Error) => {
+          config.logger.error('[nasti:start] Server rebuild failed', { error })
+          server?.ws.send({ type: 'error', err: { message: error.message, stack: error.stack } })
+        })
+      }
+    }
   }
+  const added = (file: string) => changed(file, 'add')
+  const updated = (file: string) => changed(file, 'change')
+  const removed = (file: string) => changed(file, 'unlink')
   const currentBuild = () => {
     if (pending && pendingGeneration === generation) return pending
     const version = generation
@@ -136,7 +184,7 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
       }
       try {
         await setupPluginApi(buildConfig, buildConfig.plugins)
-        const result = await buildResolvedConfig(buildConfig)
+        const result = await buildResolvedConfig(buildConfig, 'dev')
         const entry = result.environmentResults?.ssr.entries?.server
         if (!entry) throw new Error('[nasti:start] Missing server build entry.')
         const mod = await import(pathToFileURL(path.join(dir, 'server', entry)).href)
@@ -149,10 +197,24 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
           assets: new Map(result.output.map((output) => [config.base + output.fileName, output])),
           requests: 0,
         }
+        dependencies = new Set(Object.values(result.environmentResults ?? {})
+          .flatMap((result) => result.watchFiles ?? [])
+          .filter((file) => path.isAbsolute(file))
+          .map((file) => slash(file)))
+        clientModules = new Set(result.output.flatMap((output) => output.moduleIds ?? [])
+          .filter((id) => path.isAbsolute(id.split('?')[0]))
+          .map((id) => {
+            const query = id.indexOf('?')
+            return query < 0 ? clientUrl(id) : clientUrl(id.slice(0, query)) + id.slice(query)
+          }))
+        server?.watcher.add([...dependencies].filter((file) =>
+          !file.includes('/.nasti/') && !file.includes('/node_modules/')))
+        buildFailed = false
         generations.set(version, build)
         pruneGenerations()
         return build
       } catch (error) {
+        buildFailed = true
         fs.rmSync(dir, { recursive: true, force: true })
         throw error
       }
@@ -166,6 +228,14 @@ export function tanstackStart(options: TanStackStartOptions = {}): NastiPlugin {
     name: 'nasti:tanstack-start',
     enforce: 'pre',
     post: ['nasti:resolve', 'nasti:solid'],
+    onLog(level, log) {
+      // Start owns an ordinary client/SSR pair, never an RSC graph. Only these
+      // upstream "use client" annotations are redundant; keep all other warnings.
+      const id = slash(log.id ?? log.loc?.file ?? '')
+      if (level === 'warn' && log.code === 'MODULE_LEVEL_DIRECTIVE' &&
+          log.message.includes('directive "use client"') &&
+          /\/node_modules\/@tanstack\/(?:react|solid)-(?:router|start-client)\//.test(id)) return false
+    },
     config(input, env) {
       const out = input.build?.outDir ?? 'dist'
       const target = options.framework ?? (input.framework && input.framework !== 'auto'
@@ -283,8 +353,13 @@ import { StartClient } from '${runtime}/client'; hydrateRoot(document, createEle
         : `import { hydrate } from 'solid-js/web'; import { StartClient, hydrateStart } from '${runtime}/client';
 hydrateStart().then(router => hydrate(() => <StartClient router={router} />, document));`
       fs.writeFileSync(path.join(directory, 'client.tsx'),
-        (config.command === 'serve' ? 'import "/@nasti/client";\n' : '') +
+        (config.command === 'serve' && config.server.hmr !== false
+          ? (framework === 'react' ? 'import "/.nasti/start/refresh.ts";\n' : '') +
+            `import { createHotContext } from "/@nasti/client";
+createHotContext("/.nasti/start/client.tsx").on("nasti:start:server-update",
+  () => window.__TSR_ROUTER__?.invalidate());\n` : '') +
         (clientEntry ? `import ${quote(slash(path.resolve(config.root, clientEntry)))};\n` : defaultClient))
+      fs.writeFileSync(path.join(directory, 'refresh.ts'), REACT_REFRESH_GLOBAL_PREAMBLE)
       const serverEntry = options.entries?.server ?? findEntry('server')
       fs.writeFileSync(path.join(directory, 'server.ts'),
         `export { default } from ${quote(serverEntry
@@ -298,8 +373,18 @@ hydrateStart().then(router => hydrate(() => <StartClient router={router} />, doc
         if (typeof router.buildStart === 'function') await router.buildStart.call(this)
       }
     },
+    async handleHotUpdate(ctx) {
+      if (path.resolve(ctx.file) === path.resolve(config.root,
+        options.router?.generatedRouteTree ?? `${src}/routeTree.gen.ts`)) return []
+      // The root watcher invalidates the generation in the same synchronous emit.
+      // Refresh RPC IDs/SSR first, then let the client graph apply its hot update.
+      await Promise.resolve()
+      await currentBuild()
+      return ctx.modules
+    },
     async resolveId(source, importer) {
-      if (source === '/@nasti/client') return { id: source, external: true }
+      if (source === '/@nasti/client' || source === '/@react-refresh') return { id: source, external: true }
+      if (source === 'nasti:start-refresh') return virtual(source)
       if (entries[source]) return entries[source]
       if ([MANIFEST, RESOLVER, ADAPTERS].includes(source)) return virtual(source)
       if (this.environment?.consumer === 'client' &&
@@ -316,6 +401,7 @@ hydrateStart().then(router => hydrate(() => <StartClient router={router} />, doc
       return null
     },
     load(id) {
+      if (id === virtual('nasti:start-refresh')) return START_REFRESH_RUNTIME
       if (id === virtual(ADAPTERS)) return 'export const pluginSerializationAdapters = []; export const hasPluginAdapters = false'
       if (id === virtual(MANIFEST)) {
         if (!manifest) throw new Error('[nasti:start] Client must be built before SSR.')
@@ -345,18 +431,40 @@ export async function getServerFnById(id) {
         if (environment.consumer === 'client' && /\.server\.[cm]?[jt]sx?(?:\?|$)/.test(id)) {
           throw new Error(`[nasti:start] Server-only module reached the client graph: ${id}`)
         }
+        if (environment.consumer === 'client' && id.includes('tss-serverfn-split')) {
+          throw new Error('[nasti:start] Server function provider modules are server-only.')
+        }
+        const hot = environment.mode === 'dev' && environment.consumer === 'client' &&
+          config.server.hmr !== false
+        let routeResult: { code: string } | null = null
         // Use the upstream AST compiler/DCE for route-only server properties;
         // regex deletion could leave secrets or accidentally remove UI code.
-        if (environment.consumer === 'client' && /\bcreate(?:File|Root)Route/.test(code)) {
+        if (environment.consumer === 'client' && /\bcreate(?:LazyFile|File|Root)Route/.test(code)) {
           const route = host.compileRoute({
-            code, filename: id.split('?')[0], id,
+            code, filename: id.split('?')[0], id: hot ? clientUrl(id.split('?')[0]) : id,
             targetFramework: framework,
             codeSplitGroupings: [],
             deleteNodes: new Set(['server', 'headers', 'ssr']),
-            addHmr: false,
+            addHmr: hot,
+            compilerPlugins: hot ? host.routeHmrPlugins({ targetFramework: framework }) ?? [{
+              name: 'nasti:solid-route-refresh',
+              // Solid Refresh updates the existing proxies. Replacing them in
+              // the route options would remount before Refresh can patch them.
+              getStableRouteOptionKeys: () => [
+                'component', 'shellComponent', 'pendingComponent', 'errorComponent', 'notFoundComponent',
+              ],
+            }] : undefined,
           })
-          if (route) code = route.code
+          if (route) {
+            routeResult = route
+            code = route.code
+          }
         }
+        const detectedKinds = host.detectKindsInCode(code,
+          environment.consumer === 'client' ? 'client' : 'server')
+        // Match the upstream compiler's pre-scan. Parsing every dependency into
+        // its module cache retains enormous Babel scope graphs across rebuilds.
+        if (detectedKinds.size === 0) return routeResult
         let compiler = compilers.get(environment)
         if (!compiler) {
           compiler = host.createStartCompiler({
@@ -365,7 +473,8 @@ export async function getServerFnById(id) {
             root: config.root,
             framework,
             providerEnvName: 'ssr',
-            // Native dev is a complete bundle, so IDs/lookup are build-style.
+            // Client modules and the bundled SSR resolver must share stable,
+            // build-style RPC IDs rather than dev-server-specific module URLs.
             mode: 'build',
             getKnownServerFns: () => functions,
             onServerFnsById: (next: Record<string, ServerFunction>) => host.mergeServerFnsById(functions, next),
@@ -390,7 +499,9 @@ export async function getServerFnById(id) {
           })
           compilers.set(environment, compiler)
         }
-        return compiler.compile({ code, id })
+        // A route with no Start macros can make the second compiler return null;
+        // do not lose its server-property isolation or Router HMR transform.
+        return await compiler.compile({ code, id, detectedKinds }) ?? routeResult
       },
     },
     generateBundle(_output, bundle) {
@@ -398,12 +509,14 @@ export async function getServerFnById(id) {
       const artifacts = Object.values(bundle ?? {}) as EnvironmentBuildOutput[]
       const entry = artifacts.find((item) => item.type === 'chunk' && item.isEntry)
       if (!entry) throw new Error('[nasti:start] Missing hydration entry.')
+      const hot = config.command === 'serve' && config.server.hmr !== false
+      const hydrationEntry = hot ? '/.nasti/start/client.tsx' : config.base + entry.fileName
       manifest = {
         routes: {
           __root__: {
-            preloads: [config.base + entry.fileName],
-            scripts: [{ attrs: { type: 'module', src: config.base + entry.fileName } }],
-            css: artifacts.filter((item) => item.fileName.endsWith('.css'))
+            preloads: [hydrationEntry],
+            scripts: [{ attrs: { type: 'module', src: hydrationEntry } }],
+            css: artifacts.filter((item) => !hot && item.fileName.endsWith('.css'))
               .map((item) => ({ href: config.base + item.fileName })),
           },
         },
@@ -415,17 +528,41 @@ export async function getServerFnById(id) {
     },
     configureServer(devServer) {
       server = devServer
-      router.configureServer!(server)
-      for (const event of ['add', 'change', 'unlink'] as const) server.watcher.on(event, changed)
+      // Start regenerates routes in buildStart. A second Router watcher would
+      // send another reload after the invalidation and race the next build.
+      const routes = path.resolve(config.root, options.router?.routesDirectory ?? `${src}/routes`)
+      const relative = path.relative(config.root, routes)
+      if (relative.startsWith('..') || path.isAbsolute(relative)) server.watcher.add(routes)
+      server.watcher.on('add', added).on('change', updated).on('unlink', removed)
       server.middlewares.use(sirv(path.join(config.root, 'public'), { dev: true }))
       // Do not expose raw server source through Nasti's generic source server.
       server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
-        if (req.url === '/@nasti/client') return next()
+        if (req.url === '/@nasti/client' || req.url === '/@react-refresh') return next()
         void (async () => {
+          let decodedUrl: string
+          try {
+            decodedUrl = decodeURIComponent(req.url ?? '/')
+          } catch {
+            res.statusCode = 400
+            res.end('Bad Request')
+            return
+          }
+          if (decodedUrl.includes('tss-serverfn-split')) {
+            res.statusCode = 404
+            res.end('Not Found')
+            return
+          }
           const build = await currentBuild()
           build.requests++
           try {
             const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+            if (config.server.hmr !== false && req.method === 'GET') {
+              const url = removeTimestampQuery(req.url ?? '/')
+              // Expose compiled, client-reachable modules only; generated server
+              // entries and arbitrary project files must remain private.
+              if (clientModules.has(url) ||
+                  server!.moduleGraph.getModuleByUrl(url)) return next()
+            }
             const asset = build.assets.get(pathname) ?? [...generations.values()].reverse()
               .map((cached) => cached.assets.get(pathname)).find(Boolean)
             if (asset) {
@@ -442,6 +579,7 @@ export async function getServerFnById(id) {
               return
             }
             await dispatchFetch(build.handler.fetch, req, res)
+            if (res.statusCode === 404) debug?.(`404 ${req.method} ${pathname}`)
           } finally {
             build.requests--
             pruneGenerations()
@@ -455,7 +593,7 @@ export async function getServerFnById(id) {
     },
     async closeServer() {
       closed = true
-      for (const event of ['add', 'change', 'unlink'] as const) server?.watcher.off(event, changed)
+      server?.watcher.off('add', added).off('change', updated).off('unlink', removed)
       await builds
       await router.closeServer!()
       generations.clear()

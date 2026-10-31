@@ -47,9 +47,54 @@ export async function importStartCompiler(root: string): Promise<any> {
   if (routerPkg.version !== '1.168.48') {
     throw new Error('[nasti:start] Expected @tanstack/router-plugin@1.168.48 for route isolation.')
   }
-  const [host, routes] = await Promise.all([
+  const [host, compiler, routes, hmr, babelModule] = await Promise.all([
     import(new URL('./dist/esm/start-compiler/host.js', manifest).href),
+    import(new URL('./dist/esm/start-compiler/compiler.js', manifest).href),
     import(new URL('./dist/esm/core/code-splitter/compilers.js', routerManifest).href),
+    import(new URL('./dist/esm/core/code-splitter/plugins/framework-plugins.js', routerManifest).href),
+    import(resolve('@babel/core', routerManifest.href)),
   ])
-  return { ...host, compileRoute: routes.compileCodeSplitReferenceRoute }
+  const babel = babelModule.default ?? babelModule
+  return {
+    ...host,
+    detectKindsInCode: compiler.detectKindsInCode,
+    compileRoute(options: any) {
+      let lazy = false
+      if (options.addHmr && /\bcreateLazyFileRoute\b/.test(options.code)) {
+        // The pinned reference compiler recognizes createFileRoute, not the lazy
+        // factory. Rename the local binding only; its imported runtime factory
+        // remains createLazyFileRoute. Reuse upstream HMR/Refresh handling.
+        const settings = {
+          filename: options.filename, configFile: false, babelrc: false,
+          parserOpts: { plugins: ['typescript', 'jsx'] },
+        }
+        const ast = babel.parseSync(options.code, settings)
+        let renamed = false
+        babel.traverse(ast, {
+          ImportDeclaration(importPath: any) {
+            if (!/^@tanstack\/(?:react|solid)-router$/.test(importPath.node.source.value) ||
+                importPath.scope.hasBinding('createFileRoute')) return
+            for (const specifier of importPath.node.specifiers) {
+              if (specifier.type === 'ImportSpecifier' && specifier.imported.name === 'createLazyFileRoute') {
+                importPath.scope.rename(specifier.local.name, 'createFileRoute')
+                renamed = true
+              }
+            }
+          },
+        })
+        if (renamed) {
+          lazy = true
+          options = { ...options, code: babel.transformFromAstSync(ast, options.code, settings).code }
+        }
+      }
+      const result = routes.compileCodeSplitReferenceRoute(options)
+      // LazyRoute stores its ID in options. Set the compatibility ID after the
+      // initial HMR setup, so first loading a lazy route is not mistaken for an
+      // update of the live route while its navigation is still in flight.
+      return lazy && result
+        ? { ...result, code: result.code + '\nRoute.id ??= Route.options.id;\n' }
+        : result
+    },
+    routeHmrPlugins: hmr.getFrameworkHmrCompilerPlugins,
+  }
 }

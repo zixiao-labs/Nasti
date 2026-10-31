@@ -1,6 +1,7 @@
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { importProjectPackage } from '../core/project-import.js'
 import { transformSync } from 'oxc-transform'
+import { solidStartRefreshBindings } from './solid-start-refresh.js'
 
 /**
  * Create a plugin that compiles JSX/TSX for Solid DOM or server rendering.
@@ -23,8 +24,14 @@ export function solidPlugin(config: ResolvedConfig): NastiPlugin {
       ])
       const [babel, preset] = await tools
       const server = this.environment?.consumer === 'server'
-      const hot = !server && config.command === 'serve' && config.server.hmr !== false
-      const refresh = hot ? await importProjectPackage(config.root, 'solid-refresh/babel') : undefined
+      // Granular Refresh extracts JSX into component boundaries. SSR must use
+      // the same boundaries or its hydration IDs diverge from the hot client.
+      // The emitted import.meta.hot guard keeps refresh execution client-only.
+      const refreshEnabled = config.mode === 'development' && config.server.hmr !== false &&
+        ((!server && config.command === 'serve') ||
+          config.plugins.some((plugin) => plugin.name === 'nasti:tanstack-start')) &&
+        !/[\\/](?:node_modules|\.nasti)[\\/]/.test(filename)
+      const refresh = refreshEnabled ? await importProjectPackage(config.root, 'solid-refresh/babel') : undefined
       // Strip TS without consuming JSX before handing the source to Solid.
       const stripped = transformSync(filename, code, {
         jsx: 'preserve',
@@ -44,9 +51,16 @@ export function solidPlugin(config: ResolvedConfig): NastiPlugin {
           generate: server ? 'ssr' : 'dom',
           hydratable: config.solid.hydratable,
           dev: config.mode === 'development',
+          // Refresh can recreate a server-only element outside hydration.
+          ...(refreshEnabled && !server ? { omitServerOnlyTemplates: false } : {}),
         }]],
         // "vite" selects import.meta.hot in solid-refresh; no Vite is imported.
-        plugins: hot ? [[refresh.default, { bundler: 'vite' }]] : [],
+        plugins: refreshEnabled ? [
+          [refresh.default, { bundler: 'vite' }],
+          ...(!server && this.environment?.mode === 'dev' &&
+              config.plugins.some((plugin) => plugin.name === 'nasti:tanstack-start')
+            ? [solidStartRefreshBindings] : []),
+        ] : [],
       })
       return result ? { code: result.code, map: result.map } : null
     } },

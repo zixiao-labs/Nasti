@@ -185,8 +185,41 @@ test('unbundled HMR records explicit accept boundaries and propagates timestamps
   ))
 })
 
+test('env changes refresh transform defines without timestamping HMR runtime singletons', async (t) => {
+  const { root, server } = await createHmrFixture(t)
+  fs.writeFileSync(path.join(root, 'src/env.ts'), 'export const value = import.meta.env.VITE_HMR_VALUE')
+  const setEnv = async (value) => {
+    const file = path.join(root, '.env')
+    const changed = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        server.watcher.off('all', onChange)
+        reject(new Error('env change timeout'))
+      }, 1000)
+      const onChange = (_event, changed) => {
+        if (changed !== file) return
+        clearTimeout(timeout)
+        server.watcher.off('all', onChange)
+        resolve()
+      }
+      server.watcher.on('all', onChange)
+    })
+    fs.writeFileSync(file, `VITE_HMR_VALUE=${value}`)
+    await changed
+  }
+  await setEnv('first')
+  assert.match((await server.transformRequest('/src/env.ts')).code, /"first"/)
+  await server.transformRequest('/src/Component.tsx')
+  await setEnv('second')
+  assert.match((await server.transformRequest('/src/env.ts')).code, /"second"/)
+  assert.doesNotMatch((await server.transformRequest('/src/Component.tsx')).code,
+    /\/@(?:nasti\/client|react-refresh)\?t=/)
+})
+
 test('HMR client applies updates without page reload and preserves hot.data', async (t) => {
   const { root, server } = await createHmrFixture(t)
+  const logs = []
+  t.mock.method(console, 'log', (message) => logs.push(message))
+  t.mock.method(console, 'debug', () => {})
   const clientResponse = await fetch(
     `http://localhost:${server.config.server.port}/@nasti/client`,
   )
@@ -249,6 +282,8 @@ test('HMR client applies updates without page reload and preserves hot.data', as
   const encodedClient = Buffer.from(clientCode).toString('base64')
   const client = await import(`data:text/javascript;base64,${encodedClient}#${Date.now()}`)
   assert.equal(FakeWebSocket.instance.protocol, 'nasti-hmr')
+  await FakeWebSocket.instance.dispatch('message', { data: JSON.stringify({ type: 'connected' }) })
+  assert.ok(logs.includes('[nasti] connected.'), 'connection status is visible without verbose console logging')
 
   const updatedFile = path.join(root, 'updated.mjs')
   fs.writeFileSync(updatedFile, 'export const value = 2\n')
@@ -258,15 +293,25 @@ test('HMR client applies updates without page reload and preserves hot.data', as
 
   let disposedData
   let acceptedValue
+  let release
+  let started
+  const released = new Promise((resolve) => { release = resolve })
+  const accepting = new Promise((resolve) => { started = resolve })
   hot.dispose((data) => {
     disposedData = data
     data.counter++
   })
-  hot.accept((mod) => {
+  hot.accept(async (mod) => {
     acceptedValue = mod.value
+    started()
+    await released
   })
 
+  const timestamp = Date.now()
   await FakeWebSocket.instance.dispatch('message', {
+    data: JSON.stringify({ type: 'update-start', timestamp }),
+  })
+  const applied = FakeWebSocket.instance.dispatch('message', {
     data: JSON.stringify({
       type: 'update',
       updates: [
@@ -274,11 +319,16 @@ test('HMR client applies updates without page reload and preserves hot.data', as
           type: 'js-update',
           path: ownerPath,
           acceptedPath: ownerPath,
-          timestamp: Date.now(),
+          timestamp,
         },
       ],
     }),
   })
+  await accepting
+  assert.deepEqual(logs.filter((message) => message.startsWith('[Fast Refresh]')), ['[Fast Refresh] rebuilding'])
+  release()
+  await applied
+  assert.match(logs.find((message) => message.startsWith('[Fast Refresh] done')), /done in \d+ms$/)
 
   assert.equal(acceptedValue, 2)
   assert.equal(disposedData, hot.data)
@@ -288,8 +338,20 @@ test('HMR client applies updates without page reload and preserves hot.data', as
   assert.equal(nextHot.data, hot.data)
   assert.equal(nextHot.data.counter, 42)
 
+  nextHot.accept(() => nextHot.invalidate('incompatible boundary'))
+  await FakeWebSocket.instance.dispatch('message', {
+    data: JSON.stringify({
+      type: 'update',
+      updates: [{ type: 'js-update', path: ownerPath, acceptedPath: ownerPath, timestamp: timestamp + 1 }],
+    }),
+  })
+  assert.equal(reloads, 1)
+  assert.equal(logs.filter((message) => message.startsWith('[Fast Refresh] done')).length, 1,
+    'a reload fallback must not report a successful Fast Refresh')
+  assert.ok(logs.includes('[nasti] full reload: incompatible boundary'))
+
   await FakeWebSocket.instance.dispatch('message', {
     data: JSON.stringify({ type: 'full-reload', path: '*' }),
   })
-  assert.equal(reloads, 1)
+  assert.equal(reloads, 2)
 })
