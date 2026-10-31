@@ -27,6 +27,7 @@ import { isAllowedDevModulePath, isUnderRoot, getLinkedPackageRoots } from './fs
 import { resolvePlugin } from '../plugins/resolve.js'
 import { resolveClientDependency } from '../core/client-resolve.js'
 import { orderPlugins } from '../core/plugin-api.js'
+import { rolldownLogger } from '../core/rolldown-logger.js'
 
 const __dirname_esm = path.dirname(fileURLToPath(import.meta.url))
 const __require = createRequire(import.meta.url)
@@ -116,9 +117,29 @@ export function registerExportsForReactRefresh(filename, moduleExports) {
   }
 }
 let __nastiRefreshTimer;
+let __nastiRefreshPending;
+let __nastiResolveRefresh;
+let __nastiRejectRefresh;
 function __nastiEnqueueRefresh() {
   clearTimeout(__nastiRefreshTimer);
-  __nastiRefreshTimer = setTimeout(() => performReactRefresh(), 16);
+  __nastiRefreshPending ??= new Promise((resolve, reject) => {
+    __nastiResolveRefresh = resolve;
+    __nastiRejectRefresh = reject;
+  });
+  __nastiRefreshTimer = setTimeout(() => {
+    const resolve = __nastiResolveRefresh;
+    const reject = __nastiRejectRefresh;
+    __nastiRefreshPending = undefined;
+    try {
+      performReactRefresh();
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  }, 16);
+}
+export function waitForReactRefresh() {
+  return __nastiRefreshPending;
 }
 function __nastiCheckExports(ignored, exports, predicate) {
   for (const key in exports) {
@@ -210,6 +231,7 @@ if (__nasti_hot__) {
       nextExports,
     );
     if (invalidateMessage) __nasti_hot__.invalidate(invalidateMessage);
+    else return RefreshRuntime.waitForReactRefresh();
   });
   RefreshRuntime.__hmr_import(import.meta.url).then((currentExports) => {
     __nasti_current_exports__ = currentExports;
@@ -277,7 +299,7 @@ export function transformMiddleware(ctx: TransformMiddlewareContext) {
     // 处理 HMR 客户端请求
     if (url === '/@nasti/client') {
       res.setHeader('Content-Type', 'application/javascript')
-      res.end(getHmrClientCode())
+      res.end(getHmrClientCode(ctx.config.framework))
       return
     }
 
@@ -404,6 +426,19 @@ export async function transformRequest(
         // 文件系统竞态变成 500（HTTP 路径）或向 server.transformRequest 调用方抛异常。
         realIdValid =
           fs.statSync(realId).isFile() && isAllowedDevModulePath(realId, config.root)
+        if (!realIdValid && fs.statSync(realId).isFile()) {
+          // A linked app can resolve a transitive package in a pnpm store outside
+          // its ancestors. Trust native package resolution from a known importer,
+          // not a forged ?id= path or an arbitrary node_modules-looking directory.
+          const spec = cleanReqUrl.slice('/@modules/'.length)
+          for (const importer of moduleGraph.getModuleByUrl(url)?.importers ?? []) {
+            if (importer.file &&
+                await resolveClientDependency(config.root, config.resolve, spec, importer.file) === realId) {
+              realIdValid = true
+              break
+            }
+          }
+        }
       }
     } catch {
       realId = null
@@ -412,7 +447,9 @@ export async function transformRequest(
     if (realId && realIdValid) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
       moduleGraph.registerModule(mod, realId)
-      const code = await bundlePackageAsEsm(realId, ctx)
+      const importedUrls = new Set<string>()
+      const code = rewriteImports(await bundlePackageAsEsm(realId, ctx), config, realId, importedUrls, moduleGraph)
+      await moduleGraph.updateModuleInfo(mod, importedUrls, new Set(), false)
       const transformResult = { code }
       mod.transformResult = transformResult
       return transformResult
@@ -443,7 +480,9 @@ export async function transformRequest(
     if (entry) {
       const mod = await moduleGraph.ensureEntryFromUrl(url)
       moduleGraph.registerModule(mod, entry)
-      const code = await bundlePackageAsEsm(entry, ctx)
+      const importedUrls = new Set<string>()
+      const code = rewriteImports(await bundlePackageAsEsm(entry, ctx), config, entry, importedUrls, moduleGraph)
+      await moduleGraph.updateModuleInfo(mod, importedUrls, new Set(), false)
       const transformResult = { code }
       mod.transformResult = transformResult
       return transformResult
@@ -743,6 +782,7 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
         resolveId: hook && (typeof hook === 'function' ? resolveId : { ...hook, handler: resolveId }),
         load: plugin.load,
         transform: plugin.transform,
+        onLog: plugin.onLog,
       }
     })
   const envDefine = ctx.envDefine ?? buildEnvDefine(
@@ -750,6 +790,8 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
   )
 
   const bundle = await rolldown({
+    ...rolldownLogger(config, config.build.rolldownOptions),
+    logLevel: config.build.rolldownOptions.logLevel,
     input: entryFile,
     platform: 'browser',
     resolve: {
@@ -791,6 +833,9 @@ async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContex
   let result
   try {
     result = await bundle.generate({ format: 'esm', exports: 'named', codeSplitting: false })
+    for (const file of await bundle.watchFiles) {
+      if (path.isAbsolute(file)) watchFiles.add(file)
+    }
   } finally {
     await bundle.close()
     ctx.pluginContainer.setModuleWatchFiles(entryFile, [...watchFiles])
@@ -1084,6 +1129,8 @@ function rewriteImports(
   const transformSpec = (spec: string): string => {
     const resolved = removeTimestampQuery(resolveSpec(spec))
     importedUrls?.add(resolved)
+    // These are page-wide singletons, not timestamped application modules.
+    if (resolved === '/@nasti/client' || resolved === '/@react-refresh') return resolved
     const timestamp = moduleGraph?.getModuleByUrl(resolved)?.lastHMRTimestamp ?? 0
     return timestamp > 0 ? appendTimestampQuery(resolved, timestamp) : resolved
   }
@@ -1706,7 +1753,7 @@ function isModuleRequest(
   return false
 }
 
-function getHmrClientCode(): string {
+function getHmrClientCode(framework: ResolvedConfig['framework']): string {
   return `
 // Nasti HMR Client
 const socketProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1716,8 +1763,23 @@ const disposeMap = new Map();
 const pruneMap = new Map();
 const dataMap = new Map();
 const customListenersMap = new Map();
-let updateQueue = [];
-let pendingUpdateQueue = false;
+let updateQueue = Promise.resolve();
+const updateStarts = new Map();
+const updateLabel = ${JSON.stringify(framework === 'react' || framework === 'solid' ? '[Fast Refresh]' : '[nasti] HMR')};
+let reloading = false;
+
+function startUpdate(timestamp) {
+  if (updateStarts.has(timestamp)) return;
+  updateStarts.set(timestamp, performance.now());
+  console.log(updateLabel + ' rebuilding');
+}
+
+function reload(message) {
+  reloading = true;
+  updateStarts.clear();
+  console.log('[nasti] full reload' + (message ? ': ' + message : ''));
+  location.reload();
+}
 
 socket.addEventListener('message', async ({ data }) => {
   const payload = JSON.parse(data);
@@ -1726,24 +1788,41 @@ socket.addEventListener('message', async ({ data }) => {
   if (payload.environment && payload.environment !== 'client') return;
   switch (payload.type) {
     case 'connected':
-      console.debug('[nasti] connected.');
+      console.log('[nasti] connected.');
       clearErrorOverlay();
       break;
+    case 'update-start':
+      startUpdate(payload.timestamp);
+      break;
     case 'update':
+      if (payload.updates.length === 0) break;
       try {
-        // CSS 在 unbundled 模式下也是会注入 <style> 的 JS 模块，和普通 JS
-        // 一样重新 import 才能执行 dispose/accept 并保持页面状态。
-        await Promise.all(payload.updates.map(queueUpdate));
-        clearErrorOverlay();
-        console.debug('[nasti] HMR update complete.');
+        // Serialize messages, fetch each batch together, then await accept callbacks
+        // (including React's debounced refresh) before reporting success.
+        const apply = async () => {
+          const timestamp = payload.updates[0]?.timestamp;
+          startUpdate(timestamp);
+          try {
+            const updates = await Promise.all(payload.updates.map(fetchUpdate));
+            await Promise.all(updates.map(apply => apply?.()));
+            clearErrorOverlay();
+            if (!reloading && updateStarts.has(timestamp)) {
+              console.log(updateLabel + ' done in ' +
+                Math.round(performance.now() - updateStarts.get(timestamp)) + 'ms');
+            }
+          } finally {
+            updateStarts.delete(timestamp);
+          }
+        };
+        updateQueue = updateQueue.then(apply, apply);
+        await updateQueue;
       } catch (err) {
         console.error('[nasti] HMR update failed:', err);
         showErrorOverlay(err);
       }
       break;
     case 'full-reload':
-      console.log('[nasti] full reload');
-      location.reload();
+      reload();
       break;
     case 'prune':
       await Promise.all(payload.paths.map(async (path) => {
@@ -1775,6 +1854,7 @@ socket.addEventListener('message', async ({ data }) => {
       break;
     }
     case 'error':
+      updateStarts.clear();
       console.error('[nasti] error:', payload.err.message);
       showErrorOverlay(payload.err);
       break;
@@ -1787,25 +1867,6 @@ socket.addEventListener('close', () => {
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(() => location.reload(), 1000);
 });
-
-/**
- * 同一批更新先全部拉取，再按服务端消息顺序执行 accept 回调，避免 HTTP 往返速度
- * 改变模块应用顺序。这与 Vite HMRClient 的 fetch/apply 两阶段一致。
- */
-async function queueUpdate(update) {
-  updateQueue.push(fetchUpdate(update));
-  if (pendingUpdateQueue) return;
-
-  pendingUpdateQueue = true;
-  await Promise.resolve();
-  pendingUpdateQueue = false;
-  const loading = updateQueue;
-  updateQueue = [];
-  const applyUpdates = await Promise.all(loading);
-  for (const apply of applyUpdates) {
-    if (apply) apply();
-  }
-}
 
 async function fetchUpdate(update) {
   const mod = hotModulesMap.get(update.path);
@@ -1823,10 +1884,10 @@ async function fetchUpdate(update) {
   if (dispose) await dispose(dataMap.get(update.acceptedPath));
   const newMod = await import(appendTimestampQuery(update.acceptedPath, update.timestamp));
 
-  return () => {
-    for (const { deps, fn } of qualifiedCallbacks) {
-      fn(deps.map((dep) => dep === update.acceptedPath ? newMod : undefined));
-    }
+  return async () => {
+    await Promise.all(qualifiedCallbacks.map(({ deps, fn }) =>
+      fn(deps.map((dep) => dep === update.acceptedPath ? newMod : undefined))
+    ));
     const detail = isSelfUpdate
       ? update.path
       : update.acceptedPath + ' via ' + update.path;
@@ -1918,8 +1979,8 @@ export function createHotContext(ownerPath) {
       if (listeners?.size === 0) listenersByOwner.delete(ownerPath);
       if (listenersByOwner?.size === 0) customListenersMap.delete(event);
     },
-    invalidate() {
-      location.reload();
+    invalidate(message) {
+      reload(message);
     },
     data: dataMap.get(ownerPath),
   };

@@ -35,9 +35,10 @@ import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { getPluginHook, type RolldownHookName } from '../core/plugin-hooks.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
 import { createDebugger } from '../core/debug.js'
-import { getPluginApi } from '../core/plugin-api.js'
+import { getPluginApi, orderPlugins } from '../core/plugin-api.js'
 import { createSsrExternal } from '../core/ssr-external.js'
 import { getSsrConditions } from '../core/ssr-resolve.js'
+import { rolldownLogger } from '../core/rolldown-logger.js'
 import {
   createBuildAppContext,
   inferEnvironmentEntries,
@@ -107,6 +108,7 @@ export function getRolldownOptions(
 
   const inputOptions: InputOptions = {
     ...restInputOptions,
+    ...rolldownLogger(config, restInputOptions),
     input: entryPoints,
     transform: {
       ...userTransform,
@@ -198,7 +200,7 @@ export function toRolldownPlugins(
     return hook.objectHook ? { ...hook.objectHook, handler } : handler
   }
 
-  return plugins.map((plugin) => ({
+  return orderPlugins(plugins).map((plugin) => ({
     name: plugin.name,
     resolveId: wrap(plugin, 'resolveId'),
     load: wrap(plugin, 'load'),
@@ -210,6 +212,7 @@ export function toRolldownPlugins(
     renderChunk: wrap(plugin, 'renderChunk'),
     augmentChunkHash: wrap(plugin, 'augmentChunkHash'),
     generateBundle: wrap(plugin, 'generateBundle'),
+    onLog: wrap(plugin, 'onLog'),
   }))
 }
 
@@ -472,13 +475,18 @@ export async function build(inlineConfig: NastiConfig = {}): Promise<BuildResult
  * @throws Propagates build and finalization errors; environment cleanup errors
  * reject the build only when no build/finalization error already occurred.
  */
-export async function buildResolvedConfig(config: ResolvedConfig): Promise<BuildResult> {
+export async function buildResolvedConfig(
+  config: ResolvedConfig,
+  report: 'build' | 'dev' = 'build',
+): Promise<BuildResult> {
   const logger = config.logger
   const startTime = performance.now()
 
-  logger.info(
-    pc.cyan(`\nnasti v${__NASTI_VERSION__} `) + pc.green(`building for ${config.mode}...`),
-  )
+  if (report === 'build') {
+    logger.info(
+      pc.cyan(`\nnasti v${__NASTI_VERSION__} `) + pc.green(`building for ${config.mode}...`),
+    )
+  }
   debug?.(`root: ${config.root}`)
 
   // 待构建环境：显式禁用的环境跳过；client 默认构建，非 client 需声明 entry/driver。
@@ -503,8 +511,8 @@ export async function buildResolvedConfig(config: ResolvedConfig): Promise<Build
     for (const name of buildableNames) {
       const built =
         name === 'client'
-          ? await buildClientEnvironment(config)
-          : await buildServerEnvironment(config, name)
+          ? await buildClientEnvironment(config, report)
+          : await buildServerEnvironment(config, name, report)
       initializedEnvironments.push(built.environment)
       environments[name] = built.result.output
       environmentResults[name] = built.result
@@ -554,8 +562,12 @@ export async function buildResolvedConfig(config: ResolvedConfig): Promise<Build
   const envSuffix =
     buildableNames.length > 1 ? ` (${buildableNames.join(' + ')})` : ''
 
-  logger.info(pc.green(`✓ built in ${elapsed}s`) + pc.dim(envSuffix))
-  logger.info(pc.dim(`  ${fileCount} files, ${displaySize(totalSize)} total → ${config.build.outDir}/`))
+  if (report === 'dev') {
+    logger.info(pc.green(`[nasti] built ${buildableNames.join(' + ')} in ${elapsed}s`))
+  } else {
+    logger.info(pc.green(`✓ built in ${elapsed}s`) + pc.dim(envSuffix))
+    logger.info(pc.dim(`  ${fileCount} files, ${displaySize(totalSize)} total → ${config.build.outDir}/`))
+  }
 
   return {
     output: clientOutput,
@@ -566,7 +578,10 @@ export async function buildResolvedConfig(config: ResolvedConfig): Promise<Build
 }
 
 /** client 环境构建：HTML 入口 + CSS 抽取 + 体积表 + index.html 改写 */
-async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvironment> {
+async function buildClientEnvironment(
+  config: ResolvedConfig,
+  report: 'build' | 'dev',
+): Promise<BuiltEnvironment> {
   const logger = config.logger
   const outDir = path.resolve(config.root, config.build.outDir)
 
@@ -608,7 +623,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
     const allPlugins = clientEnv.plugins
 
     // 原生体积报告插件（守卫导入；不可用时走 JS 表格 fallback）
-    const nativeReporter = config.logLevel === 'silent'
+    const nativeReporter = report === 'dev' || config.logLevel !== 'info'
       ? null
       : await tryNativeReporterPlugin(config, logger)
 
@@ -625,6 +640,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
 
     const bundle = await rolldown(inputOptions)
     const { output } = await bundle.write(outputOptions)
+    const watchFiles = await bundle.watchFiles
     await bundle.close()
     clientEnv.setBuildMetadata({ css: getCssMetadata(cssEngine) })
 
@@ -668,15 +684,15 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
     }
 
     // 体积表：原生 reporter 已在 write 阶段输出；否则走 JS fallback
-    if (!nativeReporter && config.logLevel !== 'silent') {
+    if (report === 'build' && !nativeReporter && config.logLevel !== 'silent') {
       reportBuildOutput(output as any, config, logger)
     }
     // 大 chunk 警告始终走 logger.warn（原生 reporter 的 warnLargeChunks 已关闭）
-    warnLargeChunks(output as any, config, logger)
+    if (report === 'build') warnLargeChunks(output as any, config, logger)
 
     return {
       environment: clientEnv,
-      result: finalizeEnvironmentResult(clientEnv, { output: output as any }),
+      result: finalizeEnvironmentResult(clientEnv, { output: output as any, watchFiles }),
     }
   } catch (error) {
     try {
@@ -697,6 +713,7 @@ async function buildClientEnvironment(config: ResolvedConfig): Promise<BuiltEnvi
 async function buildServerEnvironment(
   config: ResolvedConfig,
   name: string,
+  report: 'build' | 'dev',
 ): Promise<BuiltEnvironment> {
   const envOptions = config.environments[name]
   const logger = config.logger
@@ -751,16 +768,19 @@ async function buildServerEnvironment(
 
   const bundle = await rolldown(inputOptions)
   const { output } = await bundle.write(outputOptions)
+  const watchFiles = await bundle.watchFiles
   await bundle.close()
   if (cssEngine) environment.setBuildMetadata({ css: getCssMetadata(cssEngine) })
 
-  logger.info(
-    pc.dim(`  [${name}] `) +
-      output.map((o) => path.join(envOptions.build.outDir, o.fileName)).join(pc.dim(', ')),
-  )
+  if (report === 'build') {
+    logger.info(
+      pc.dim(`  [${name}] `) +
+        output.map((o) => path.join(envOptions.build.outDir, o.fileName)).join(pc.dim(', ')),
+    )
+  }
   return {
     environment,
-    result: finalizeEnvironmentResult(environment, { output: output as any }),
+    result: finalizeEnvironmentResult(environment, { output: output as any, watchFiles }),
   }
 }
 

@@ -312,7 +312,7 @@ const transformPlugin: NastiPlugin = {
 ```
 
 构建时，`resolveId`、`load`、`transform`、`buildStart`、`buildEnd`、
-`closeBundle`、`renderChunk`、`augmentChunkHash` 和 `generateBundle` 的对象式
+`closeBundle`、`renderChunk`、`augmentChunkHash`、`generateBundle` 和 `onLog` 的对象式
 metadata 会转发给 Rolldown；开发管线对 `resolveId`、`load`、`transform` 应用
 `order` 和过滤条件。`renderChunk` 是构建期钩子。`sequential` 仅作为兼容 metadata
 接受：Rolldown 和 Nasti 的开发钩子均按顺序执行。
@@ -342,10 +342,21 @@ Start 的当前验证基线为 React / Solid Start `1.169.4`，需要 Node `>=22
 
 `nasti build` 输出 `dist/client/` 和 `dist/server/server.mjs`；
 后者导出 `{ fetch(request) }`。`nasti preview` 自动识别该结构并提供 SSR，
-只对外服务 client 文件。开发模式也走完整的原生双环境构建，源码或 linked
-workspace 变化后刷新页面，**不保留组件状态**。
+只对外服务 client 文件。开发浏览器使用经过 Start 编译隔离的原生客户端模块图：
+兼容的 React / Solid 组件与手工 lazy route 更新走 Fast Refresh，保留组件状态；
+`createServerFn` 和服务端依赖变化会更新服务端 bundle / RPC 清单并刷新 loader 数据，
+不重载整个页面。路由增删、环境变量变化、不兼容的 HMR 边界或构建错误恢复仍可能
+全页重载。服务端与清单仍按代次串行重建，尚非完全增量的 SSR 编译器。
 当前不包括 Start RSC、自动 route code splitting、prerender / SPA mode、
 第三方部署插件或 Vite 插件的框架专用钩子；手工 lazy routes 可以照常使用。
+
+开发构建只显示简短汇总，不计算 gzip 或对未压缩包打印生产体积告警。
+Rolldown 默认诊断遵循 Nasti 的 `logLevel` / `customLogger`，保留用户
+`onLog` / `onwarn` 的默认处理与升级为错误的能力。浏览器默认可见
+`[nasti] connected.`、`[Fast Refresh] rebuilding` 和 `[Fast Refresh] done in …ms`；
+全页重载或更新失败不会输出刷新成功。
+`DEBUG=nasti:start` 可查看失效文件与 404 请求路径。应用应在根路由配置
+`notFoundComponent` 或在 Router 配置 `defaultNotFoundComponent`，而非屏蔽 404 告警。
 
 独立 Router SPA 使用 `plugins: [tanstackRouter()]`，保留自己的 `index.html` /
 客户端入口，不要与 `tanstackStart()` 重复注册。Solid 应用改为

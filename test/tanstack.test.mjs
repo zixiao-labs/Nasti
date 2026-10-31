@@ -15,9 +15,6 @@ import {
 const repo = fileURLToPath(new URL('..', import.meta.url))
 const supported = Number(process.versions.node.split('.')[0]) >= 22
 const browsers = process.env.NASTI_BROWSER_TESTS === '1'
-const quietBuild = { rolldownOptions: { onLog(level, log, fallback) {
-  if (log.code !== 'MODULE_LEVEL_DIRECTIVE') fallback(level, log)
-} } }
 
 function fixture(t, framework) {
   const monorepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-tanstack-')))
@@ -48,7 +45,6 @@ function config(root, framework, useRedact = false) {
   return {
     root, framework, logLevel: 'silent',
     plugins: [tanstackStart({ framework }), ...(useRedact ? [redact()] : [])],
-    build: quietBuild,
   }
 }
 
@@ -107,9 +103,21 @@ for (const [framework, useRedact] of [['react', false], ['react', true], ['solid
     assert.equal(response.status, 200)
     const html = await response.text()
     assert.match(html, /SSR_OK/)
-    assert.equal((await fetch(url + '/src/routes/index.tsx')).status, 404, 'raw app source is not served')
+    const clientRoute = await fetch(url + '/src/routes/index.tsx')
+    assert.equal(clientRoute.status, 200, 'client-reachable routes are compiled for HMR')
+    assert.doesNotMatch(await clientRoute.text(), /INLINE_SERVER_SECRET|NASTI_SERVER_SECRET_SENTINEL|serverValue\(\)/)
     assert.equal((await fetch(url + '/.nasti/start/server.ts')).status, 404, 'generated server entry is private')
-    if (browsers) await checkBrowser(t, url)
+    for (const suffix of ['?raw', '?tss-serverfn-split', '?x=tss-serverfn-split']) {
+      const privateSource = await fetch(url + '/src/routes/index.tsx' + suffix)
+      assert.equal(privateSource.status, 404, 'unrequested source/provider queries stay private')
+      assert.doesNotMatch(await privateSource.text(), /INLINE_SERVER_SECRET|NASTI_SERVER_SECRET_SENTINEL/)
+    }
+    const rootRoute = await (await fetch(url + '/src/routes/__root.tsx')).text()
+    assert.match(rootRoute, /handleRouteUpdate/, 'routes without server functions keep Router HMR')
+    if (browsers) {
+      await checkBrowser(t, url)
+      await checkStartRefresh(t, url, root, server)
+    }
     const file = path.join(root, 'src/routes/about.lazy.tsx')
     const changed = new Promise((resolve) => server.watcher.once('change', resolve))
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('About Nasti', 'Updated Nasti'))
@@ -128,6 +136,203 @@ for (const [framework, useRedact] of [['react', false], ['react', true], ['solid
   })
 }
 
+test('Start tracks loaded client dependency inputs without tracking server files', { skip: !supported, timeout: 30000 }, async (t) => {
+  const root = fixture(t, 'react')
+  const shared = fs.realpathSync(path.join(root, 'node_modules/@nasti-toolchain/tanstack-shared'))
+  const entry = path.join(shared, 'src/index.ts')
+  const internal = path.join(shared, 'src/internal.ts')
+  const serverFile = path.join(shared, 'src/secret.server.ts')
+  const extra = path.join(shared, 'src/extra.txt')
+  fs.writeFileSync(entry, "export { sharedLabel } from './internal'\n")
+  fs.writeFileSync(internal, "export const sharedLabel = 'Initial label'\n")
+  fs.writeFileSync(extra, 'plugin input')
+  let onUpdate
+  const settings = config(root, 'react')
+  settings.plugins.push({
+    name: 'fixture:watch-input',
+    transform(code, id) {
+      if (id === internal) this.addWatchFile(extra)
+    },
+    handleHotUpdateApp(context) { onUpdate?.(context) },
+  })
+  const server = await createServer({ ...settings, server: { port: 0, host: '127.0.0.1' } })
+  t.after(() => server.close())
+  await server.listen(0)
+  const url = `http://127.0.0.1:${server.config.server.port}`
+  assert.equal((await fetch(url)).status, 200)
+  const moduleUrl = '/@modules/@nasti-toolchain/tanstack-shared'
+  assert.match((await server.transformRequest(moduleUrl)).code, /Initial label/)
+  const mod = server.moduleGraph.getModuleByUrl(moduleUrl)
+  const container = server.environments.client.pluginContainer
+  assert.ok(container.getModulesByWatchFile(internal).has(mod))
+  assert.ok(container.getModulesByWatchFile(extra).has(mod))
+  assert.equal(container.getModulesByWatchFile(serverFile).size, 0)
+
+  const beforeServerEdit = mod.invalidationVersion
+  server.watcher.emit('change', serverFile)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(mod.invalidationVersion, beforeServerEdit, 'server-only edits do not invalidate the client entry')
+
+  fs.writeFileSync(internal, "export const sharedLabel = 'Updated label'\n")
+  const update = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('client input did not trigger HMR')), 10000)
+    onUpdate = (context) => { clearTimeout(timer); resolve(context) }
+  })
+  server.watcher.emit('change', internal)
+  const context = await update
+  assert.ok(context.environments.client.modules.includes(mod))
+  assert.ok(mod.invalidationVersion > beforeServerEdit)
+  assert.match((await server.transformRequest(moduleUrl)).code, /Updated label/)
+})
+
+test('Start filters only known non-RSC client directives', () => {
+  const plugin = tanstackStart()
+  const warning = (id, directive = 'use client') => ({
+    code: 'MODULE_LEVEL_DIRECTIVE', id,
+    message: `The semantics of the module level directive "${directive}" may not be preserved`,
+  })
+  const known = '/app/node_modules/.pnpm/router/node_modules/@tanstack/react-router/dist/esm/index.js'
+  assert.equal(plugin.onLog('warn', warning(known)), false)
+  assert.notEqual(plugin.onLog('warn', warning(known, 'use server')), false)
+  assert.notEqual(plugin.onLog('warn', warning('/app/src/component.tsx')), false)
+  assert.notEqual(plugin.onLog('warn', warning('/app/node_modules/other/index.js')), false)
+  assert.notEqual(plugin.onLog('warn', { code: 'OTHER_WARNING', id: known, message: 'use client' }), false)
+})
+
+test('Start dev uses a concise report and ignores unrelated file changes', { skip: !supported }, async (t) => {
+  const root = fixture(t, 'react')
+  const messages = []
+  const logger = {
+    info: (message) => messages.push(['info', message]),
+    warn: (message) => messages.push(['warn', message]),
+    warnOnce: (message) => messages.push(['warn', message]),
+    error: (message) => messages.push(['error', message]),
+    clearScreen() {}, hasErrorLogged: () => false, hasWarned: false,
+  }
+  const server = await createServer({
+    ...config(root, 'react'), logLevel: 'info', customLogger: logger,
+    build: { chunkSizeWarningLimit: 0.001 },
+    server: { port: 0, host: '127.0.0.1' },
+  })
+  t.after(() => server.close())
+  await server.listen(0)
+  const url = `http://127.0.0.1:${server.config.server.port}`
+  assert.equal((await fetch(url)).status, 200)
+  const reports = () => messages.filter(([, message]) => message.includes('[nasti] built client + ssr'))
+  assert.equal(reports().length, 1)
+  assert.equal(messages.some(([, message]) => /MODULE_LEVEL_DIRECTIVE|gzip:|computing gzip|after minification|server\.mjs/.test(message)), false)
+  const readme = path.join(root, 'README.md')
+  const added = new Promise((resolve) => server.watcher.once('add', resolve))
+  fs.writeFileSync(readme, 'Unrelated documentation')
+  assert.equal(await added, readme)
+  await fetch(url)
+  assert.equal(reports().length, 1, 'documentation does not invalidate the build')
+  const route = path.join(root, 'src/routes/index.tsx')
+  await writeWatchedFile(server, route, fs.readFileSync(route, 'utf8').replace('Count ', 'Tracked '))
+  assert.match(await (await fetch(url)).text(), /Tracked/)
+  assert.equal(reports().length, 2, 'tracked source still invalidates the server build')
+})
+
+async function writeWatchedFile(server, file, code) {
+  const changed = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      server.watcher.off('change', onChange)
+      reject(new Error(`Watcher did not report ${file}`))
+    }, 10000)
+    const onChange = (changed) => {
+      if (changed !== file) return
+      clearTimeout(timeout)
+      server.watcher.off('change', onChange)
+      resolve()
+    }
+    server.watcher.on('change', onChange)
+  })
+  fs.writeFileSync(file, code)
+  await changed
+}
+
+async function checkStartRefresh(t, url, root, server) {
+  const require = createRequire(path.join(repo, 'playground/tanstack-react/package.json'))
+  const { chromium } = require('playwright')
+  const browser = await chromium.launch({ executablePath: process.env.NASTI_CHROME_PATH || undefined })
+  try {
+    const page = await browser.newPage()
+    page.setDefaultTimeout(15000)
+    const errors = []
+    const logs = []
+    page.on('pageerror', (error) => {
+      errors.push(error.message)
+      t.diagnostic(`Refresh browser error: ${error.stack}`)
+    })
+    page.on('console', (message) => logs.push(message.text()))
+    const refreshed = () => page.waitForEvent('console', {
+      predicate: (message) => /^\[Fast Refresh\] done in \d+ms$/.test(message.text()),
+      timeout: 15000,
+    })
+    await page.goto(url)
+    await page.locator('#counter').click()
+    await page.waitForFunction(() => document.querySelector('#counter')?.textContent === 'Count 1')
+    await page.evaluate(() => { window.__sameStartPage = true })
+    const route = path.join(root, 'src/routes/index.tsx')
+    let done = refreshed()
+    fs.writeFileSync(route, fs.readFileSync(route, 'utf8').replace('Count ', 'Updated '))
+    await done
+    assert.equal(await page.locator('#counter').textContent(), 'Updated 1', 'Start retains component state')
+    assert.equal(await page.evaluate(() => window.__sameStartPage), true, 'Start component edits do not reload')
+    assert.ok(logs.some((log) => log === '[nasti] connected.'))
+    assert.ok(logs.some((log) => log === '[Fast Refresh] rebuilding'))
+    done = refreshed()
+    fs.writeFileSync(route, fs.readFileSync(route, 'utf8').replace("'POST_OK'", "'POST_UPDATED'"))
+    await done
+    await page.locator('#rpc').click()
+    await page.waitForFunction(() => document.querySelector('#rpc-result')?.textContent === 'POST_UPDATED')
+    assert.equal(await page.locator('#counter').textContent(), 'Updated 1', 'RPC implementation edits retain client state')
+    assert.equal(await page.evaluate(() => window.__sameStartPage), true)
+    done = refreshed()
+    fs.writeFileSync(route, fs.readFileSync(route, 'utf8').replace("'POST_UPDATED'", 'serverValue()'))
+    await done
+    const serverFile = fs.realpathSync(path.join(root, 'node_modules/@nasti-toolchain/tanstack-shared/src/secret.server.ts'))
+    const originalServer = fs.readFileSync(serverFile, 'utf8')
+    await writeWatchedFile(server, serverFile, originalServer.replace('SSR_OK', 'RPC_SERVER_UPDATED'))
+    const rpcUpdated = page.waitForResponse((response) => response.url().includes('_serverFn'))
+    await page.locator('#rpc').click()
+    await rpcUpdated
+    await page.waitForFunction(() => document.querySelector('#rpc-result')?.textContent === 'RPC_SERVER_UPDATED')
+    await page.waitForFunction(() => document.querySelector('#server-value')?.textContent === 'RPC_SERVER_UPDATED')
+    assert.equal(await page.locator('#counter').textContent(), 'Updated 1', 'server-only edits retain client state')
+    assert.equal(await page.evaluate(() => window.__sameStartPage), true)
+    await writeWatchedFile(server, serverFile, originalServer)
+    await fetch(url)
+    await page.getByRole('link', { name: 'About', exact: true }).click()
+    await page.getByRole('heading', { name: 'About Nasti', exact: true }).waitFor()
+    done = refreshed()
+    const lazy = path.join(root, 'src/routes/about.lazy.tsx')
+    fs.writeFileSync(lazy, fs.readFileSync(lazy, 'utf8').replace('About Nasti', 'Hot About Nasti'))
+    await done
+    await page.getByRole('heading', { name: 'Hot About Nasti', exact: true }).waitFor()
+    assert.equal(await page.evaluate(() => window.__sameStartPage), true, 'lazy routes use HMR too')
+    const navigation = page.waitForEvent('load')
+    const added = path.join(root, 'src/routes/added.tsx')
+    const framework = server.config.framework
+    fs.writeFileSync(added, `
+      import {createFileRoute} from '@tanstack/${framework}-router';
+      export const Route = createFileRoute('/added')({component: () => <p id="added-route">Added route</p>});
+    `)
+    await navigation
+    await page.getByRole('link', { name: 'Home', exact: true }).click()
+    await page.locator('#counter').waitFor()
+    await page.locator('#counter').click()
+    await page.waitForFunction(() => document.querySelector('#counter')?.textContent === 'Updated 1')
+    assert.notEqual(await page.evaluate(() => window.__sameStartPage), true, 'route additions intentionally reload')
+    await page.evaluate(() => window.__TSR_ROUTER__.navigate({ to: '/added' }))
+    await page.locator('#added-route').waitFor()
+    assert.deepEqual(errors, [])
+    t.diagnostic('Chromium: Start state, createServerFn replacement, connected and timed refresh logs passed')
+  } finally {
+    await browser.close()
+  }
+}
+
 async function checkBrowser(t, url) {
   const require = createRequire(path.join(repo, 'playground/tanstack-react/package.json'))
   const { chromium } = require('playwright')
@@ -137,8 +342,17 @@ async function checkBrowser(t, url) {
   })
   try {
     const page = await browser.newPage()
+    page.setDefaultTimeout(10000)
     const errors = []
-    page.on('pageerror', (error) => errors.push(error.message))
+    page.on('pageerror', (error) => {
+      errors.push(error.message)
+      t.diagnostic(`Browser error: ${error.message}`)
+    })
+    page.on('response', (response) => {
+      if (response.status() >= 400 && response.request().resourceType() === 'script') {
+        t.diagnostic(`Script HTTP ${response.status()}: ${response.url()}`)
+      }
+    })
     await page.goto(url)
     await page.locator('#counter').click()
     await page.waitForFunction(() => document.querySelector('#counter')?.textContent === 'Count 1')
@@ -336,9 +550,10 @@ test('Start dev prunes old assets while retaining previous and active generation
   fs.writeFileSync(client, 'console.log("GEN_0")')
   fs.writeFileSync(path.join(root, 'src/cache-late.ts'), 'export const value = "LATE_OK"')
   fs.writeFileSync(path.join(root, 'src/cache-server.ts'), `
-    import {tsrStartManifest} from 'tanstack-start-manifest:v';
+    import fs from 'node:fs';
     export default {fetch(request) {
-      const asset = tsrStartManifest().routes.__root__.preloads[0];
+      const asset = '/assets/' + fs.readdirSync(new URL('../client/assets/', import.meta.url))
+        .find(name => name.endsWith('.js'));
       if (new URL(request.url).pathname === '/stream') {
         return new Response(new ReadableStream({async start(controller) {
           controller.enqueue(new TextEncoder().encode('STREAM_READY\\n'));
@@ -457,7 +672,6 @@ test('standalone Redact SSR shares its runtime across bare packages in dev and b
   `)
   const settings = {
     root, framework: 'react', logLevel: 'silent', plugins: [redact()],
-    build: quietBuild,
     resolve: { noExternal: ['existing-inline'] },
     environments: { client: { buildEnabled: false }, ssr: { entry: 'src/ssr.js' } },
   }
@@ -525,7 +739,7 @@ test('CommonJS entry builds the same native Start application', { skip: !support
   const nasti = require('../dist/index.cjs')
   const result = await nasti.build({
     root, framework: 'react', logLevel: 'silent',
-    plugins: [nasti.tanstackStart()], build: quietBuild,
+    plugins: [nasti.tanstackStart()],
   })
   assert.ok(result.environmentResults.ssr.entries.server)
 })

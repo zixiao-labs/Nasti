@@ -364,6 +364,16 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     }
   }
 
+  watcher.on('all', (event, file) => {
+    if (!['add', 'change', 'unlink'].includes(event) ||
+        path.dirname(file) !== config.root || !/^\.env(?:\.|$)/.test(path.basename(file))) return
+    const env = loadEnv(config.mode, config.root, config.envPrefix)
+    for (const ctx of transformContexts.values()) {
+      ctx.envDefine = buildEnvDefine(env, config.mode, ssrDefineOverrides(ctx.environment!.consumer))
+      ctx.moduleGraph.invalidateAll()
+    }
+  })
+
   watcher.on('change', (file: string) => {
     if (file.includes(`${path.sep}node_modules${path.sep}`) || file.endsWith(`${path.sep}node_modules`)) {
       clearLinkedPackageRootsCache()

@@ -98,13 +98,28 @@ automatic extraction of route components is not implemented in this release.
   Nasti calls that resolver, not its Vite config/optimizer hooks.
   Solid Refresh's `bundler: "vite"` setting similarly selects the
   `import.meta.hot` protocol implemented by Nasti, not a Vite process.
-- Development lazily rebuilds the **whole client + SSR application**, serializes
-  concurrent build generations, and sends full-page reloads. It does not use
-  the core unbundled SSR evaluator or preserve component state. Dev generations
-  are isolated by server session and removed on close; Node's ESM evaluation
-  cache still grows with successful rebuilds, so long dev sessions may need
-  restarting. This is a correctness-first native baseline, not a performance
-  parity claim with the Vite development pipeline.
+- Development serves the **compiled client module graph** through native HMR,
+  including manual lazy routes. Compatible React/Solid updates preserve state.
+  The upstream route HMR compiler preserves live route/component identities;
+  Solid's granular SSR/client transforms use matching hydration boundaries.
+- Server bundles and RPC manifests still rebuild serially as a client/SSR pair.
+  `createServerFn` changes update server execution; server-only dependency edits
+  also invalidate browser loader data without reloading the document. Route
+  additions/removals, env changes, incompatible boundaries and build-error
+  recovery can still reload. Unrelated README changes do not rebuild the app.
+  This does not use the core unbundled SSR evaluator and is not fully incremental
+  server compilation. Generations are session-isolated and removed on close;
+  Node's ESM cache still grows with successful server rebuilds.
+- Development CSS uses the client module pipeline; production CSS extraction and
+  manifests are unchanged. Dev rebuilds print one concise summary rather than
+  production gzip tables, absolute chunk lists or unminified chunk-size warnings.
+  Browser console logs show connection and timed Refresh completion; reload/error
+  fallbacks are not reported as successful Fast Refresh.
+- `DEBUG=nasti:start` reports the input that invalidated a generation and SSR
+  404 request paths. The example root routes configure `notFoundComponent`;
+  applications should do the same (or set Router's `defaultNotFoundComponent`).
+  Only known non-RSC TanStack dependency `"use client"` diagnostics are filtered,
+  not arbitrary directives or runtime warnings.
 - Both normal SSR and browser React graphs use Redact when enabled. RSC and
   `react-server` condition graphs retain real React. Redact currently requires
   React 19 here; its React 18 post-transform is not implemented.
@@ -134,8 +149,10 @@ NASTI_BROWSER_TESTS=1 node --test test/tanstack.test.mjs
 The default tests exercise real native builds, production SSR/HTTP, generated
 assets, server-source isolation including source maps, linked workspace saves,
 route add/unlink, Solid DOM/SSR output, base paths, and unsupported configuration.
-The opt-in Chromium tests additionally assert hydration, a stateful counter,
-POST server functions, client navigation, deep-link reload, standalone Redact
+The opt-in Chromium tests additionally assert hydration, state retention after
+Start component edits, live `createServerFn`/server-dependency replacement,
+loader refresh, lazy-route HMR, route-topology reloads, visible connection and
+timed Refresh logs, client navigation, deep-link reload, standalone Redact
 and Solid mounting, and Solid Refresh without a page reload. CI enables that
 browser gate on Node 24; Start tests are skipped on Node 20, while the ordinary
 Nasti test matrix continues to run there.

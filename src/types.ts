@@ -412,6 +412,8 @@ export interface NastiPlugin {
   setup?: (api: PluginApi) => void | Promise<void>
   buildStart?: NastiPluginHook<'buildStart', (this: PluginContext) => void | Promise<void>>
   buildEnd?: NastiPluginHook<'buildEnd', (this: PluginContext, error?: Error) => void | Promise<void>>
+  /** Rolldown diagnostics hook; return false to suppress a specific build diagnostic. */
+  onLog?: RolldownPlugin['onLog']
   /**
    * Called once after `bundle.close()` in production builds, mirroring Rollup/Vite semantics.
    * Plugins use this to emit final-stage artifacts that depend on the bundle being fully written
@@ -612,6 +614,8 @@ export interface EnvironmentBuildMetadata {
 /** 外部环境驱动或原生 Rolldown 环境返回的标准构建结果。 */
 export interface EnvironmentBuildResult extends EnvironmentBuildMetadata {
   output: EnvironmentBuildOutput[]
+  /** Files read by the bundler, including plugin addWatchFile inputs. */
+  watchFiles?: string[]
 }
 
 /** app 级 finalizer 写出的聚合产物。 */
@@ -939,6 +943,7 @@ export interface AppHmrContext {
 
 export type HmrPayload = (
   | { type: 'connected' }
+  | { type: 'update-start'; timestamp: number }
   | { type: 'update'; updates: HmrUpdate[] }
   | { type: 'full-reload'; path?: string }
   | { type: 'prune'; paths: string[] }
