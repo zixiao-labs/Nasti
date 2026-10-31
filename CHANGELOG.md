@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.9.0
 
 ### Reduce development log noise and preserve Start state
 
@@ -15,6 +15,9 @@
 - Restore visible connection logs and add timed Refresh lifecycle logs that await
   actual update application. Ignore unrelated documentation changes and expose
   debug-only invalidation/404 diagnostics. Configure 404 components in examples.
+- Track native bundler-loaded dependency files as client HMR inputs, including
+  linked-package internals, without invalidating client entries for server-only
+  edits. Preserve explicit plugin watch inputs alongside native inputs.
 
 ## 2.8.1
 
