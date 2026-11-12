@@ -343,6 +343,9 @@ function prepareBuildOutputDirectories(
   const clientIsBuilt = buildableNames.includes('client')
 
   // 没有 Web client 时，app finalizer 仍写入 top-level outDir；必须清理旧聚合产物。
+  if (!clientIsBuilt) {
+    fs.rmSync(path.resolve(config.root, config.build.outDir, 'nasti-astro.json'), { force: true })
+  }
   if (!clientIsBuilt && config.build.emptyOutDir) {
     directories.add(path.resolve(config.root, config.build.outDir))
   }
@@ -350,6 +353,10 @@ function prepareBuildOutputDirectories(
   for (const name of buildableNames) {
     const environment = config.environments[name]
     const outDir = path.resolve(config.root, environment.build.outDir)
+    // Metadata belongs to the new build, even when old assets are retained.
+    if (environment.driver !== 'astro') {
+      fs.rmSync(path.join(outDir, 'nasti-astro.json'), { force: true })
+    }
     if (!environment.build.emptyOutDir) {
       protectedPaths.add(outDir)
       continue

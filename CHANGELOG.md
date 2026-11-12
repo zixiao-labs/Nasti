@@ -23,7 +23,8 @@
   Astro, Vite, Preact or Svelte as mandatory runtime dependencies.
 - Move repository and playground typechecking plus declaration generation to
   stable TypeScript `7.0.2`. Keep `tsc` commands and OXC application transforms;
-  adapt the declaration smoke test to TypeScript 7 package exports.
+  adapt the declaration smoke test to TypeScript 7 package exports. Astro's
+  `astro check` uses checker-compatible TypeScript 6 only in its own playground.
 - Update Vue and compiler-sfc together to `3.6.0-rc.14`. Replace the old Vapor
   disclaimer with `Currently, Vapor is still a Vue beta feature.` in browser
   warnings and deduplicated terminal stdout notices, respecting log levels.
@@ -31,16 +32,21 @@
   in-memory entry output before patch-triggered reloads, preventing stale pages.
 - Add Preact, Svelte and Astro workspaces and CI build/typecheck/browser coverage,
   including a real Preact island in Astro, SSR rendering and file-edit reloads.
+- Harden optional public declarations and validate `skipLibCheck: false` without
+  Svelte installed. Keep automatic Astro registration after user config hooks,
+  clear stale preview metadata in non-Astro builds and print bound preview hosts.
+- Guard Svelte style realpaths, report Astro child failures through the existing
+  hot channel and release all server resources on startup failure or close races.
 
 Preact/Svelte component updates currently use full-page refresh, not state-preserving
 Refresh. Astro requires Node >=22.23.4; ordinary Nasti runtime requirements remain
 unchanged. The current declaration generator warns that its TS 7 API integration
 is experimental. Third-party Astro deployment adapters are not certified here.
 
-Local validation on Node 24 / macOS after syncing v2.9.0: 214 tests passed, with
-one browser-only test skipped in the ordinary suite; all 37 framework/TanStack
-tests passed with system
-Chrome enabled, including the exact Vapor console notice. Root and six playground
+Local validation on Node 24 / macOS after review fixes: 222 tests passed, with
+one browser-only test skipped in the ordinary suite; all 43 framework/TanStack
+tests passed with system Chrome enabled, including the exact Vapor console notice.
+Root and six playground
 typechecks, ESM/CJS/declaration generation, playground builds, npm 11 strict
 packed-package installation checks and the Astro CLI preview/shutdown smoke passed.
 Node 20/22, Linux/Windows and npm 10 remain CI checks, not locally verified results.

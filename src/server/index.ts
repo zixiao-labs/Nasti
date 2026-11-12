@@ -161,6 +161,8 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   // unbundled 管线保持默认 —— 不开启时下面这段完全不执行。
   let bundledServer: import('./bundled/dev-engine.js').BundledDevServer | null = null
   let bundledReady: Promise<void> | undefined
+  let closed = false
+  let closing: Promise<void> | undefined
   if (config.experimental.bundledDev) {
     // The native runtime embeds its WebSocket port. Initialize only after HTTP
     // has bound the actual port (including port: 0 and occupied-port fallback).
@@ -415,11 +417,13 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     environmentServices,
 
     async listen(port?: number) {
+      if (closed) throw new Error('[nasti] Cannot listen after the server is closed.')
       const finalPort = port ?? config.server.port
       const host = config.server.host === true ? '0.0.0.0' : (config.server.host as string)
 
       await startDevPipelines()
       await startEnvironmentDrivers()
+      if (closed) throw new Error('[nasti] Cannot listen after the server is closed.')
 
       return new Promise((resolve, reject) => {
         let currentPort = finalPort
@@ -430,13 +434,23 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
           if (config.experimental.bundledDev && !bundledReady) {
             bundledReady = (async () => {
               const { createBundledDevServer } = await import('./bundled/dev-engine.js')
-              bundledServer = await createBundledDevServer({ config: configWithPlugins, clientEnv, httpServer })
+              const engine = await createBundledDevServer({ config: configWithPlugins, clientEnv, httpServer })
+              if (closed) {
+                await engine.close()
+                throw new Error('[nasti] Server closed during bundled initialization.')
+              }
+              bundledServer = engine
             })()
           }
           try {
             await bundledReady
+            if (closed) throw new Error('[nasti] Server closed during initialization.')
           } catch (error) {
-            httpServer.close()
+            try {
+              await server.close()
+            } catch (closeError) {
+              logCloseError('server after bundled initialization failure', closeError)
+            }
             reject(error)
             return
           }
@@ -501,46 +515,47 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     },
 
     async close() {
-      let pluginCloseError: unknown
-      for (const plugin of [...config.plugins].reverse()) {
-        try {
-          await plugin.closeServer?.()
-        } catch (error) {
-          pluginCloseError ??= error
-          logCloseError(`plugin "${plugin.name}"`, error)
-        }
-      }
-      for (const runner of serverRunners.values()) {
-        const initialized = await runner.catch(() => null)
-        initialized?.invalidateAll()
-      }
-      if (devPipelinesStarted) {
-        for (const environment of Object.values(environments).reverse()) {
-          if (!transformContexts.has(environment.name)) continue
-          await environment.pluginContainer!.buildEnd()
-        }
-      }
-      await bundledServer?.close()
-      let environmentCloseFailed = false
-      let firstEnvironmentCloseError: unknown
-      for (const environment of Object.values(environments).reverse()) {
-        try {
-          await environment.close()
-        } catch (error) {
-          if (!environmentCloseFailed) {
-            environmentCloseFailed = true
-            firstEnvironmentCloseError = error
+      closed = true
+      closing ??= (async () => {
+        // listen() reports initialization failure. Wait for an in-flight engine
+        // to dispose itself before releasing the plugins and remaining resources.
+        await bundledReady?.catch(() => {})
+        let failed = false
+        let firstError: unknown
+        const cleanup = async (target: string, dispose: () => unknown) => {
+          try {
+            await dispose()
+          } catch (error) {
+            if (!failed) firstError = error
+            failed = true
+            logCloseError(target, error)
           }
-          logCloseError(`environment "${environment.name}"`, error)
         }
-      }
-      await watcher.close()
-      ws.close()
-      httpServer.close()
-      if (environmentCloseFailed) {
-        throw firstEnvironmentCloseError
-      }
-      if (pluginCloseError) throw pluginCloseError
+        for (const plugin of [...config.plugins].reverse()) {
+          await cleanup(`plugin "${plugin.name}"`, () => plugin.closeServer?.())
+        }
+        for (const runner of serverRunners.values()) {
+          await cleanup('server module runner', async () => {
+            const initialized = await runner.catch(() => null)
+            initialized?.invalidateAll()
+          })
+        }
+        if (devPipelinesStarted) {
+          for (const environment of Object.values(environments).reverse()) {
+            if (!transformContexts.has(environment.name)) continue
+            await cleanup(`environment "${environment.name}" build hooks`, () => environment.pluginContainer!.buildEnd())
+          }
+        }
+        await cleanup('bundled dev server', () => bundledServer?.close())
+        for (const environment of Object.values(environments).reverse()) {
+          await cleanup(`environment "${environment.name}"`, () => environment.close())
+        }
+        await cleanup('file watcher', () => watcher.close())
+        await cleanup('WebSocket server', () => ws.close())
+        await cleanup('HTTP server', () => httpServer.close())
+        if (failed) throw firstError
+      })()
+      return closing
     },
   }
 

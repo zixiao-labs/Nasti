@@ -4,6 +4,7 @@ import type { CompileResult } from 'svelte/compiler'
 import type { NastiPlugin, PluginContext, ResolvedConfig } from '../types.js'
 import { importProjectPackage } from '../core/project-import.js'
 import { transformCode } from '../core/transformer.js'
+import { isAllowedDevModulePath } from '../server/fs-allow.js'
 
 const STYLE_QUERY = '?svelte&type=style&lang.css'
 
@@ -46,10 +47,17 @@ export function sveltePlugin(config: ResolvedConfig): NastiPlugin {
     async load(id) {
       if (!id.endsWith(STYLE_QUERY)) return null
       const filename = id.slice(0, -STYLE_QUERY.length)
+      let realFilename: string
+      try {
+        realFilename = await fs.realpath(filename)
+      } catch {
+        return null
+      }
+      if (config.command === 'serve' && !isAllowedDevModulePath(realFilename, config.root)) return null
       this.addWatchFile(filename)
       // Recompile instead of retaining stale CSS when styles are removed or
       // a preprocessor dependency changes without editing the parent component.
-      const result = await compile(this, await fs.readFile(filename, 'utf8'), filename)
+      const result = await compile(this, await fs.readFile(realFilename, 'utf8'), filename)
       return { code: result.css?.code ?? '', map: result.css?.map }
     },
     async transform(source, id) {

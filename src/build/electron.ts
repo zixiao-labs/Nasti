@@ -49,6 +49,7 @@ export async function buildElectron(inlineConfig: NastiConfig = {}): Promise<Ele
     fs.rmSync(outDir, { recursive: true, force: true })
   }
   fs.mkdirSync(outDir, { recursive: true })
+  fs.rmSync(path.join(outDir, 'nasti-astro.json'), { force: true })
 
   // ---- 1. 渲染进程（复用 Web 构建）----
   const rendererOutDir = path.join(outDir, 'renderer')

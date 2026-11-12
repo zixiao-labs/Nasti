@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { astro, build, createAstroPreview, createServer, detectFramework, resolveConfig } from '../dist/index.js'
 
@@ -93,6 +93,74 @@ test('framework detection recognizes new sources/dependencies and preserves expl
   const root = fixture(t, 'preact')
   fs.writeFileSync(path.join(root, 'src/Island.astro'), '<h1>Astro wins over UI dependencies</h1>')
   assert.equal(detectFramework(root), 'astro')
+})
+
+test('Astro auto-registration follows config hooks and runs the complete config lifecycle', async (t) => {
+  for (const [detected, selected] of [['astro', 'react'], ['preact', 'astro']]) {
+    const root = fixture(t, detected)
+    const events = []
+    const config = await resolveConfig({
+      root, logLevel: 'silent',
+      plugins: [{
+        name: 'fixture:framework-selection',
+        config() { events.push('config'); return { framework: selected } },
+        configEnvironment(name, environment) {
+          if (name === 'client') {
+            assert.equal(environment.driver, selected === 'astro' ? 'astro' : undefined)
+            events.push('configEnvironment')
+          }
+        },
+        setup(api) { assert.equal(api.config.framework, selected); events.push('setup') },
+        configResolved(config) { assert.equal(config.framework, selected); events.push('configResolved') },
+      }],
+    }, 'build')
+    assert.equal(config.framework, selected)
+    assert.equal(config.plugins.filter((plugin) => plugin.name === 'nasti:astro').length, selected === 'astro' ? 1 : 0)
+    assert.deepEqual(events, ['config', 'configEnvironment', 'setup', 'configResolved'])
+  }
+  const root = fixture(t, 'preact')
+  const explicit = await resolveConfig({ root, framework: 'astro', logLevel: 'silent' }, 'build')
+  assert.equal(explicit.environments.client.driver, 'astro', 'explicit Astro remains a supported built-in framework')
+  const registered = await resolveConfig({ root, plugins: [astro()], logLevel: 'silent' }, 'build')
+  assert.equal(registered.plugins.filter((plugin) => plugin.name === 'nasti:astro').length, 1)
+})
+
+test('Svelte style loaders reject outside realpaths and retain app/linked workspace styles', async (t) => {
+  const root = fixture(t, 'svelte')
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-private-svelte-')))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const secret = path.join(outside, 'Private.svelte')
+  fs.writeFileSync(secret, '<p class="private">secret</p><style>.private { color: red }</style>')
+  fs.symlinkSync(secret, path.join(root, 'src/Escape.svelte'))
+  const linked = path.join(outside, 'linked')
+  fs.mkdirSync(linked)
+  fs.writeFileSync(path.join(linked, 'package.json'), JSON.stringify({ name: 'linked-svelte' }))
+  fs.writeFileSync(path.join(linked, 'Allowed.svelte'), '<p class="linked">safe</p><style>.linked { color: blue }</style>')
+  fs.symlinkSync(linked, path.join(root, 'node_modules/linked-svelte'), 'junction')
+  let preprocessCalls = 0
+  const server = await createServer({
+    root, logLevel: 'silent',
+    svelte: { preprocess: { markup({ content }) { preprocessCalls++; return { code: content } } } },
+  })
+  t.after(() => server.close())
+  const load = (file) => server.environments.client.pluginContainer.load(`${file}?svelte&type=style&lang.css`)
+  assert.equal(await load(secret), null)
+  assert.equal(await load(path.join(root, 'src/Escape.svelte')), null)
+  assert.equal(await load(path.join(outside, 'Missing.svelte')), null)
+  assert.equal(preprocessCalls, 0, 'rejected requests must not read or compile source')
+  assert.match((await load(path.join(root, 'src/App.svelte'))).code, /button/)
+  assert.match((await load(path.join(linked, 'Allowed.svelte'))).code, /linked/)
+  assert.equal(preprocessCalls, 2)
+})
+
+test('native builds discard an old Astro preview marker when keeping other output files', async (t) => {
+  const root = fixture(t, 'preact')
+  fs.mkdirSync(path.join(root, 'dist'))
+  fs.writeFileSync(path.join(root, 'dist/nasti-astro.json'), JSON.stringify({ version: 1, base: '/' }))
+  fs.writeFileSync(path.join(root, 'dist/keep.txt'), 'preserved')
+  await build({ root, logLevel: 'silent', build: { emptyOutDir: false } })
+  assert.equal(fs.existsSync(path.join(root, 'dist/nasti-astro.json')), false)
+  assert.equal(fs.readFileSync(path.join(root, 'dist/keep.txt'), 'utf8'), 'preserved')
 })
 
 for (const framework of ['preact', 'svelte']) {
@@ -208,6 +276,19 @@ test('Astro uses its official driver for static routes, scripts, assets and prev
   if (browserTests) await browser(t, url + '/docs/')
 })
 
+test('the Astro checker rejects type errors inside .astro components', { skip: !astroSupported }, (t) => {
+  const root = fixture(t, 'astro')
+  const index = path.join(root, 'src/pages/index.astro')
+  fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace(
+    "const title: string = 'Nasti + Astro'", 'const title: string = 123',
+  ))
+  const result = spawnSync(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'check'], {
+    cwd: root, encoding: 'utf8', timeout: 60000, env: { ...process.env, ASTRO_TELEMETRY_DISABLED: '1' },
+  })
+  assert.equal(result.status, 1, result.stdout + result.stderr)
+  assert.match(result.stdout + result.stderr, /2322|Type 'number' is not assignable to type 'string'/)
+})
+
 test('Astro development redirects to the owning server and closes its watcher/socket', { skip: !astroSupported }, async (t) => {
   const root = fixture(t, 'astro')
   const server = await createServer({ root, logLevel: 'silent', server: { port: 0, host: '127.0.0.1' } })
@@ -228,6 +309,77 @@ test('Astro development redirects to the owning server and closes its watcher/so
   }
   await server.close()
   await assert.rejects(fetch(service))
+})
+
+test('Astro child failure reports through HMR, clears service URLs and stops redirects', { skip: !astroSupported }, async (t) => {
+  const root = fixture(t, 'astro')
+  const pidFile = path.join(root, 'astro.pid')
+  const configFile = path.join(root, 'astro.config.mjs')
+  fs.appendFileSync(configFile, `\nimport fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n`)
+  const errors = []
+  const logger = {
+    info() {}, warn() {}, warnOnce() {}, clearScreen() {}, hasWarned: false, hasErrorLogged() { return false },
+    error(message) { errors.push(message) },
+  }
+  const server = await createServer({
+    root, logLevel: 'silent', customLogger: logger, server: { port: 0, host: '127.0.0.1' },
+  })
+  t.after(() => server.close())
+  await server.listen(0)
+  const service = server.environmentServices.client
+  const failure = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Missing Astro child-exit notification')), 10000)
+    server.ws.send = (payload) => {
+      if (payload.type === 'error') { clearTimeout(timer); resolve(payload) }
+    }
+  })
+  process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM')
+  const payload = await failure
+  assert.match(payload.err.message, /\[nasti:astro\] dev exited with/)
+  assert.equal(errors.length, 1)
+  assert.deepEqual(service.localUrls, [])
+  assert.deepEqual(service.networkUrls, [])
+  const response = await fetch(`http://127.0.0.1:${server.config.server.port}/`, { redirect: 'manual' })
+  assert.equal(response.status, 503)
+  assert.equal(response.headers.get('location'), null)
+})
+
+test('Astro CLI preview URLs preserve the explicit host, base and wildcard network addresses', { skip: !astroSupported }, async (t) => {
+  const root = fixture(t, 'astro')
+  await build({ root, logLevel: 'silent', base: '/docs/' })
+  for (const host of ['127.0.0.1', '0.0.0.0']) {
+    const child = spawn(process.execPath, [path.join(repo, 'bin/nasti.js'), 'preview', root, '--port', '0', '--host', host], {
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let output = ''
+    const closed = new Promise((resolve) => child.once('close', resolve))
+    try {
+      const networks = Object.values(os.networkInterfaces()).flat()
+        .filter((iface) => iface && iface.family === 'IPv4' && !iface.internal)
+        .map((iface) => iface.address)
+      const port = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Preview startup timeout: ${output}`)), 15000)
+        child.once('error', (error) => { clearTimeout(timer); reject(error) })
+        child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Preview exited ${code}: ${output}`)) })
+        child.stderr.on('data', (data) => { output += data })
+        child.stdout.on('data', (data) => {
+          output += data
+          const match = output.match(new RegExp(`http://${host === '0.0.0.0' ? 'localhost' : host}:(\\d+)/docs/`))
+          if (!match || host === '0.0.0.0' && !networks.every((address) => output.includes(`http://${address}:${match[1]}/docs/`))) return
+          clearTimeout(timer)
+          resolve(Number(match[1]))
+        })
+      })
+      assert.ok(port > 0)
+      const response = await fetch(`http://127.0.0.1:${port}/docs/`)
+      assert.equal(response.status, 200)
+      if (host === '127.0.0.1') assert.doesNotMatch(output, /http:\/\/localhost:\d+\/docs\//)
+      else assert.doesNotMatch(output, /http:\/\/0\.0\.0\.0:/)
+    } finally {
+      child.kill('SIGTERM')
+      await closed
+    }
+  }
 })
 
 test('Astro configuration rejects conflicting pipelines before starting tools', async (t) => {

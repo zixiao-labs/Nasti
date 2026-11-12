@@ -291,3 +291,105 @@ test('external environment driver participates in dev serve, watch, and close', 
   assert.equal(events[1], 'watch:change')
   assert.equal(events[2], 'close')
 })
+
+function bundledFixture(t, withEntry = true) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-bundled-lifecycle-')))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ private: true, type: 'module' }))
+  if (withEntry) {
+    fs.writeFileSync(path.join(root, 'index.html'), '<script type="module" src="/main.ts"></script>')
+    fs.writeFileSync(path.join(root, 'main.ts'), 'export const ready = true')
+  }
+  return root
+}
+
+function lifecycleDriver(events) {
+  return {
+    name: 'fixture:lifecycle-driver',
+    createEnvironmentDriver(environment) {
+      if (environment.options.driver !== 'lifecycle') return
+      return {
+        name: 'lifecycle',
+        serve() { events.push('serve'); return {} },
+        close() { events.push('driver-close') },
+      }
+    },
+  }
+}
+
+test('bundled initialization failure closes drivers, watcher and sockets despite cleanup failure', async (t) => {
+  const root = bundledFixture(t, false)
+  const events = []
+  const errors = []
+  const watcherFailure = new Error('fixture watcher close failure')
+  const server = await createServer({
+    root, experimental: { bundledDev: true }, server: { port: 0, host: '127.0.0.1' },
+    customLogger: {
+      info() {}, warn() {}, warnOnce() {}, clearScreen() {}, hasWarned: false, hasErrorLogged() { return false },
+      error(message) { errors.push(message) },
+    },
+    environments: { backend: { driver: 'lifecycle' } },
+    plugins: [lifecycleDriver(events)],
+  })
+  const closeWatcher = server.watcher.close.bind(server.watcher)
+  server.watcher.close = async () => {
+    await closeWatcher()
+    events.push('watcher-close')
+    throw watcherFailure
+  }
+  const closeWs = server.ws.close.bind(server.ws)
+  server.ws.close = () => { events.push('ws-close'); closeWs() }
+  await assert.rejects(server.listen(0), /No entry point found/)
+  assert.ok(server.config.server.port > 0)
+  assert.equal(server.watcher.closed, true)
+  assert.deepEqual(events, ['serve', 'driver-close', 'watcher-close', 'ws-close'])
+  assert.ok(errors.some((message) => /failed to close file watcher/.test(message)))
+  await assert.rejects(fetch(`http://127.0.0.1:${server.config.server.port}/`))
+  await assert.rejects(server.close(), (error) => error === watcherFailure)
+  assert.equal(events.filter((event) => event === 'driver-close').length, 1, 'cleanup is idempotent')
+})
+
+test('close during bundled initialization disposes the late engine and rejects listen', async (t) => {
+  const root = bundledFixture(t)
+  const events = []
+  let entered
+  let release
+  const transforming = new Promise((resolve) => { entered = resolve })
+  const resume = new Promise((resolve) => { release = resolve })
+  let blocked = false
+  const server = await createServer({
+    root, logLevel: 'silent', experimental: { bundledDev: true }, server: { port: 0, host: '127.0.0.1' },
+    environments: { backend: { driver: 'lifecycle' } },
+    plugins: [lifecycleDriver(events), {
+      name: 'fixture:delay-initial-transform',
+      async transform(code, id) {
+        if (!blocked && id === path.join(root, 'main.ts')) {
+          blocked = true
+          entered()
+          await resume
+        }
+        return null
+      },
+    }],
+  })
+  t.after(() => server.close())
+  const opening = server.listen(0).then(() => ({ opened: true }), (error) => ({ error }))
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Initial bundled transform did not start')), 10000)
+      transforming.then(() => { clearTimeout(timer); resolve() }, reject)
+    })
+    const closing = server.close()
+    release()
+    await closing
+    const result = await opening
+    assert.match(result.error?.message ?? '', /closed during bundled initialization/)
+    assert.equal(server.watcher.closed, true)
+    assert.equal(events.filter((event) => event === 'driver-close').length, 1)
+    await assert.rejects(fetch(`http://127.0.0.1:${server.config.server.port}/`))
+    await assert.rejects(server.listen(0), /server is closed/)
+  } finally {
+    release()
+    await server.close()
+  }
+})

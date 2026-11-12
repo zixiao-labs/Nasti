@@ -290,8 +290,19 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     },
   )
 
-  await engine.run()
-  await engine.ensureCurrentBuildFinish()
+  try {
+    await engine.run()
+    await engine.ensureCurrentBuildFinish()
+  } catch (error) {
+    try {
+      await engine.close()
+    } catch (closeError) {
+      logger.error('[nasti] failed to close bundled engine after initialization failure', {
+        error: closeError instanceof Error ? closeError : new Error(String(closeError)),
+      })
+    }
+    throw error
+  }
   logger.info(pc.dim(`  bundled dev engine ready (${entryPoints.length} entries, in-memory)`))
 
   // ── 打包模式专用 ws（默认 DevRuntime 不带子协议，带 ?clientId= 查询）────

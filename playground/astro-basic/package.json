@@ -6,7 +6,7 @@
     "dev": "nasti dev",
     "build": "nasti build",
     "preview": "nasti preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "astro check"
   },
   "dependencies": {
     "@astrojs/preact": "6.1.5",
@@ -14,7 +14,8 @@
     "preact": "^11.2.0"
   },
   "devDependencies": {
+    "@astrojs/check": "0.9.12",
     "@nasti-toolchain/nasti": "workspace:*",
-    "typescript": "^7.0.2"
+    "typescript": "^6.0.3"
   }
 }

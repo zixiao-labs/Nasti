@@ -260,6 +260,7 @@ cli
 
       const resolvedRoot = path.resolve(root ?? '.')
       const outDir = path.resolve(resolvedRoot, options.outDir)
+      const host = options.host === true ? '0.0.0.0' : (options.host ?? 'localhost')
 
       const app = connect()
       const fs = await import('node:fs')
@@ -267,13 +268,22 @@ cli
         const { createAstroPreview } = await import('./plugins/astro.js')
         const preview = await createAstroPreview(resolvedRoot, outDir, {
           port: Number(options.port),
-          host: options.host ?? 'localhost',
+          host,
         })
         const stop = () => { void preview.stop().then(() => process.exit(0)) }
         process.once('SIGINT', stop)
         process.once('SIGTERM', stop)
         logger.info(`\n  NASTI v${__NASTI_VERSION__} preview (Astro)\n`)
-        printServerUrls({ local: [`http://localhost:${preview.port}${preview.base}`], network: [] }, logger.info)
+        const wildcard = host === '0.0.0.0' || host === '::'
+        const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+        printServerUrls({
+          local: [`http://${wildcard ? 'localhost' : urlHost}:${preview.port}${preview.base}`],
+          network: wildcard
+            ? Object.values(os.networkInterfaces()).flat()
+                .filter((iface) => iface && iface.family === 'IPv4' && !iface.internal)
+                .map((iface) => `http://${iface!.address}:${preview.port}${preview.base}`)
+            : [],
+        }, logger.info)
         return
       }
       if (fs.existsSync(path.join(outDir, 'client/nasti-start.json'))) {
@@ -284,7 +294,6 @@ cli
       }
 
       const port = options.port
-      const host = options.host === true ? '0.0.0.0' : (options.host ?? 'localhost')
 
       http.createServer(app).listen(port, host, () => {
         logger.info(`\n  ${pc.cyan(pc.bold('NASTI'))} ${pc.cyan(`v${__NASTI_VERSION__}`)}  ${pc.dim('preview')}\n`)

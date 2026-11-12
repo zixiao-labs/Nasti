@@ -40,6 +40,7 @@ try {
       devDependencies: {
         [pkg.name]: `file:${tarball}`,
         ...(compiler ? { 'oxc-transform-react': compiler } : {}),
+        ...(!compiler ? { typescript: '7.0.2', '@types/node': '^22.20.5' } : {}),
       },
     }))
 
@@ -62,6 +63,36 @@ try {
     }
     if (compiler) {
       assert.equal(lock.packages['node_modules/oxc-transform-react'].version, compiler)
+    }
+    if (!compiler) {
+      const installed = path.join(app, 'node_modules', pkg.name, 'dist')
+      for (const file of fs.readdirSync(installed, { recursive: true })) {
+        if (/\.d\.[cm]?ts$/.test(file)) {
+          assert.doesNotMatch(fs.readFileSync(path.join(installed, file), 'utf8'), /svelte\/compiler/,
+            `${file}: public declarations must not require the optional Svelte compiler`)
+        }
+      }
+      write(app, 'types.ts', `
+        import { defineConfig, type SvelteOptions } from '${pkg.name}';
+        const svelte: SvelteOptions = {
+          compilerOptions: { preserveWhitespace: true },
+          preprocess: { style: ({ content }) => ({ code: content, dependencies: [] }) },
+        };
+        defineConfig({ framework: 'react', svelte });
+        // @ts-expect-error the public API must remain typed, not become any
+        defineConfig({ framework: 'not-a-framework' });
+      `)
+      write(app, 'tsconfig.json', JSON.stringify({
+        compilerOptions: {
+          strict: true, skipLibCheck: false, noEmit: true,
+          target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler', types: ['node'],
+        },
+        files: ['types.ts'],
+      }))
+      execFileSync(process.execPath, [path.join(app, 'node_modules/typescript/bin/tsc'), '--noEmit'], {
+        cwd: app, stdio: 'inherit', timeout: 60000,
+      })
+      console.log('PASS public declarations: skipLibCheck=false without Svelte installed')
     }
 
     write(app, 'index.html', '<div id="app"></div><script type="module" src="/main.tsx"></script>\n')

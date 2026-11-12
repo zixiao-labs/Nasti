@@ -171,11 +171,6 @@ export async function resolveConfig(
     ...(fileConfig.plugins ?? []),
     ...(inlineConfig.plugins ?? []),
   ]
-  if ((merged.framework === 'astro' ||
-      ((!merged.framework || merged.framework === 'auto') && detectFramework(root) === 'astro')) &&
-      !rawPlugins.some((plugin) => plugin.name === 'nasti:astro')) {
-    rawPlugins.push(astro())
-  }
 
   // mode：merged.mode 优先，否则按 command 取默认。env（传给 plugin.config）
   // 与最终 resolved.mode 共用此值，避免二者分叉（否则 loadEnv 会按错误的
@@ -190,6 +185,16 @@ export async function resolveConfig(
       const result = await plugin.config(merged, env)
       if (result) Object.assign(merged, result)
     }
+  }
+  // Hooks may select or replace the detected framework. Only then install the
+  // built-in driver, including the documented explicit framework: 'astro' case.
+  const framework = !merged.framework || merged.framework === 'auto'
+    ? detectFramework(root) : merged.framework
+  if (framework === 'astro' && !rawPlugins.some((plugin) => plugin.name === 'nasti:astro')) {
+    const plugin = astro()
+    rawPlugins.push(plugin)
+    const result = await plugin.config?.(merged, env)
+    if (result) Object.assign(merged, result)
   }
 
   // 先构建 resolved，plugins 稍后填入（避免过滤时引用未初始化变量）

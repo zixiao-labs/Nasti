@@ -162,8 +162,10 @@ Nasti 映射 `root` / `base` / `mode` / `build.outDir`，在应用根目录的�
 
 ### TypeScript 7 与 Vue Vapor
 
-仓库及 TypeScript playgrounds 使用正式版 `typescript@^7.0.2`，继续通过
+仓库及普通 TypeScript playgrounds 使用正式版 `typescript@^7.0.2`，继续通过
 `pnpm typecheck` / `tsc --noEmit` 检查类型；`tsdown` 自动使用原生 TS 7 生成声明。
+Astro playground 使用 `astro check` 检查 `.astro` 和宿主源码；其官方
+`@astrojs/check@0.9.12` 仍依赖 TS 5/6 API，因此仅此 workspace 使用 TS 6。
 TS 7 不取代应用源码的 OXC 转译，也不意味着 `nasti build` 会自动做应用类型检查。
 当前 `tsdown` 的声明生成适配仍会提示 TS 7 API 为实验性，这是工具链提示而非类型检查失败。
 

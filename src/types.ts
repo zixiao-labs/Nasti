@@ -16,7 +16,6 @@ import type {
   SFCTemplateCompileOptions,
 } from '@vue/compiler-sfc'
 import type { Logger } from './core/logger.js'
-import type { CompileOptions, PreprocessorGroup } from 'svelte/compiler'
 
 type RolldownObjectHook<K extends keyof RolldownPlugin> = Extract<
   NonNullable<RolldownPlugin[K]>,
@@ -85,9 +84,58 @@ export interface NastiConfig {
 
 export type ReactFileFilter = string | RegExp | Array<string | RegExp>
 
+/** Structural compiler contracts keep the optional Svelte peer out of public declarations. */
 export interface SvelteOptions {
-  compilerOptions?: Omit<CompileOptions, 'filename' | 'rootDir' | 'generate' | 'dev' | 'hmr' | 'css'>
-  preprocess?: PreprocessorGroup | PreprocessorGroup[]
+  compilerOptions?: {
+    name?: string
+    customElement?: boolean | ((options: { filename: string }) => boolean)
+    accessors?: boolean
+    namespace?: 'html' | 'svg' | 'mathml'
+    immutable?: boolean
+    cssHash?: (options: { name: string; filename: string; css: string; hash: (input: string) => string }) => string
+    preserveComments?: boolean
+    preserveWhitespace?: boolean
+    fragments?: 'html' | 'tree'
+    runes?: boolean | ((options: { filename: string }) => boolean | undefined)
+    discloseVersion?: boolean
+    compatibility?: { componentApi?: 4 | 5 }
+    sourcemap?: object | string
+    outputFilename?: string
+    cssOutputFilename?: string
+    modernAst?: boolean
+    warningFilter?: (warning: {
+      code: string
+      message: string
+      filename?: string
+      frame?: string
+      start?: { line: number; column: number; character: number }
+      end?: { line: number; column: number; character: number }
+    }) => boolean
+    experimental?: { async?: boolean }
+  }
+  preprocess?: SveltePreprocessorGroup | SveltePreprocessorGroup[]
+}
+
+interface SvelteProcessed {
+  code: string
+  map?: string | object
+  dependencies?: string[]
+  attributes?: Record<string, string | boolean>
+}
+
+type SveltePreprocessor = (options: {
+  content: string
+  attributes: Record<string, string | boolean>
+  markup: string
+  filename?: string
+}) => SvelteProcessed | void | Promise<SvelteProcessed | void>
+
+interface SveltePreprocessorGroup {
+  name?: string
+  markup?: (options: { content: string; filename?: string }) =>
+    SvelteProcessed | void | Promise<SvelteProcessed | void>
+  script?: SveltePreprocessor
+  style?: SveltePreprocessor
 }
 
 /**

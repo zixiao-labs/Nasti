@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import type { EnvironmentBuildOutput, NastiPlugin, ResolvedConfig } from '../types.js'
+import type { EnvironmentBuildOutput, EnvironmentServeResult, NastiPlugin, ResolvedConfig } from '../types.js'
 import { resolveProjectImport } from '../core/project-import.js'
 
 const ASTRO_VERSION = '7.4.11'
@@ -59,20 +59,19 @@ async function runAstro(command: 'build' | 'dev' | 'preview', root: string, opti
     env: { ...process.env, NODE_ENV: command === 'dev' ? 'development' : 'production' },
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
   })
+  let stopping = false
   const closed = new Promise<void>((resolve, reject) => {
     child.once('error', reject)
-    child.once('close', (code, signal) => code === 0 ? resolve()
+    child.once('close', (code, signal) => code === 0 && (command === 'build' || stopping) ? resolve()
       : reject(new Error(`[nasti:astro] ${command} exited with ${signal ?? `code ${code}`}. See Astro's diagnostics above.`)))
   })
-  // Startup failures must be observed even before the caller owns the service.
-  void closed.catch(() => {})
+  // Observe startup rejection here; the owning service observes later exits.
   const ready = new Promise<any>((resolve, reject) => {
     child.once('message', resolve)
     void closed.then(() => reject(new Error(`[nasti:astro] ${command} exited before becoming ready.`)), reject)
   })
   const data = await ready
   if (command === 'build') await closed
-  let stopping = false
   return {
     ...data,
     closed: () => closed,
@@ -169,10 +168,15 @@ export function astro(options: AstroOptions = {}): NastiPlugin {
           const origin = `http://${host}:${address.port}`
           // Keep Astro's WebSocket origin intact instead of partially proxying
           // HTTP while silently breaking Vite HMR or island module loading.
-          return {
+          const service: EnvironmentServeResult = {
             localUrls: server.resolvedUrls?.local ?? [origin + config.base],
             networkUrls: server.resolvedUrls?.network ?? [],
             middleware(request, response) {
+              if (devServer !== server) {
+                response.statusCode = 503
+                response.end('Astro development server is not running.')
+                return
+              }
               const localAddress = wildcardHost ? request.socket.localAddress : undefined
               const destination = localAddress
                 ? `http://${localAddress.includes(':') ? `[${localAddress}]` : localAddress}:${address.port}` : origin
@@ -180,6 +184,14 @@ export function astro(options: AstroOptions = {}): NastiPlugin {
               response.end()
             },
           }
+          void server.closed().catch((error: Error) => {
+            devServer = undefined
+            service.localUrls = []
+            service.networkUrls = []
+            config.logger.error(error.message, { error })
+            environment.hot.send({ type: 'error', err: { message: error.message, stack: error.stack } })
+          })
+          return service
         },
         async close() {
           const server = devServer

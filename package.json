@@ -65,11 +65,13 @@
     "test:install": "pnpm build && node scripts/npm-install-smoke.mjs"
   },
   "dependencies": {
+    "@types/connect": "^3.4.38",
     "cac": "7.0.0",
     "chokidar": "5.0.0",
     "connect": "^3.7.0",
     "dotenv": "^18.0.6",
     "import-meta-resolve": "^4.2.0",
+    "lru-cache": "^11.5.3",
     "oxc-parser": "^0.153.0",
     "oxc-transform": "^0.153.0",
     "picocolors": "^1.1.1",
@@ -83,7 +85,6 @@
   "devDependencies": {
     "@tailwindcss/node": "^4.3.3",
     "@tailwindcss/oxide": "^4.3.3",
-    "@types/connect": "^3.4.38",
     "@types/node": "^22.20.5",
     "@types/picomatch": "^4.0.3",
     "@types/ws": "^8.18.2",
