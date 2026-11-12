@@ -24,6 +24,25 @@ async function createPluginContainer(t, plugins) {
   return { container: environment.pluginContainer, root }
 }
 
+test('native builds honor explicit plugin dependencies', async (t) => {
+  const root = createFixture(t, 'nasti-build-hook-dependencies-')
+  fs.writeFileSync(path.join(root, 'index.html'), '<script type="module" src="/src/main.js"></script>')
+  fs.writeFileSync(path.join(root, 'src/main.js'), 'console.log("ordered")')
+  const seen = []
+  await build({
+    root, logLevel: 'silent',
+    plugins: [
+      { name: 'fixture:after', transform(_code, id) {
+        if (id.endsWith('/src/main.js')) seen.push('after')
+      } },
+      { name: 'fixture:before', post: ['fixture:after'], transform(_code, id) {
+        if (id.endsWith('/src/main.js')) seen.push('before')
+      } },
+    ],
+  })
+  assert.deepEqual(seen, ['before', 'after'])
+})
+
 test('dev resolveId filters receive importer IDs, including missing and excluded importers', async (t) => {
   const calls = []
   const { container, root } = await createPluginContainer(t, [{

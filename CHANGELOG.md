@@ -37,12 +37,32 @@ Refresh. Astro requires Node >=22.23.4; ordinary Nasti runtime requirements rema
 unchanged. The current declaration generator warns that its TS 7 API integration
 is experimental. Third-party Astro deployment adapters are not certified here.
 
-Local validation on Node 24 / macOS: 203 tests passed, with one browser-only test
-skipped in the ordinary suite; all 34 framework/TanStack tests passed with system
+Local validation on Node 24 / macOS after syncing v2.9.0: 214 tests passed, with
+one browser-only test skipped in the ordinary suite; all 37 framework/TanStack
+tests passed with system
 Chrome enabled, including the exact Vapor console notice. Root and six playground
 typechecks, ESM/CJS/declaration generation, playground builds, npm 11 strict
 packed-package installation checks and the Astro CLI preview/shutdown smoke passed.
 Node 20/22, Linux/Windows and npm 10 remain CI checks, not locally verified results.
+
+## 2.9.0
+
+### Reduce development log noise and preserve Start state
+
+- Route Rolldown diagnostics through Nasti's logger without losing user handlers
+  or fatal escalation. Filter only redundant non-RSC TanStack client directives.
+  Keep gzip/output tables and minified-size warnings out of Start dev rebuilds.
+- Serve Start's isolated client graph with React/Solid Refresh, including manual
+  lazy routes. Preserve state for compatible component and server-function edits;
+  refresh loader data on server-only changes. Retain reload fallbacks for route
+  topology/env changes and incompatible boundaries. Server compilation remains a
+  serialized full build, not a fully incremental SSR evaluator.
+- Restore visible connection logs and add timed Refresh lifecycle logs that await
+  actual update application. Ignore unrelated documentation changes and expose
+  debug-only invalidation/404 diagnostics. Configure 404 components in examples.
+- Track native bundler-loaded dependency files as client HMR inputs, including
+  linked-package internals, without invalidating client entries for server-only
+  edits. Preserve explicit plugin watch inputs alongside native inputs.
 
 ## 2.8.1
 

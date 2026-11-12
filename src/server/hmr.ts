@@ -49,7 +49,9 @@ export async function handleFileChange(
   } catch {
     /* deleted / dangling */
   }
-  if (mods.size === 0) {
+  // Start records every compiled client input, including dependency bundle watch
+  // files. Do not invalidate an unrelated client package for a server-only edit.
+  if (mods.size === 0 && !config.plugins.some((plugin) => plugin.name === 'nasti:tanstack-start')) {
     const packageRoot = findNearestPackageRoot(file)
     if (
       packageRoot &&
@@ -123,6 +125,9 @@ export async function handleFileChange(
     }
   }
 
+  if (!fullReload && updates.length > 0) {
+    environment.hot.send({ type: 'update-start', timestamp })
+  }
   const transformed = await Promise.all(
     [...affectedSet].map(async (module) => ({
       module,
