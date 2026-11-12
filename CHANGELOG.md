@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.10.0
+
+### Preact, Svelte, Astro and TypeScript 7
+
+- Add `framework: 'preact'` and dependency detection. Use Preact's automatic JSX
+  runtime consistently in native dev, bundled dev, production, SSR and Electron
+  Node transforms without applying React Compiler or React Refresh.
+- Add native Svelte 5 component and rune-module compilation, client/server targets,
+  external scoped CSS, configurable preprocessors and watched preprocessor inputs.
+  Default client development uses one native Rolldown graph to preserve runtime
+  identity; component updates refresh the page rather than retaining state.
+- Add automatic whole-site Astro detection and `astro()` using the existing
+  Environment Driver. Pin the experimental official API at Astro `7.4.11`, resolve
+  it from the consuming app, and manage dev startup/redirects/shutdown, build
+  metadata and official static/adapter-aware preview. Astro owns its Vite graph,
+  routes and islands; this is not a native `.astro` compiler or a SvelteKit adapter.
+- Run Astro APIs in app-local child processes without changing the parent cwd or
+  NODE_ENV. Keep caches/prerender modules under the application root, preserve build
+  base paths in preview metadata and avoid native static-root source exposure for
+  driver-owned client environments. Ordinary Nasti applications do not install
+  Astro, Vite, Preact or Svelte as mandatory runtime dependencies.
+- Move repository and playground typechecking plus declaration generation to
+  stable TypeScript `7.0.2`. Keep `tsc` commands and OXC application transforms;
+  adapt the declaration smoke test to TypeScript 7 package exports.
+- Update Vue and compiler-sfc together to `3.6.0-rc.14`. Replace the old Vapor
+  disclaimer with `Currently, Vapor is still a Vue beta feature.` in browser
+  warnings and deduplicated terminal stdout notices, respecting log levels.
+- Fix bundled-dev WebSocket ports for ephemeral/occupied ports and refresh
+  in-memory entry output before patch-triggered reloads, preventing stale pages.
+- Add Preact, Svelte and Astro workspaces and CI build/typecheck/browser coverage,
+  including a real Preact island in Astro, SSR rendering and file-edit reloads.
+
+Preact/Svelte component updates currently use full-page refresh, not state-preserving
+Refresh. Astro requires Node >=22.23.4; ordinary Nasti runtime requirements remain
+unchanged. The current declaration generator warns that its TS 7 API integration
+is experimental. Third-party Astro deployment adapters are not certified here.
+
+Local validation on Node 24 / macOS: 203 tests passed, with one browser-only test
+skipped in the ordinary suite; all 34 framework/TanStack tests passed with system
+Chrome enabled, including the exact Vapor console notice. Root and six playground
+typechecks, ESM/CJS/declaration generation, playground builds, npm 11 strict
+packed-package installation checks and the Astro CLI preview/shutdown smoke passed.
+Node 20/22, Linux/Windows and npm 10 remain CI checks, not locally verified results.
+
 ## 2.8.1
 
 ### Fix npm installation with optional React Compiler peers

@@ -20,6 +20,6 @@
     "@babel/core": "^7.29.7",
     "babel-preset-solid": "1.9.16",
     "solid-refresh": "0.7.8",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

@@ -160,14 +160,18 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   // transformMiddleware 之前（接管 '/'、/assets/*、懒编译端点）。
   // unbundled 管线保持默认 —— 不开启时下面这段完全不执行。
   let bundledServer: import('./bundled/dev-engine.js').BundledDevServer | null = null
+  let bundledReady: Promise<void> | undefined
   if (config.experimental.bundledDev) {
-    const { createBundledDevServer } = await import('./bundled/dev-engine.js')
-    bundledServer = await createBundledDevServer({
-      config: configWithPlugins,
-      clientEnv,
-      httpServer,
+    // The native runtime embeds its WebSocket port. Initialize only after HTTP
+    // has bound the actual port (including port: 0 and occupied-port fallback).
+    app.use((req, res, next) => {
+      if (!bundledReady) {
+        res.statusCode = 503
+        res.end('Development server is starting')
+        return
+      }
+      void bundledReady.then(() => bundledServer!.middleware(req, res, next)).catch(next)
     })
-    app.use(bundledServer.middleware)
   }
 
   // 文件监听
@@ -410,9 +414,22 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
       return new Promise((resolve, reject) => {
         let currentPort = finalPort
 
-        const onListening = () => {
+        const onListening = async () => {
           const actualPort = (httpServer.address() as any)?.port ?? currentPort
           config.server.port = actualPort
+          if (config.experimental.bundledDev && !bundledReady) {
+            bundledReady = (async () => {
+              const { createBundledDevServer } = await import('./bundled/dev-engine.js')
+              bundledServer = await createBundledDevServer({ config: configWithPlugins, clientEnv, httpServer })
+            })()
+          }
+          try {
+            await bundledReady
+          } catch (error) {
+            httpServer.close()
+            reject(error)
+            return
+          }
           const localUrl = `http://localhost:${actualPort}/`
           const networkUrl = host === '0.0.0.0' ? `http://${getNetworkAddress()}:${actualPort}/` : null
           const driverLocalUrls = Object.values(environmentServices)
@@ -520,13 +537,6 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
   try {
     await startEnvironmentDrivers()
   } catch (error) {
-    if (bundledServer) {
-      try {
-        await bundledServer.close()
-      } catch (closeError) {
-        logCloseError('bundled dev server after driver startup failure', closeError)
-      }
-    }
     try {
       await watcher.close()
     } catch (closeError) {
@@ -558,10 +568,15 @@ export async function createServer(inlineConfig: NastiConfig = {}): Promise<DevS
     }
   }
   // 外部环境驱动与插件 pre 中间件优先于 Nasti 的转换和静态文件服务。
-  app.use(transformMiddleware(transformContexts.get('client')!))
-  const publicDir = path.resolve(config.root, 'public')
-  app.use(sirv(publicDir, { dev: true, etag: true }))
-  app.use(sirv(config.root, { dev: true, etag: true }))
+  const clientTransformContext = transformContexts.get('client')
+  if (clientTransformContext) {
+    app.use(transformMiddleware(clientTransformContext))
+    const publicDir = path.resolve(config.root, 'public')
+    app.use(sirv(publicDir, { dev: true, etag: true }))
+    app.use(sirv(config.root, { dev: true, etag: true }))
+  }
+  // A driver-owned client has no native transform context. Do not install the
+  // native static-root fallback: its server-only sources are owned by the driver.
 
   // 插件返回的函数会在内置中间件之后执行
   for (const run of postMiddlewares) run()

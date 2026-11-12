@@ -8,7 +8,7 @@
     "preview": "nasti preview"
   },
   "dependencies": {
-    "vue": "3.6.0-rc.10"
+    "vue": "3.6.0-rc.14"
   },
   "devDependencies": {
     "@nasti-toolchain/nasti": "workspace:*"

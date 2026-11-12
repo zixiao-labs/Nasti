@@ -10,7 +10,7 @@ import type {
 
 const defaultResolve: Required<ResolveConfig> = {
   alias: {},
-  extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue'],
+  extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.json', '.vue', '.svelte'],
   conditions: ['import', 'module', 'browser', 'default'],
   mainFields: ['module', 'jsnext:main', 'jsnext', 'main'],
   noExternal: [],
@@ -83,6 +83,7 @@ export const defaults: Required<Omit<NastiConfig, 'plugins' | 'customLogger' | '
   framework: 'auto',
   react: defaultReact,
   solid: { hydratable: true },
+  svelte: {},
   resolve: defaultResolve,
   server: defaultServer,
   build: defaultBuild,

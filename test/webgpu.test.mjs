@@ -396,7 +396,8 @@ const invalid: number = shader;
 `)
   const require = createRequire(import.meta.url)
   execFileSync(process.execPath, [
-    require.resolve('typescript/bin/tsc'), '--noEmit', '--strict', '--skipLibCheck',
+    path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc'),
+    '--noEmit', '--strict', '--skipLibCheck',
     '--module', 'ESNext', '--moduleResolution', 'bundler', '--target', 'ES2022',
     '--types', '@nasti-toolchain/nasti/webgpu', path.join(f.root, 'src/types.ts'),
   ], { cwd: f.root, stdio: 'pipe' })

@@ -30,7 +30,7 @@ import {
 } from '../core/css-engine.js'
 import { htmlPlugin, readHtmlFile, processHtml } from '../plugins/html.js'
 import { reactPlugin } from '../plugins/react.js'
-import { transformCode, shouldTransform } from '../core/transformer.js'
+import { transformCode, shouldTransform, frameworkJsxOptions } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { getPluginHook, type RolldownHookName } from '../core/plugin-hooks.js'
 import { tryNativeReporterPlugin, reportBuildOutput, warnLargeChunks, displaySize } from './reporter.js'
@@ -435,18 +435,16 @@ export function resolveClientEntries(config: ResolvedConfig, html: string | null
 }
 
 /** 单个环境的 oxc 转译插件（TS/JSX，consumer 无关） */
-function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvironment) {
+export function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvironment) {
   if (config.framework === 'react') return reactPlugin(config, environment)
   return {
     name: 'nasti:oxc-transform',
     transform(code: string, id: string) {
       if (!shouldTransform(id)) return null
       const result = transformCode(id, code, {
+        ...frameworkJsxOptions(config.framework),
         sourcemap: !!environment.options.build.sourcemap,
         target: environment.options.build.target,
-        preserveJsx: config.framework === 'solid',
-        jsxRuntime: 'automatic',
-        jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })
       return { code: result.code, map: result.map ? JSON.parse(result.map) : undefined }
     },

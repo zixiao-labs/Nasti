@@ -4,7 +4,7 @@
 
 **基于 [Rolldown](https://rolldown.rs) + [OXC](https://oxc.rs) 的高性能 Web 打包器**
 
-*兼容 Vite 插件生态，内置 React & Vue 支持*
+*兼容 Vite 插件生态，原生支持 React / Vue / Solid / Preact / Svelte，可通过 Environment Driver 运行 Astro*
 
 [![CI](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml/badge.svg)](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@nasti-toolchain%2Fnasti)](https://www.npmjs.com/package/@nasti-toolchain/nasti)
@@ -24,6 +24,8 @@
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR；测试版支持 Vue 3.6 Vapor Mode（可选依赖 `@vue/compiler-sfc`）
 - **内置 Solid 支持** - 原生 DOM / SSR JSX 编译、`solid` 条件导出与 Solid Refresh
+- **内置 Preact / Svelte 支持** - Preact JSX 与 SSR；Svelte 5 组件、runes、CSS 抽取与 SSR
+- **Astro 站点支持** - Environment Driver 对接官方 Astro 开发、构建与预览，保留文件路由和 islands
 - **原生 TanStack** - Router 文件路由、React / Solid Start 双环境构建与 HTTP，以及可选 Redact；不转调 Vite
 - **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
 - **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
@@ -68,7 +70,7 @@ my-project/
 import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
-  // 框架: 'react' | 'vue' | 'solid' | 'auto'（自动检测）
+  // 框架: 'react' | 'vue' | 'solid' | 'preact' | 'svelte' | 'astro' | 'auto'
   framework: 'react',
 
   server: {
@@ -93,6 +95,87 @@ export default defineConfig({
   plugins: [],
 })
 ```
+
+### Preact、Svelte 与 Astro（2.10）
+
+`framework: 'auto'` 会检测 `src` 中的 `.astro` / `.vue` / `.svelte` 文件以及
+应用 `package.json` 的依赖。混合框架项目请显式设置 `framework`；
+Astro 的 UI islands 不会把整个站点误识别为 React 或 Preact 应用。
+所有框架依赖均安装在**消费它们的应用 workspace**，不要依赖根目录提升。
+
+| 框架 | 应用依赖 | 开发 / 生产管线 | 示例 |
+| --- | --- | --- | --- |
+| Preact | `preact`（SSR 另装 `preact-render-to-string`） | Nasti 原生 OXC / Rolldown | [`playground/preact-basic`](playground/preact-basic) |
+| Svelte 5 | `svelte` | Nasti 原生 Svelte compiler / Rolldown | [`playground/svelte-basic`](playground/svelte-basic) |
+| Astro | `astro@7.4.11`，所需的官方 integrations / adapters | 官方 Astro API，通过 Environment Driver 管理 | [`playground/astro-basic`](playground/astro-basic) |
+
+Preact 不需要额外 JSX 插件：设置 `framework: 'preact'`，TypeScript 应用同时设置
+`jsx: 'react-jsx'` 和 `jsxImportSource: 'preact'`。开发与服务端转换均使用
+`preact/jsx-runtime`，不会注入 React Fast Refresh / React Compiler。
+当前组件更新采用整页刷新，**不提供 Prefresh 状态保留，也不自动 alias React 到 compat**。
+
+Svelte 支持 `.svelte`（含可擦除的 `<script lang="ts">` 类型语法）、
+`.svelte.js` / `.svelte.ts` rune 模块、client / server 编译、scoped CSS 抽取和预处理：
+
+```ts
+export default defineConfig({
+  framework: 'svelte',
+  svelte: {
+    compilerOptions: { preserveWhitespace: true },
+    // preprocess: 自定义 Svelte preprocessor 或 preprocessor 数组
+  },
+})
+```
+
+预处理器返回的 `dependencies` 会进入 Nasti 的文件监听。为防止 Svelte 的公开入口和
+internal 入口被独立预打包成多份 runtime，默认 client 开发环境自动使用原生
+Rolldown bundled-dev 单图；修改组件后整页刷新，**不保留组件状态**。
+这里不是 SvelteKit 适配，不实现 SvelteKit 路由、服务端 actions 或 adapter。
+示例的 `typecheck` 使用 TS 7 检查宿主 `.ts`；`.svelte` 内部的完整类型检查需另配
+与所用 TypeScript 版本兼容的 Svelte 检查工具。
+
+Astro 使用 `framework: 'astro'` 即可自动启用 driver；默认读取 `astro.config.*`。
+自定义配置文件可显式使用：
+
+```ts
+import { astro, defineConfig } from '@nasti-toolchain/nasti'
+
+export default defineConfig({
+  framework: 'astro',
+  plugins: [astro({ configFile: 'astro.config.mjs' })],
+})
+```
+
+Astro `7.4.11` 需要 Node `>=22.23.4`，建议使用 Node 24；这不会提升普通 Nasti
+应用的最低 Node 版本。其 programmatic API 仍是实验契约，因此固定并校验版本。
+Astro 的路由、islands、integrations、adapter 与底层 Vite 配置放在 `astro.config.*`；
+**此适配确实使用 Astro 自带的 Vite，不是 Nasti 原生 Astro 编译器**。
+Nasti 映射 `root` / `base` / `mode` / `build.outDir`，在应用根目录的独立子进程调用
+官方 API，隔离 Astro 的 cwd / NODE_ENV / 全局 runtime，缓存固定在应用的 `.astro/`，
+不把 Nasti transform 插件或 `build.rolldownOptions` 注入 Astro。
+
+`nasti dev` 管理 Astro 子服务，访问 Nasti 地址会重定向至实际 Astro 地址，
+从而保持其原生 WebSocket / HMR 链路；关闭 Nasti 会关闭 Astro watcher 和服务。
+`nasti build` 返回 Astro 产物元数据；`nasti preview` 识别 `nasti-astro.json` 并调用
+官方预览 API，而不是公开 SSR 输出目录。SSR 预览是否可用取决于 Astro adapter。
+目前不支持将 Astro driver 与 Electron / Nasti bundled-dev 同时启用。
+
+### TypeScript 7 与 Vue Vapor
+
+仓库及 TypeScript playgrounds 使用正式版 `typescript@^7.0.2`，继续通过
+`pnpm typecheck` / `tsc --noEmit` 检查类型；`tsdown` 自动使用原生 TS 7 生成声明。
+TS 7 不取代应用源码的 OXC 转译，也不意味着 `nasti build` 会自动做应用类型检查。
+当前 `tsdown` 的声明生成适配仍会提示 TS 7 API 为实验性，这是工具链提示而非类型检查失败。
+
+Vue 与 `@vue/compiler-sfc` 同步更新为 `3.6.0-rc.14`。启用 Vapor 后，
+终端 stdout（默认 info 日志级别，每个 logger 一次）与浏览器控制台（每个页面一次）
+使用同一句提示：
+
+```text
+Currently, Vapor is still a Vue beta feature.
+```
+
+`logLevel: 'silent'` 仍会关闭终端提示；非 Vapor 组件不会输出该提示。
 
 ### 生产构建：手动代码拆分 & Tree-shaking
 

@@ -12,6 +12,7 @@ import {
   transformCode,
   transformReactCode,
   shouldTransform,
+  frameworkJsxOptions,
   getModuleType,
 } from '../core/transformer.js'
 import { readHtmlFile, processHtml } from '../plugins/html.js'
@@ -583,10 +584,8 @@ export async function transformRequest(
     }
   } else if (shouldTransform(filePath)) {
     const result = transformCode(filePath, code, {
+      ...frameworkJsxOptions(config.framework),
       sourcemap: true,
-      preserveJsx: config.framework === 'solid',
-      jsxRuntime: 'automatic',
-      jsxImportSource: 'vue',
       target: ctx.environment?.options.build.target ?? config.build.target,
     })
     code = result.code
@@ -1418,7 +1417,7 @@ function appendTimestampQuery(url: string, timestamp: number): string {
   return `${withoutHash}${withoutHash.includes('?') ? '&' : '?'}t=${timestamp}${hash}`
 }
 
-const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
+const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue', '.svelte']
 const ESM_CONDITIONS = ['import', 'browser', 'module', 'default']
 
 /** 从 /@modules/pkgName/... URL 中提取包名（支持 scoped 包） */
@@ -1686,7 +1685,7 @@ function isModuleRequest(
   destination?: string | string[],
 ): boolean {
   const cleanUrl = url.split(/[?#]/)[0]
-  if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
+  if (/\.(ts|tsx|jsx|js|mjs|vue|svelte|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.endsWith('.wgsl')) {
     const query = new URLSearchParams(url.split('?')[1]?.split('#')[0])
     return query.has('raw') || query.has('url') || destination === 'script'

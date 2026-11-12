@@ -125,9 +125,9 @@ npm install -D @vue/compiler-sfc@^3.6.0-0</pre></div>
 
     <div class="tip">
       <strong>测试版免责声明：</strong>
-      启用 Vapor 时，终端与浏览器控制台会打印：
-      <em>Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.</em>
-      请勿在 SSR 或对稳定性有强要求的生产路径中依赖该模式。
+      启用 Vapor 时，终端 stdout（默认 info 级别）与浏览器控制台会去重打印：
+      <em>Currently, Vapor is still a Vue beta feature.</em>
+      当前 Vue / compiler-sfc 基线为 3.6.0-rc.14，使用前请验证应用所需的编译特性。
     </div>
 
     <h2>示例</h2>

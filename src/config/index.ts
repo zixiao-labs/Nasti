@@ -6,11 +6,13 @@ import type {
   ResolvedConfig,
   NastiPlugin,
   EnvironmentOptions,
+  Framework,
 } from '../types.js'
 import { defaultReact, defaults } from './defaults.js'
 import { createLogger } from '../core/logger.js'
 import { isMinifyEnabled } from '../core/minify.js'
 import { orderPlugins, setupPluginApi } from '../core/plugin-api.js'
+import { astro } from '../plugins/astro.js'
 
 /** 读取 tsconfig.json 中的 paths，转换为 Nasti alias 格式 */
 function loadTsconfigPaths(root: string): Record<string, string> {
@@ -67,13 +69,16 @@ export async function loadConfigFromFile(root: string): Promise<NastiConfig> {
 /**
  * Detect the framework from the project's src directory and package.json.
  *
- * A .vue file at most five directories below src takes priority. Across dependency
- * fields, React takes priority over Vue; Solid is selected only when neither is
- * declared. Otherwise, missing, unreadable, or invalid metadata falls back to React.
+ * Source files (at most five directories below src) take priority: Astro, Vue,
+ * then Svelte. Astro owns a whole site, including any UI-framework islands.
+ * Dependency-only detection preserves React > Vue > Solid precedence, then
+ * Preact > Svelte. Invalid or missing metadata retains the React fallback.
  */
-export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
+export function detectFramework(root: string): Framework {
   const sourceRoot = path.resolve(root, 'src')
-  if (containsVueFile(sourceRoot)) return 'vue'
+  for (const framework of ['astro', 'vue', 'svelte'] as const) {
+    if (containsFrameworkFile(sourceRoot, `.${framework}`)) return framework
+  }
 
   const packagePath = path.resolve(root, 'package.json')
   if (fs.existsSync(packagePath)) {
@@ -87,10 +92,13 @@ export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
       }
       const hasVue = 'vue' in dependencies || '@vue/runtime-dom' in dependencies
       const hasReact = 'react' in dependencies || 'react-dom' in dependencies
+      if ('astro' in dependencies) return 'astro'
       if ('solid-js' in dependencies && !hasReact && !hasVue) return 'solid'
       if (hasVue && !hasReact) return 'vue'
       if (hasReact) return 'react'
       if (hasVue) return 'vue'
+      if ('preact' in dependencies) return 'preact'
+      if ('svelte' in dependencies) return 'svelte'
     } catch {
       // Invalid package.json is reported by package managers; framework detection
       // remains deterministic and falls back to the existing React behavior.
@@ -100,16 +108,16 @@ export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
   return 'react'
 }
 
-function containsVueFile(dir: string, depth = 0): boolean {
+function containsFrameworkFile(dir: string, extension: string, depth = 0): boolean {
   if (depth > 5 || !fs.existsSync(dir)) return false
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.vue')) return true
+      if (entry.isFile() && entry.name.endsWith(extension)) return true
       if (
         entry.isDirectory() &&
         entry.name !== 'node_modules' &&
         entry.name !== 'dist' &&
-        containsVueFile(path.join(dir, entry.name), depth + 1)
+        containsFrameworkFile(path.join(dir, entry.name), extension, depth + 1)
       ) {
         return true
       }
@@ -163,6 +171,11 @@ export async function resolveConfig(
     ...(fileConfig.plugins ?? []),
     ...(inlineConfig.plugins ?? []),
   ]
+  if ((merged.framework === 'astro' ||
+      ((!merged.framework || merged.framework === 'auto') && detectFramework(root) === 'astro')) &&
+      !rawPlugins.some((plugin) => plugin.name === 'nasti:astro')) {
+    rawPlugins.push(astro())
+  }
 
   // mode：merged.mode 优先，否则按 command 取默认。env（传给 plugin.config）
   // 与最终 resolved.mode 共用此值，避免二者分叉（否则 loadEnv 会按错误的
@@ -203,7 +216,7 @@ export async function resolveConfig(
     framework:
       (merged.framework ?? defaults.framework) === 'auto'
         ? detectFramework(root)
-        : (merged.framework as 'react' | 'vue' | 'solid'),
+        : (merged.framework as Framework),
     react: {
       include: merged.react?.include ?? defaultReact.include,
       exclude: merged.react?.exclude ?? defaultReact.exclude,
@@ -215,6 +228,7 @@ export async function resolveConfig(
           : (merged.react?.compiler ?? defaultReact.compiler),
     },
     solid: { hydratable: merged.solid?.hydratable ?? true },
+    svelte: merged.svelte ?? {},
     command,
     resolve: {
       // tsconfig paths 优先级最低：tsconfig < defaults < user config
@@ -245,6 +259,12 @@ export async function resolveConfig(
     // Solid libraries publish uncompiled JSX under the `solid` condition.
     // Their default JS exports are DOM-only and cannot be used for SSR.
     resolved.resolve.conditions = ['solid', mode, ...resolved.resolve.conditions]
+  }
+  if (resolved.framework === 'svelte') {
+    resolved.resolve.conditions = ['svelte', ...resolved.resolve.conditions]
+    // Svelte's public and internal entrypoints share relative state modules.
+    // Independently prebundling them duplicates the runtime; use one native graph.
+    if (command === 'serve') resolved.experimental.bundledDev = true
   }
 
   // ── Environment API：解析 environments map（默认 client + ssr）──────────

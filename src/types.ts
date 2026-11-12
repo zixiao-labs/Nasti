@@ -16,6 +16,7 @@ import type {
   SFCTemplateCompileOptions,
 } from '@vue/compiler-sfc'
 import type { Logger } from './core/logger.js'
+import type { CompileOptions, PreprocessorGroup } from 'svelte/compiler'
 
 type RolldownObjectHook<K extends keyof RolldownPlugin> = Extract<
   NonNullable<RolldownPlugin[K]>,
@@ -33,6 +34,8 @@ type NastiPluginHook<K extends keyof RolldownPlugin, Handler> =
       sequential?: boolean
     })
 
+export type Framework = 'react' | 'vue' | 'solid' | 'preact' | 'svelte' | 'astro'
+
 export interface NastiConfig {
   /** 项目根目录 */
   root?: string
@@ -43,11 +46,13 @@ export interface NastiConfig {
   /** 打包目标平台：web（默认）或 electron */
   target?: 'web' | 'electron'
   /** 框架自动检测或手动指定 */
-  framework?: 'react' | 'vue' | 'solid' | 'auto'
+  framework?: Framework | 'auto'
   /** React JSX / Fast Refresh / Compiler 管线。仅在 framework 解析为 react 时生效。 */
   react?: ReactOptions
   /** Solid DOM/SSR JSX 编译选项。 */
   solid?: { hydratable?: boolean }
+  /** Svelte 5 组件与 rune 模块编译选项。 */
+  svelte?: SvelteOptions
   /** 路径解析配置 */
   resolve?: ResolveConfig
   /** 插件列表 */
@@ -79,6 +84,11 @@ export interface NastiConfig {
 }
 
 export type ReactFileFilter = string | RegExp | Array<string | RegExp>
+
+export interface SvelteOptions {
+  compilerOptions?: Omit<CompileOptions, 'filename' | 'rootDir' | 'generate' | 'dev' | 'hmr' | 'css'>
+  preprocess?: PreprocessorGroup | PreprocessorGroup[]
+}
 
 /**
  * 原生 React Compiler 的公共配置子集。其余实验字段会原样传给
@@ -799,10 +809,11 @@ export interface ResolvedConfig {
   mode: 'development' | 'production'
   target: 'web' | 'electron'
   /** `auto` 在配置解析阶段已收敛为具体框架 */
-  framework: 'react' | 'vue' | 'solid'
+  framework: Framework
   /** 解析后的 React 管线配置；Vue 项目仍保留该字段以简化插件读取。 */
   react: ResolvedReactOptions
   solid: { hydratable: boolean }
+  svelte: SvelteOptions
   command: 'build' | 'serve'
   resolve: Required<ResolveConfig>
   plugins: NastiPlugin[]

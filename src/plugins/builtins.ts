@@ -12,6 +12,7 @@ import { assetsPlugin } from './assets.js'
 import { vuePlugin } from './vue.js'
 import { htmlPlugin } from './html.js'
 import { solidPlugin } from './solid.js'
+import { sveltePlugin } from './svelte.js'
 
 export interface BuiltinPluginOptions {
   /** build 期 CSS 抽取引擎（serve 不传，dev 走 <style> 注入路径） */
@@ -55,6 +56,7 @@ export function resolvePluginList(
       ? [vuePlugin(pluginConfig, opts.environmentName ?? 'client')]
       : []),
     ...(config.framework === 'solid' ? [solidPlugin(pluginConfig)] : []),
+    ...(config.framework === 'svelte' ? [sveltePlugin(pluginConfig)] : []),
     resolvePlugin(pluginConfig),
     cssPlugin(pluginConfig, opts.cssEngine, consumer),
     assetsPlugin(pluginConfig),

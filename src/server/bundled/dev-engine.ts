@@ -40,6 +40,7 @@ import type { ResolvedConfig } from '../../types.js'
 import type { NastiEnvironment } from '../../core/environment.js'
 import {
   getRolldownOptions,
+  createOxcTransformPlugin,
   replaceEntryScript,
   resolveClientEntries,
   toRolldownPlugins,
@@ -138,6 +139,7 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
   const useReactRefresh =
     config.framework === 'react' && config.server.hmr !== false && refreshWrapperFn != null
   const rolldownPlugins = [
+    ...(config.framework === 'preact' ? [createOxcTransformPlugin(config, clientEnv)] : []),
     ...(useReactRefresh
       ? [
           createReactRefreshRuntimePlugin(entryPoints),
@@ -184,6 +186,12 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
     updates: BindingClientHmrUpdate[],
     changedFiles: string[],
   ): Promise<void> {
+    // Both patches and FullReload ultimately reload the page. Refresh the
+    // in-memory entry output before notifying browsers, or a patch reload will
+    // execute the stale initial bundle and discard the just-applied update.
+    if (updates.some(({ update }) => update.type !== 'Noop')) {
+      await engine.ensureLatestBuildOutput()
+    }
     let needsLatestOutput = false
     for (const { clientId, update } of updates) {
       if (update.type === 'Noop') continue
@@ -211,7 +219,6 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
       sendTo(clientId, { type: 'hmr:update', path: url, url })
     }
     if (needsLatestOutput) {
-      await engine.ensureLatestBuildOutput()
       scheduleFullReload()
     }
   }
@@ -226,8 +233,8 @@ export async function createBundledDevServer(opts: BundledDevOptions): Promise<B
         ...(inputOptions as any).experimental,
         devMode: {
           lazy: true,
-          // 默认 DevRuntime 把 ws 地址烤进 bundle：指向 Nasti dev server 本身
-          //（端口被占自动 +1 时 HMR ws 会失联 —— 已知限制，产物仍可服务）
+          // HTTP is already listening: the runtime receives the actual bound port,
+          // not the requested zero/occupied port.
           host: config.server.host === true ? 'localhost' : (config.server.host as string) || 'localhost',
           port: config.server.port,
         },

@@ -1,6 +1,6 @@
 // OXC Transform 封装 - 高性能 TS/JSX/TSX 转译
 import { transformSync } from 'oxc-transform'
-import type { ReactFileFilter, ResolvedReactOptions } from '../types.js'
+import type { Framework, ReactFileFilter, ResolvedReactOptions } from '../types.js'
 
 export interface TransformOptions {
   jsx?: boolean
@@ -32,6 +32,15 @@ const JS_EXTENSIONS = /\.(js|mjs|cjs)$/
 const TS_EXTENSIONS = /\.(ts|mts|cts)$/
 const JSX_EXTENSIONS = /\.(jsx|tsx)$/
 const VUE_EXTENSION = /\.vue$/
+
+/** One JSX rule for dev, build, SSR and Electron; never apply React Refresh to Preact. */
+export function frameworkJsxOptions(framework: Framework): TransformOptions {
+  return {
+    preserveJsx: framework === 'solid',
+    jsxRuntime: 'automatic',
+    jsxImportSource: framework === 'vue' ? 'vue' : framework === 'preact' ? 'preact' : 'react',
+  }
+}
 
 export function shouldTransform(id: string): boolean {
   return (

@@ -5,7 +5,7 @@ import { rolldown } from 'rolldown'
 import type { ResolvedConfig } from '../types.js'
 import { electronPlugin } from '../plugins/electron.js'
 import { resolvePlugin } from '../plugins/resolve.js'
-import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
+import { transformCode, transformReactCode, shouldTransform, frameworkJsxOptions } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides } from '../core/env.js'
 import { resolveMinifyOption } from '../core/minify.js'
 
@@ -82,9 +82,8 @@ export async function bundleElectronNode(
               })
             : shouldTransform(id)
               ? transformCode(id, code, {
+                  ...frameworkJsxOptions(config.framework),
                   sourcemap: !!sourcemap,
-                  jsxRuntime: 'automatic',
-                  jsxImportSource: 'vue',
                   target: config.electron.nodeTarget,
                 })
               : null

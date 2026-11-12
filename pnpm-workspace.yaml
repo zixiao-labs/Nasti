@@ -17,3 +17,9 @@ autoInstallPeers: false
 minimumReleaseAgeExclude:
   # Explicit integration baseline; do not exempt the package or scope generally.
   - '@tanstack/redact@0.2.1'
+  - '@astrojs/markdown-satteri@0.4.9'
+  - '@astrojs/runtime@0.1.1'
+  - '@astrojs/vite-plugin-astro@0.1.2'
+  - astro@7.4.11
+  - '@astrojs/preact-renderer@0.1.2'
+  - '@astrojs/preact@6.1.5'

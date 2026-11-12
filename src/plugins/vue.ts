@@ -24,7 +24,9 @@ const debug = createDebugger('nasti:vue')
 
 /** Vapor Mode 测试版免责声明：终端与浏览器控制台共用同一文案 */
 export const VAPOR_BETA_WARNING =
-  'Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.'
+  'Currently, Vapor is still a Vue beta feature.'
+
+const vaporNoticeLoggers = new WeakSet<ResolvedConfig['logger']>()
 
 interface VueCompilerSfc {
   parse: (source: string, options?: any) => any
@@ -344,7 +346,7 @@ export function vuePlugin(
       }
 
       // Vapor 测试版免责声明：必须放在所有 import 之后，避免破坏 ESM 语法
-      if (vapor) {
+      if (vapor && config.environments[environmentName]?.consumer !== 'server') {
         append(
           `\nif (!globalThis.__NASTI_VAPOR_BETA_WARNED__) {\n` +
             `  globalThis.__NASTI_VAPOR_BETA_WARNED__ = true\n` +
@@ -454,7 +456,12 @@ function resolveVaporMode(
     return false
   }
 
-  config.logger.warnOnce(VAPOR_BETA_WARNING)
+  // This notice belongs on stdout (logger.info), not stderr (logger.warn).
+  // Share deduplication across client/SSR plugin instances in this app.
+  if (!vaporNoticeLoggers.has(config.logger)) {
+    vaporNoticeLoggers.add(config.logger)
+    config.logger.info(VAPOR_BETA_WARNING)
+  }
   return true
 }
 

@@ -10,6 +10,8 @@ export { startElectronDev, electronRendererDevPath } from './server/electron-dev
 export { electronPlugin } from './plugins/electron.js'
 export { monacoEditorPlugin } from './plugins/monaco-editor.js'
 export { webgpuPlugin } from './plugins/webgpu.js'
+export { astro, createAstroPreview } from './plugins/astro.js'
+export type { AstroOptions } from './plugins/astro.js'
 export { tanstackRouter } from './plugins/tanstack-router.js'
 export type { TanStackRouterOptions } from './plugins/tanstack-router.js'
 export { tanstackStart } from './plugins/tanstack-start.js'
@@ -33,6 +35,8 @@ export { loadEnv, buildEnvDefine, ssrDefineOverrides } from './core/env.js'
 
 export type {
   NastiConfig,
+  Framework,
+  SvelteOptions,
   ReactOptions,
   ReactCompilerOptions,
   ReactFileFilter,

@@ -1,0 +1,20 @@
+{
+  "name": "playground-astro-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti dev",
+    "build": "nasti build",
+    "preview": "nasti preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@astrojs/preact": "6.1.5",
+    "astro": "7.4.11",
+    "preact": "^11.2.0"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*",
+    "typescript": "^7.0.2"
+  }
+}

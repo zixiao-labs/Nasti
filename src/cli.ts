@@ -263,6 +263,19 @@ cli
 
       const app = connect()
       const fs = await import('node:fs')
+      if (fs.existsSync(path.join(outDir, 'nasti-astro.json'))) {
+        const { createAstroPreview } = await import('./plugins/astro.js')
+        const preview = await createAstroPreview(resolvedRoot, outDir, {
+          port: Number(options.port),
+          host: options.host ?? 'localhost',
+        })
+        const stop = () => { void preview.stop().then(() => process.exit(0)) }
+        process.once('SIGINT', stop)
+        process.once('SIGTERM', stop)
+        logger.info(`\n  NASTI v${__NASTI_VERSION__} preview (Astro)\n`)
+        printServerUrls({ local: [`http://localhost:${preview.port}${preview.base}`], network: [] }, logger.info)
+        return
+      }
       if (fs.existsSync(path.join(outDir, 'client/nasti-start.json'))) {
         const { createTanStackStartPreview } = await import('./server/start-preview.js')
         app.use(await createTanStackStartPreview(outDir))

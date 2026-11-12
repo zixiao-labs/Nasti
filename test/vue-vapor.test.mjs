@@ -7,7 +7,7 @@ import test from 'node:test'
 import { createServer } from '../dist/index.js'
 
 const VAPOR_BETA_WARNING =
-  'Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.'
+  'Currently, Vapor is still a Vue beta feature.'
 
 function createFixture(t, prefix) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -23,7 +23,9 @@ function createCapturingLogger() {
     warnings,
     logger: {
       hasWarned: false,
-      info() {},
+      info(msg) {
+        warnings.push(msg)
+      },
       warn(msg) {
         this.hasWarned = true
         warnings.push(msg)

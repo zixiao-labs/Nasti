@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url'
 import { moduleResolve } from 'import-meta-resolve'
 import type { ResolvedConfig, HotChannelInvokeHandlers, ModuleNode } from '../types.js'
 import type { NastiEnvironment } from '../core/environment.js'
-import { transformCode, transformReactCode, shouldTransform } from '../core/transformer.js'
+import { transformCode, transformReactCode, shouldTransform, frameworkJsxOptions } from '../core/transformer.js'
 import { loadEnv, buildEnvDefine, ssrDefineOverrides, replaceEnvInCode } from '../core/env.js'
 import { createDebugger } from '../core/debug.js'
 import { createSsrExternal, NODE_BUILTINS } from '../core/ssr-external.js'
@@ -275,9 +275,7 @@ export class NastiModuleRunner {
       const result = transformCode(cleanId, code, {
         sourcemap: false,
         target: this.environment.options.build.target,
-        preserveJsx: this.config.framework === 'solid',
-        jsxRuntime: 'automatic',
-        jsxImportSource: 'vue',
+        ...frameworkJsxOptions(this.config.framework),
       })
       code = result.code
     }

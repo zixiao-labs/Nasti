@@ -6,6 +6,7 @@ dist/
 target/
 .nasti/
 .tanstack/
+.astro/
 playground/tanstack-*/src/routeTree.gen.ts
 
 # IDE

@@ -1,0 +1,16 @@
+---
+import Counter from '../components/Counter'
+const title: string = 'Nasti + Astro'
+---
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>{title}</title></head>
+  <body>
+    <h1>{title}</h1>
+    <Counter client:load />
+    <a href={`${import.meta.env.BASE_URL}about`}>About</a>
+  </body>
+</html>
+<style>
+  :global(button) { color: rgb(220, 70, 20); }
+</style>

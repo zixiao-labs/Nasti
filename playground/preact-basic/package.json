@@ -1,0 +1,19 @@
+{
+  "name": "playground-preact-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti dev",
+    "build": "nasti build",
+    "preview": "nasti preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "preact": "^11.2.0",
+    "preact-render-to-string": "^6.6.2"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*",
+    "typescript": "^7.0.2"
+  }
+}
