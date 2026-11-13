@@ -94,6 +94,23 @@ test('framework auto detection preserves precedence and covers all dependency fi
 })
 
 for (const [format, create] of [['ESM', createServer], ['CJS', cjs.createServer]]) {
+  test(`${format} Svelte builds allow styles from components outside the dev allowlist`, async (t) => {
+    const f = fixture(t, 'svelte')
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-svelte-build-')))
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+    const component = path.join(outside, 'External.svelte')
+    fs.writeFileSync(component, '<p>External</p><style>p { color: #123456 }</style>')
+    fs.unlinkSync(path.join(f.root, 'src/App.svelte'))
+    fs.symlinkSync(component, path.join(f.root, 'src/App.svelte'))
+    const buildApp = format === 'ESM' ? build : cjs.build
+    for (const mode of ['production', 'development']) {
+      const result = await buildApp({ ...f.config, mode })
+      const css = result.output.find((item) => item.fileName.endsWith('.css'))
+      assert.ok(css, 'external component CSS must be extracted')
+      assert.match(String(css.source), /#123456/)
+    }
+  })
+
   test(`${format} Svelte styles enforce the realpath allowlist before compilation`, async (t) => {
     const f = fixture(t, 'svelte')
     const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-svelte-outside-')))

@@ -52,7 +52,7 @@ export function sveltePlugin(config: ResolvedConfig): NastiPlugin {
       } catch {
         return null
       }
-      if (!isAllowedDevModulePath(filename, config.root)) {
+      if (config.command === 'serve' && !isAllowedDevModulePath(filename, config.root)) {
         // Returning null would let the server fall back to reading the parent.
         throw new Error('[nasti:svelte] Style request is outside the allowed filesystem paths')
       }
