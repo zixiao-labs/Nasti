@@ -33,6 +33,7 @@ export { loadEnv, buildEnvDefine, ssrDefineOverrides } from './core/env.js'
 
 export type {
   NastiConfig,
+  Framework,
   ReactOptions,
   ReactCompilerOptions,
   ReactFileFilter,

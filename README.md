@@ -4,7 +4,7 @@
 
 **基于 [Rolldown](https://rolldown.rs) + [OXC](https://oxc.rs) 的高性能 Web 打包器**
 
-*兼容 Vite 插件生态，内置 React & Vue 支持*
+*兼容 Vite 插件生态，内置 React、Vue、Solid、Svelte 和 Preact 支持*
 
 [![CI](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml/badge.svg)](https://github.com/zixiao-labs/Nasti/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@nasti-toolchain%2Fnasti)](https://www.npmjs.com/package/@nasti-toolchain/nasti)
@@ -24,6 +24,8 @@
 - **内置 React 支持** - JSX 自动转换 + React Fast Refresh HMR
 - **内置 Vue 支持** - SFC 编译 + Vue HMR；测试版支持 Vue 3.6 Vapor Mode（可选依赖 `@vue/compiler-sfc`）
 - **内置 Solid 支持** - 原生 DOM / SSR JSX 编译、`solid` 条件导出与 Solid Refresh
+- **内置 Svelte 5 支持** - 组件 / runes 模块编译、CSS 抽取、HMR 与 SSR
+- **内置 Preact 支持** - OXC JSX/TSX 自动运行时、Prefresh HMR 与 SSR
 - **原生 TanStack** - Router 文件路由、React / Solid Start 双环境构建与 HTTP，以及可选 Redact；不转调 Vite
 - **Electron 41+ 支持** - React/Vue renderer + 主进程 / Preload，支持 ESM 主进程
 - **Environment Driver** - 可桥接 Rspeedy 等非 Rolldown 工具链，含 build/dev/watch 生命周期
@@ -68,7 +70,7 @@ my-project/
 import { defineConfig } from '@nasti-toolchain/nasti'
 
 export default defineConfig({
-  // 框架: 'react' | 'vue' | 'solid' | 'auto'（自动检测）
+  // 框架: 'react' | 'vue' | 'solid' | 'svelte' | 'preact' | 'auto'（自动检测）
   framework: 'react',
 
   server: {
@@ -449,6 +451,70 @@ Flight streaming, and installing its server-function dispatcher at
 `globalThis[Symbol.for('nasti.rsc.callServer')]`. This split lets Kunlun Next.js own application
 conventions without coupling Nasti to a specific runtime.
 
+## Svelte 5 支持
+
+在应用 workspace 安装 Svelte（编译器从该 workspace 的 `svelte/compiler` 加载）：
+
+```bash
+npm install svelte@^5
+```
+
+```ts
+import { defineConfig } from '@nasti-toolchain/nasti'
+
+export default defineConfig({ framework: 'svelte' })
+```
+
+```ts
+// src/main.ts
+import { mount } from 'svelte'
+import App from './App.svelte'
+
+mount(App, { target: document.getElementById('app')! })
+```
+
+支持 `.svelte`（含可直接擦除的 TypeScript 语法）、`.svelte.js` / `.svelte.ts`
+runes 模块和 scoped CSS。开发模式使用 Svelte 5 编译器的 HMR，生产构建抽取 CSS；
+server consumer 使用 `generate: 'server'`，不会注入客户端 HMR。
+SSR 默认内联 Svelte 及其运行时依赖，确保开发编译与运行时的模式一致，也不依赖 pnpm 提升传递依赖。
+不内置 SCSS / Less 或非可擦除 TypeScript 语法的预处理；这类项目需先产出标准 Svelte 源码。
+这不包含 SvelteKit 的路由、服务端约定或适配器。
+
+## Preact 支持
+
+```bash
+npm install preact
+npm install -D @prefresh/core @prefresh/utils
+```
+
+```ts
+import { defineConfig } from '@nasti-toolchain/nasti'
+
+export default defineConfig({ framework: 'preact' })
+```
+
+JSX/TSX 使用 `preact/jsx-runtime`，无需导入 `h`。开发模式通过 OXC 注册组件与
+Hook 签名，并使用 Prefresh 保留兼容组件的状态；生产构建、server consumer 和
+`server.hmr: false` 不加载 Prefresh。不会自动将 React 依赖 alias 到 Preact；
+React 兼容库需要应用自行配置 `preact/compat`。TypeScript 配置：
+
+```json
+{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "preact" } }
+```
+
+两个完整示例位于 `playground/svelte-basic` 和 `playground/preact-basic`：
+
+```bash
+pnpm build
+pnpm --filter playground-svelte-basic dev
+pnpm --filter playground-preact-basic dev
+```
+
+`framework: 'auto'` 优先检测 `src` 下最多五层目录内的 `.vue`，其次是 `.svelte`；
+未找到组件时按 React > Vue > Solid > Svelte > Preact 的依赖优先级选择，覆盖
+dependencies、devDependencies、peerDependencies 和 optionalDependencies。
+未识别到框架时仍回退 React；多框架项目应显式设置 `framework`。
+
 ## Vue 支持
 
 Vue 支持需要安装可选依赖：
@@ -469,8 +535,8 @@ export default defineConfig({
 若仍在使用 Vue 3.5，请先升级依赖（详见 [website/pages/vue.html](./website/pages/vue.html)）：
 
 ```bash
-npm install vue@^3.6.0-rc.2
-npm install -D @vue/compiler-sfc@^3.6.0-rc.2
+npm install vue@3.6.0-rc.15
+npm install -D @vue/compiler-sfc@3.6.0-rc.15
 ```
 
 [Vapor Mode](https://github.com/vuejs/core/releases) 是 Vue 3.6 的 opt-in 编译模式，跳过 Virtual DOM，生成直接 DOM 操作。Nasti 支持单文件标记与环境级强制：
@@ -495,7 +561,11 @@ export default defineConfig({
 })
 ```
 
-启用后，终端与浏览器控制台会打印测试版免责声明。Vapor Mode **不适合 SSR**；生产环境无崩溃保证，仅建议用于试验或局部性能热点。
+启用后，终端 stdout 与浏览器控制台各打印一次：
+
+> Vapor is currently a beta feature in Vue and may contain bugs; the current beta version is v3.6.0-rc.15.
+
+终端提示遵循 `logLevel`。Vapor Mode **不适合 SSR**，仅建议用于试验或局部性能热点。
 
 ## Electron 支持
 

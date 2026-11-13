@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Add built-in Svelte 5 component/runes compilation, scoped CSS extraction,
+  compiler HMR, server-consumer compilation and workspace-local compiler loading.
+- Add Preact JSX/TSX compilation with the automatic runtime and optional
+  Prefresh HMR, without injecting React Refresh into client or server graphs.
+- Extend framework auto-detection and component resolution; add Svelte/Preact
+  playgrounds and dev/build/SSR/browser regression coverage.
+- Upgrade Vue and compiler-sfc to 3.6.0-rc.15. Shorten the Vapor beta notice,
+  print it once in browser consoles and on stdout, and preserve logLevel controls.
+
 ## 2.9.0
 
 ### Reduce development log noise and preserve Start state

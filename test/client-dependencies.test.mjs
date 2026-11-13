@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { createServer, resolveConfig } from '../dist/index.js'
+import { build, createServer, resolveConfig } from '../dist/index.js'
 
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-client-deps-')))
@@ -147,3 +147,49 @@ test('application aliases retain browser module identity and compiler absolute q
   assert.match(split.code, /split-component/)
   assert.deepEqual(calls, [app + '?split=component'])
 })
+
+for (const [name, extensions, selected] of [
+  ['default order', undefined, '.ts'],
+  ['custom order', ['.js', '.ts', '.tsx'], '.js'],
+  ['custom extensions', ['.mts', '.ts'], '.mts'],
+]) {
+  test(`dev imports and builds use the same resolve.extensions: ${name}`, async (t) => {
+    const { root } = fixture(t)
+    fs.mkdirSync(path.join(root, 'directory'))
+    for (const ext of ['.ts', '.tsx', '.js', '.mts']) {
+      const source = `export default "SELECTED_${ext.slice(1)}";`
+      fs.writeFileSync(path.join(root, 'choice' + ext), source)
+      fs.writeFileSync(path.join(root, 'directory/index' + ext), source)
+    }
+    const entries = [
+      ['main.js', ['./choice', './directory', '@/choice', '@/directory', '/choice', '/directory']],
+      ['absolute.js', [path.join(root, 'choice'), path.join(root, 'directory')]],
+    ]
+    for (const [file, specifiers] of entries) {
+      fs.writeFileSync(path.join(root, file),
+        `globalThis.loads = [${specifiers.map((spec) => `() => import(${JSON.stringify(spec)})`).join(',')}];`)
+    }
+    fs.writeFileSync(path.join(root, 'index.html'), '<script type="module" src="/main.js"></script>')
+    const config = {
+      root, framework: 'react', logLevel: 'silent',
+      resolve: {
+        alias: { '@': root },
+        ...(extensions ? { extensions } : {}),
+      },
+    }
+    const server = await createServer(config)
+    t.after(() => server.close())
+    for (const [file, specifiers] of entries) {
+      const transformed = await server.transformRequest('/' + file)
+      const imports = [...transformed.code.matchAll(/\bimport\(["']([^"']+)["']\)/g)].map((match) => match[1])
+      assert.deepEqual(imports, specifiers.map((_, i) => i % 2 === 0 ? '/choice' + selected : '/directory/index' + selected))
+    }
+
+    const result = await build({ ...config, build: { minify: false } })
+    const output = result.output.filter((item) => item.type === 'chunk').map((item) => item.code).join('\n')
+    assert.match(output, new RegExp(`SELECTED_${selected.slice(1)}`))
+    for (const ext of ['.ts', '.tsx', '.js', '.mts'].filter((ext) => ext !== selected)) {
+      assert.doesNotMatch(output, new RegExp(`SELECTED_${ext.slice(1)}["']`))
+    }
+  })
+}

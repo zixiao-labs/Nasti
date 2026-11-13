@@ -16,18 +16,21 @@ export function isUnderRoot(abs: string, root: string): boolean {
 }
 
 const NM = `${path.sep}node_modules${path.sep}`
+const PNPM_PACKAGE_RE = /[/\\]\.pnpm[/\\][^/\\]+[/\\]node_modules[/\\](?:@[^/\\]+[/\\])?[^/\\]+$/
 
 /**
  * Walk `node_modules` from `projectRoot` (and nested package roots) following
  * symlinks. Return real paths of packages that live *outside* the project root
  * and outside any `node_modules` tree — i.e. workspace / `file:` linked
  * packages. Regular pnpm store entries (under `.pnpm/.../node_modules/`) are
- * skipped: they are not user-editable watch targets and already pass the
- * `node_modules` segment check for `?id=`.
+ * skipped by default: they are not user-editable watch targets. Serving can
+ * opt into exact reachable store package roots with includeNodeModules, without
+ * allowing arbitrary paths merely because they contain a node_modules segment.
  */
 export function discoverLinkedPackageRoots(
   projectRoot: string,
   maxDepth = 4,
+  includeNodeModules = false,
 ): string[] {
   const results: string[] = []
   const seenReal = new Set<string>()
@@ -72,11 +75,20 @@ export function discoverLinkedPackageRoots(
             queued.add(real)
             queue.push(real)
           }
+          if (includeNodeModules && PNPM_PACKAGE_RE.test(real)) {
+            // pnpm installs a package's dependencies beside its real directory,
+            // in .pnpm/<snapshot>/node_modules, not inside <package>/node_modules.
+            const snapshot = real.slice(0, real.lastIndexOf(NM))
+            if (!queued.has(snapshot)) {
+              queued.add(snapshot)
+              queue.push(snapshot)
+            }
+          }
 
           if (
             real !== projectRoot &&
             !isUnderRoot(real, projectRoot) &&
-            !real.includes(NM)
+            (includeNodeModules || !real.includes(NM))
           ) {
             results.push(real)
           }
@@ -101,20 +113,24 @@ function listScopedPackages(nm: string, scope: string): string[] {
 
 const linkedRootsCache = new Map<string, { roots: string[]; mtimeMs: number }>()
 
-/** Cached discoverLinkedPackageRoots; invalidated when root/node_modules mtime changes. */
-export function getLinkedPackageRoots(projectRoot: string): string[] {
+/**
+ * Cached discovery, invalidated when root/node_modules mtime changes.
+ * Serving may include reachable pnpm store packages; watching must exclude them.
+ */
+export function getLinkedPackageRoots(projectRoot: string, includeNodeModules = false): string[] {
   let mtimeMs = 0
   try {
     mtimeMs = fs.statSync(path.join(projectRoot, 'node_modules')).mtimeMs
   } catch {
     mtimeMs = 0
   }
-  const cached = linkedRootsCache.get(projectRoot)
+  const key = `${projectRoot}\0${includeNodeModules}`
+  const cached = linkedRootsCache.get(key)
   if (cached && cached.mtimeMs === mtimeMs) {
     return cached.roots
   }
-  const roots = discoverLinkedPackageRoots(projectRoot)
-  linkedRootsCache.set(projectRoot, { roots, mtimeMs })
+  const roots = discoverLinkedPackageRoots(projectRoot, 4, includeNodeModules)
+  linkedRootsCache.set(key, { roots, mtimeMs })
   return roots
 }
 
@@ -133,15 +149,15 @@ export function clearLinkedPackageRootsCache(): void {
  *   1. under the project root (includes the app's own `node_modules`)
  *   2. under a `node_modules` directory on the walk up from the project root
  *      (monorepo-hoisted stores such as `<repo>/node_modules/.pnpm/...`)
- *   3. under a workspace / file: package linked from the project's
- *      node_modules tree (realpath leaves node_modules)
+ *   3. under a package reachable from the project's node_modules tree, including
+ *      workspace / file: links and pnpm packages in an external store
  *
  * A forged path that merely contains a `node_modules` segment under an
  * unrelated directory (e.g. `/tmp/other/node_modules/x`) is rejected.
  */
 export function isAllowedDevModulePath(realId: string, projectRoot: string): boolean {
   if (realId === projectRoot || isUnderRoot(realId, projectRoot)) return true
-  for (const pkgRoot of getLinkedPackageRoots(projectRoot)) {
+  for (const pkgRoot of getLinkedPackageRoots(projectRoot, true)) {
     if (realId === pkgRoot || realId.startsWith(pkgRoot + path.sep)) return true
   }
   // Monorepo hoist: allow `<ancestor>/node_modules/...` while walking up from root.

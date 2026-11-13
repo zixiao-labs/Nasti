@@ -447,7 +447,8 @@ function createOxcTransformPlugin(config: ResolvedConfig, environment: NastiEnvi
       const result = transformCode(id, code, {
         sourcemap: !!environment.options.build.sourcemap,
         target: environment.options.build.target,
-        preserveJsx: config.framework === 'solid',
+        // Framework plugins own JSX; Preact's post hook must see it intact.
+        preserveJsx: config.framework === 'solid' || config.framework === 'preact',
         jsxRuntime: 'automatic',
         jsxImportSource: config.framework === 'vue' ? 'vue' : 'react',
       })

@@ -1,0 +1,15 @@
+{
+  "name": "playground-svelte-basic",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nasti",
+    "build": "nasti build"
+  },
+  "dependencies": {
+    "svelte": "^5.57.3"
+  },
+  "devDependencies": {
+    "@nasti-toolchain/nasti": "workspace:*"
+  }
+}

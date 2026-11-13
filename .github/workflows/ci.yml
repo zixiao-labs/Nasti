@@ -42,6 +42,12 @@ jobs:
           pnpm --filter playground-webgpu typecheck
           pnpm --filter playground-webgpu build
 
+      - name: Check Svelte and Preact playgrounds
+        run: |
+          pnpm --filter playground-svelte-basic build
+          pnpm --filter playground-preact-basic build
+          pnpm --filter playground-preact-basic typecheck
+
       - name: Check native TanStack workspaces
         run: |
           pnpm --filter playground-tanstack-react build
@@ -136,6 +142,11 @@ jobs:
         run: pnpm --filter playground-tanstack-react exec playwright install --with-deps chromium
       - name: Verify native SSR, hydration, RPC, routing and HMR
         run: node --test test/tanstack.test.mjs
+        env:
+          NASTI_BROWSER_TESTS: '1'
+
+      - name: Verify Svelte and Preact rendering and state-preserving HMR
+        run: node --test test/svelte-preact.test.mjs
         env:
           NASTI_BROWSER_TESTS: '1'
 

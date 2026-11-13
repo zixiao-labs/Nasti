@@ -17,3 +17,4 @@ autoInstallPeers: false
 minimumReleaseAgeExclude:
   # Explicit integration baseline; do not exempt the package or scope generally.
   - '@tanstack/redact@0.2.1'
+  - 'preact-render-to-string@6.8.3'
