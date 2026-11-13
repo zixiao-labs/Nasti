@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 2.10.0
+
+### Native Svelte and Preact support
 
 - Add built-in Svelte 5 component/runes compilation, scoped CSS extraction,
   compiler HMR, server-consumer compilation and workspace-local compiler loading.
@@ -10,6 +12,14 @@
   playgrounds and dev/build/SSR/browser regression coverage.
 - Upgrade Vue and compiler-sfc to 3.6.0-rc.15. Shorten the Vapor beta notice,
   print it once in browser consoles and on stdout, and preserve logLevel controls.
+- Validate Svelte dev style requests against realpath filesystem allowlists while
+  preserving build access to explicitly imported components outside the dev root.
+  Restrict pnpm sibling discovery to actual snapshot layouts and honor configured
+  extension ordering in dev import rewriting.
+
+SvelteKit routing/adapters, SCSS/Less preprocessing and automatic React-to-Preact
+compatibility aliases are not included. Svelte and Prefresh tools remain optional
+and are resolved from the consuming workspace.
 
 ## 2.9.0
 
