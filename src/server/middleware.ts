@@ -1209,7 +1209,7 @@ function createModuleSpecifierResolver(
         const aliasBase = resolveAliasTarget(value, root)
         const sub = baseSpec.slice(key.length).replace(/^\//, '')
         const target = sub ? path.join(aliasBase, sub) : aliasBase
-        const resolved = tryResolveDiskPath(target)
+        const resolved = tryResolveDiskPath(target, config.resolve.extensions)
         const url = resolved ? toServableUrl(resolved) : null
         return url ? url + suffix : specifier
       }
@@ -1217,7 +1217,7 @@ function createModuleSpecifierResolver(
 
     // 2) 相对路径
     if (baseSpec.startsWith('./') || baseSpec.startsWith('../')) {
-      const resolved = tryResolveDiskPath(path.resolve(fileDir, baseSpec))
+      const resolved = tryResolveDiskPath(path.resolve(fileDir, baseSpec), config.resolve.extensions)
       const url = resolved ? toServableUrl(resolved) : null
       return url ? url + suffix : specifier
     }
@@ -1226,10 +1226,10 @@ function createModuleSpecifierResolver(
     if (baseSpec.startsWith('/') && !baseSpec.startsWith('/@')) {
       // Compiler-generated absolute filesystem imports (including semantic
       // queries) are not root-relative browser URLs.
-      const absolute = tryResolveDiskPath(baseSpec)
+      const absolute = tryResolveDiskPath(baseSpec, config.resolve.extensions)
       const absoluteUrl = absolute ? toServableUrl(absolute) : null
       if (absoluteUrl) return absoluteUrl + suffix
-      const resolved = tryResolveDiskPath(path.join(root, baseSpec.replace(/^\//, '')))
+      const resolved = tryResolveDiskPath(path.join(root, baseSpec.replace(/^\//, '')), config.resolve.extensions)
       const url = resolved ? toServableUrl(resolved) : null
       return url ? url + suffix : specifier
     }
@@ -1466,14 +1466,14 @@ function resolveAliasTarget(value: string, root: string): string {
 }
 
 /** 把磁盘上的目标路径补全为存在的文件（扩展名 / index 兜底）。 */
-function tryResolveDiskPath(target: string): string | null {
+function tryResolveDiskPath(target: string, extensions: string[]): string | null {
   if (fs.existsSync(target) && fs.statSync(target).isFile()) return target
-  for (const ext of RESOLVE_EXTENSIONS) {
+  for (const ext of extensions) {
     const withExt = target + ext
     if (fs.existsSync(withExt) && fs.statSync(withExt).isFile()) return withExt
   }
   if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
-    for (const ext of RESOLVE_EXTENSIONS) {
+    for (const ext of extensions) {
       const idx = path.join(target, 'index' + ext)
       if (fs.existsSync(idx) && fs.statSync(idx).isFile()) return idx
     }

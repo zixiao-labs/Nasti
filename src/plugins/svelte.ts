@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import type { NastiPlugin, ResolvedConfig } from '../types.js'
 import { importProjectPackage } from '../core/project-import.js'
 import { transformCode } from '../core/transformer.js'
+import { isAllowedDevModulePath } from '../server/fs-allow.js'
 import { SourceMapConsumer, SourceMapGenerator } from 'source-map-js'
 
 const COMPONENT_RE = /\.svelte$/
@@ -43,11 +44,22 @@ export function sveltePlugin(config: ResolvedConfig): NastiPlugin {
 
     async load(id) {
       const match = STYLE_RE.exec(id)
-      if (!match || !fs.existsSync(match[1])) return null
+      if (!match) return null
+      let filename: string
+      try {
+        filename = fs.realpathSync(match[1])
+        if (!fs.statSync(filename).isFile()) return null
+      } catch {
+        return null
+      }
+      if (!isAllowedDevModulePath(filename, config.root)) {
+        // Returning null would let the server fall back to reading the parent.
+        throw new Error('[nasti:svelte] Style request is outside the allowed filesystem paths')
+      }
       // Read the current source even on direct CSS requests, so there is no
       // stale compiler cache after a component or stylesheet edit.
       const result = await compile(
-        fs.readFileSync(match[1], 'utf8'),
+        fs.readFileSync(filename, 'utf8'),
         match[1],
         this.environment?.consumer === 'server',
       )

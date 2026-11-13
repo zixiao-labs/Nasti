@@ -16,6 +16,7 @@ export function isUnderRoot(abs: string, root: string): boolean {
 }
 
 const NM = `${path.sep}node_modules${path.sep}`
+const PNPM_PACKAGE_RE = /[/\\]\.pnpm[/\\][^/\\]+[/\\]node_modules[/\\](?:@[^/\\]+[/\\])?[^/\\]+$/
 
 /**
  * Walk `node_modules` from `projectRoot` (and nested package roots) following
@@ -74,7 +75,7 @@ export function discoverLinkedPackageRoots(
             queued.add(real)
             queue.push(real)
           }
-          if (includeNodeModules && real.includes(NM)) {
+          if (includeNodeModules && PNPM_PACKAGE_RE.test(real)) {
             // pnpm installs a package's dependencies beside its real directory,
             // in .pnpm/<snapshot>/node_modules, not inside <package>/node_modules.
             const snapshot = real.slice(0, real.lastIndexOf(NM))

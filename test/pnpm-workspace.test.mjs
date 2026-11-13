@@ -162,3 +162,37 @@ test('dev server watches linked workspace package roots', async (t) => {
     `expected watcher to cover transitive package B ${bReal}, got: ${watchedRoots.join(', ')}`,
   )
 })
+
+for (const pnpm of [false, true]) {
+  for (const packageName of ['direct', '@scope/direct']) {
+    test(`dev allowlist scans siblings only in pnpm snapshots: ${pnpm}, ${packageName}`, async (t) => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-store-')))
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+      const web = path.join(root, 'app')
+      const nm = path.join(root, 'external', ...(pnpm ? ['.pnpm', 'direct@1'] : []), 'node_modules')
+      const direct = path.join(nm, packageName)
+      const sibling = path.join(nm, 'sibling')
+      const nested = path.join(direct, 'node_modules', 'nested')
+      for (const dir of [direct, sibling, nested]) {
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, 'index.js'), 'export const value = "reachable";')
+      }
+      const link = path.join(web, 'node_modules', packageName)
+      fs.mkdirSync(path.dirname(link), { recursive: true })
+      fs.symlinkSync(direct, link, 'junction')
+      fs.writeFileSync(path.join(web, 'package.json'), '{"private":true}')
+      const server = await createServer({ root: web, framework: 'react', logLevel: 'silent' })
+      t.after(() => server.close())
+      const fsUrl = (dir) => '/@fs/' + path.join(dir, 'index.js').replace(/\\/g, '/').replace(/^\//, '')
+      for (const dir of [direct, nested]) {
+        assert.match((await server.transformRequest(fsUrl(dir))).code, /reachable/)
+      }
+      const result = await server.transformRequest(fsUrl(sibling))
+      if (pnpm) {
+        assert.match(result.code, /reachable/, 'pnpm snapshot dependencies remain servable')
+      } else {
+        assert.equal(result, null, 'ordinary node_modules siblings must not enter the allowlist')
+      }
+    })
+  }
+}

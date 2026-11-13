@@ -94,6 +94,35 @@ test('framework auto detection preserves precedence and covers all dependency fi
 })
 
 for (const [format, create] of [['ESM', createServer], ['CJS', cjs.createServer]]) {
+  test(`${format} Svelte styles enforce the realpath allowlist before compilation`, async (t) => {
+    const f = fixture(t, 'svelte')
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-svelte-outside-')))
+    t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+    const privateFile = path.join(outside, 'private/Secret.svelte')
+    const linked = path.join(outside, 'linked')
+    for (const file of [privateFile, path.join(linked, 'Allowed.svelte')]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, '<p>Styled</p><style>p { color: red }</style>')
+    }
+    fs.symlinkSync(path.dirname(privateFile), path.join(f.root, 'src/escaped'), 'junction')
+    fs.symlinkSync(linked, path.join(f.root, 'node_modules/linked'), 'junction')
+    const server = await f.serve({}, create)
+    const query = '?svelte&type=style&lang.css'
+    for (const file of [privateFile, path.join(f.root, 'src/escaped/Secret.svelte')]) {
+      assert.ok(fs.statSync(file).isFile())
+      await assert.rejects(server.transformRequest(file + query), /outside the allowed filesystem paths/)
+    }
+    await assert.rejects(server.transformRequest('/src/escaped/Secret.svelte' + query),
+      /outside the allowed filesystem paths/)
+    for (const file of [
+      path.join(f.root, 'src/App.svelte'),
+      path.join(linked, 'Allowed.svelte'),
+      path.join(f.root, 'node_modules/linked/Allowed.svelte'),
+    ]) {
+      assert.match((await server.transformRequest(file + query)).code, /document\.createElement\('style'\)/)
+    }
+  })
+
   for (const framework of ['svelte', 'preact']) {
     test(`${format} ${framework}: HTTP transforms, HMR boundaries and server consumer isolation`, async (t) => {
       const f = fixture(t, framework)
@@ -163,7 +192,13 @@ test('Svelte runtime sources keep canonical private imports and unhoisted depend
   assert.ok([...visited].some((item) => item.includes('esm-env')))
   const effects = [...visited].filter((item) => item.endsWith('/internal/client/reactivity/effects.js'))
   assert.equal(effects.length, 1, 'mount and component helpers must share the effects runtime')
-  const forged = '/@fs/' + path.join(os.tmpdir(), 'unrelated/node_modules/svelte/src/index-client.js').replace(/\\/g, '/').replace(/^\//, '')
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nasti-unrelated-')))
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }))
+  const forgedFile = path.join(outside, 'node_modules/svelte/src/index-client.js')
+  fs.mkdirSync(path.dirname(forgedFile), { recursive: true })
+  fs.writeFileSync(forgedFile, 'export default "forged";')
+  assert.ok(fs.statSync(forgedFile).isFile())
+  const forged = '/@fs/' + forgedFile.replace(/\\/g, '/').replace(/^\//, '')
   assert.equal(await server.transformRequest(forged), null)
 })
 
