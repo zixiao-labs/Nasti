@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Use the current Rolldown code-splitting API
+
+- Re-export `CodeSplittingOptions`, `CodeSplittingGroup`,
+  `CodeSplittingNameFunction` and `ChunkingContext` from the package entry.
+- Update configuration examples, type documentation and large-chunk warnings to
+  recommend `output.codeSplitting` instead of the legacy `advancedChunks` option.
+
 ## 2.10.0
 
 ### Native Svelte and Preact support

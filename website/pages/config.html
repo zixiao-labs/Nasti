@@ -176,7 +176,7 @@
         <tr><td><code>sourcemap</code></td><td><code>boolean | 'inline' | 'hidden'</code></td><td><code>false</code></td><td>Source map</td></tr>
         <tr><td><code>target</code></td><td><code>string</code></td><td><code>'es2022'</code></td><td>构建目标</td></tr>
         <tr><td><code>emptyOutDir</code></td><td><code>boolean</code></td><td><code>true</code></td><td>构建前清空输出目录</td></tr>
-        <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>透传给 Rolldown 的底层选项，用于手动控制 <strong>Tree-shaking</strong>（<code>treeshake</code>）与<strong>代码拆分</strong>（<code>output.advancedChunks</code> / <code>output.codeSplitting</code>）。详见下方示例</td></tr>
+        <tr><td><code>rolldownOptions</code></td><td><code>object</code></td><td><code>{}</code></td><td>透传给 Rolldown 的底层选项，用于手动控制 <strong>Tree-shaking</strong>（<code>treeshake</code>）与<strong>代码拆分</strong>（<code>output.codeSplitting</code>）。详见下方示例</td></tr>
       </tbody>
     </table>
 
@@ -203,6 +203,7 @@
 
     <h3>rolldownOptions：手动控制代码拆分与 Tree-shaking</h3>
     <p>生产应用常需手动分包（vendor / 按路由拆分）并精细化 Tree-shaking。<code>rolldownOptions</code> 的 input 侧选项（如 <code>treeshake</code>、<code>resolve</code>、<code>external</code>）会合并进 Rolldown，<code>output</code> 则合并进产物写出阶段（<code>bundle.write()</code>）。注：<code>input</code> / <code>plugins</code> 由 Nasti 接管，<code>output.dir</code> 始终由 <code>build.outDir</code> 决定。</p>
+    <p>分包统一使用 <code>output.codeSplitting</code>：默认 <code>true</code> 自动分包；单入口设置 <code>false</code> 可内联动态导入；传对象配置手动分包（原 <code>advancedChunks</code> 配置请迁移到此处，<code>groups</code> 等选项保持不变）。可从 <code>@nasti-toolchain/nasti</code> 导入 <code>CodeSplittingOptions</code>、<code>CodeSplittingGroup</code>、<code>CodeSplittingNameFunction</code>、<code>ChunkingContext</code> 类型。</p>
     <div class="code-block"><pre><span class="keyword">export default</span> <span class="func">defineConfig</span>({
   <span class="type">build</span>: {
     <span class="type">rolldownOptions</span>: {
@@ -212,7 +213,7 @@
       },
       <span class="comment">// 代码拆分（output 选项）</span>
       <span class="type">output</span>: {
-        <span class="type">advancedChunks</span>: {
+        <span class="type">codeSplitting</span>: {
           <span class="type">groups</span>: [
             { <span class="type">name</span>: <span class="string">'react-vendor'</span>, <span class="type">test</span>: /node_modules[\\/]react/, <span class="type">priority</span>: <span class="orange">20</span> },
             { <span class="type">name</span>: <span class="string">'vendor'</span>, <span class="type">test</span>: /node_modules/, <span class="type">priority</span>: <span class="orange">10</span> },

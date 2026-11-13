@@ -119,7 +119,7 @@ export function warnLargeChunks(
     pc.yellow(
       `\n(!) Some chunks are larger than ${limit} kB after minification. Consider:\n` +
         `- Using dynamic import() to code-split the application\n` +
-        `- Configuring build.rolldownOptions.output.advancedChunks to isolate large dependencies\n` +
+        `- Configuring build.rolldownOptions.output.codeSplitting to isolate large dependencies\n` +
         `- Adjusting build.chunkSizeWarningLimit to silence this warning`,
     ),
   )

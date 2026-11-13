@@ -100,6 +100,8 @@ export default defineConfig({
 
 `build.rolldownOptions` 透传 Rolldown 底层选项：input 侧（如 `treeshake`、`resolve`、`external`）合并进打包，`output` 合并进产物写出阶段，用于手动控制 vendor 分包与 Tree-shaking。`input` / `plugins` 由 Nasti 接管，`output.dir` 始终由 `build.outDir` 决定。
 
+分包统一使用 `output.codeSplitting`：默认 `true` 自动分包；单入口设置 `false` 可内联动态导入；传对象配置手动分包（原 `advancedChunks` 配置请迁移到此处，`groups` 等选项保持不变）。
+
 ```ts
 export default defineConfig({
   build: {
@@ -108,7 +110,7 @@ export default defineConfig({
       treeshake: { moduleSideEffects: [{ test: /\/barrel\//, sideEffects: false }] },
       // 代码拆分（output 选项）
       output: {
-        advancedChunks: {
+        codeSplitting: {
           groups: [
             { name: 'react-vendor', test: /node_modules[\\/]react/, priority: 20 },
             { name: 'vendor', test: /node_modules/, priority: 10 },
@@ -119,6 +121,16 @@ export default defineConfig({
     },
   },
 })
+```
+
+可从 `@nasti-toolchain/nasti` 导入 `CodeSplittingOptions`、`CodeSplittingGroup`、`CodeSplittingNameFunction`、`ChunkingContext` 类型，与 Rolldown 的定义保持一致：
+
+```ts
+import type { CodeSplittingOptions } from '@nasti-toolchain/nasti'
+
+const codeSplitting: CodeSplittingOptions = {
+  groups: [{ name: 'vendor', test: /node_modules/ }],
+}
 ```
 
 ### 产物压缩：类名 / 属性名最小化

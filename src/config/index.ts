@@ -501,7 +501,7 @@ function hasDotNodeFile(dir: string, depth = 0): boolean {
  *   - 快路径：引用相等（resolveConfig 保证同引用，正常永远走这里）
  *   - 慢路径：JSON 序列化逐字节比较 resolve{alias,extensions,conditions,
  *     mainFields} 与 build 全字段（含 sourcemap）；函数值（如
- *     rolldownOptions.output.advancedChunks 的 test 回调）会被 JSON 丢弃，
+ *     rolldownOptions.output.codeSplitting 的 test 回调）会被 JSON 丢弃，
  *     不参与比较 —— 不要在 per-env build 覆盖里只改函数字段
  *   - 设 NASTI_DISABLE_MIRROR_ASSERT=1 可关闭（不建议）
  */

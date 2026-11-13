@@ -103,5 +103,10 @@ test('chunk-size warnings describe minified builds only', async (t) => {
       build: { minify, chunkSizeWarningLimit: 0.001 },
     })
     assert.equal(logs.some(([, message]) => message.includes('Some chunks are larger')), minify)
+    if (minify) {
+      const warning = logs.find(([, message]) => message.includes('Some chunks are larger'))[1]
+      assert.match(warning, /build\.rolldownOptions\.output\.codeSplitting/)
+      assert.doesNotMatch(warning, /advancedChunks/)
+    }
   }
 })

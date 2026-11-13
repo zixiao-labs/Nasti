@@ -332,7 +332,8 @@ export interface BuildConfig {
    *
    * - input 侧（`treeshake`、`resolve`、`external`、`platform` 等）会合并进 `rolldown()`；
    * - `output` 会合并进 `bundle.write()`，用于控制代码拆分
-   *   （`output.advancedChunks` / `output.codeSplitting`）、chunk 命名等。
+   *   （`output.codeSplitting`）、chunk 命名等。
+   *   `codeSplitting` 默认 `true` 自动分包，`false` 内联动态导入，对象形式配置手动分包。
    *
    * 注：`input` 与 `plugins` 由 Nasti 管理，故不在此暴露；`output.dir` 始终由
    * `build.outDir` 决定（HTML 改写依赖产物路径），传入会被忽略。
@@ -374,7 +375,7 @@ export type ResolvedMinifyOption = boolean | 'dce-only' | NastiMinifyOptions
  * 接管的 `input` / `plugins`，并补充一个 `output` 出口用于 `bundle.write()`。
  */
 export type NastiRolldownOptions = Omit<InputOptions, 'input' | 'plugins'> & {
-  /** 传给 `bundle.write()` 的输出选项：代码拆分（`advancedChunks` / `codeSplitting`）、chunk 命名等 */
+  /** 传给 `bundle.write()` 的输出选项：代码拆分（`codeSplitting`）、chunk 命名等 */
   output?: OutputOptions
 }
 

@@ -85,6 +85,12 @@ export type {
 } from './types.js'
 export type { Logger, LogLevel, LogOptions } from './core/logger.js'
 export type {
+  CodeSplittingOptions,
+  CodeSplittingGroup,
+  CodeSplittingNameFunction,
+  ChunkingContext,
+} from 'rolldown'
+export type {
   MonacoEditorPluginOptions,
   MonacoEditorLanguageWorker,
   MonacoCustomWorker,

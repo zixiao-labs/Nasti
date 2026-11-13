@@ -155,7 +155,7 @@ export function getRolldownOptions(
         entryFileNames: `${assetsDir}/[name].[hash].js`,
         chunkFileNames: `${assetsDir}/[name].[hash].js`,
         assetFileNames: `${assetsDir}/[name].[hash][extname]`,
-        // 用户可覆盖默认输出：代码拆分（advancedChunks / codeSplitting）、chunk 命名等
+        // 用户可覆盖默认输出：代码拆分（codeSplitting）、chunk 命名等
         ...userOutput,
         // dir 始终由 Nasti 掌管 —— HTML 改写依赖固定的产物目录，故放在最后强制生效
         dir: outDir,
