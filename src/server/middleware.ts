@@ -23,9 +23,9 @@ import {
 } from '../core/env.js'
 import { removeTimestampQuery } from '../core/url.js'
 import { isAssetFile } from '../plugins/assets.js'
-import { isAllowedDevModulePath, isUnderRoot, getLinkedPackageRoots } from './fs-allow.js'
+import { isAllowedDevModulePath, isUnderRoot, findNearestPackageRoot } from './fs-allow.js'
 import { resolvePlugin } from '../plugins/resolve.js'
-import { resolveClientDependency } from '../core/client-resolve.js'
+import { resolveClientDependency, resolveClientDependencySync } from '../core/client-resolve.js'
 import { orderPlugins } from '../core/plugin-api.js'
 import { rolldownLogger } from '../core/rolldown-logger.js'
 
@@ -738,6 +738,19 @@ async function bundlePackageAsEsm(entryFile: string, ctx: TransformMiddlewareCon
 async function doBundlePackage(entryFile: string, ctx: TransformMiddlewareContext): Promise<string> {
   const { config, environment } = ctx
   const root = config.root
+  if (config.framework === 'svelte') {
+    const packageRoot = findNearestPackageRoot(entryFile)
+    if (packageRoot && isUnderRoot(entryFile, path.join(packageRoot, 'src')) &&
+        JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).name === 'svelte') {
+      // Svelte's public and internal entrypoints share private relative modules
+      // (component context, effects, flags). Independent bundles duplicate those
+      // singletons. Its runtime is native ESM: serve canonical source modules
+      // through the existing /@fs pipeline instead, keeping one browser identity.
+      const normalized = entryFile.replace(/\\/g, '/')
+      const url = '/@fs/' + normalized.replace(/^\//, '')
+      return `export * from ${JSON.stringify(url)};\n`
+    }
+  }
   // 子路径入口（如 `react-aria-components/Select`）尝试生成 re-export shim，
   // 指向同包主入口。否则每个子路径会被 rolldown 各自打成独立 bundle，
   // 把同一份 `private/*.cjs` 内联多份 → 多个 `createContext(null)` 实例 →
@@ -1173,16 +1186,18 @@ function createModuleSpecifierResolver(
     // Workspace / file: packages live outside root after realpath. Serve via
     // `/@fs/<abs>` (Vite-compatible) when the path is under a linked package.
     // Always use `/@fs/` so Windows drive paths become `/@fs/C:/...`, not `/@fsC:/...`.
-    for (const pkgRoot of getLinkedPackageRoots(root)) {
-      if (abs === pkgRoot || abs.startsWith(pkgRoot + path.sep)) {
-        const normalized = abs.replace(/\\/g, '/')
-        return '/@fs/' + (normalized.startsWith('/') ? normalized.slice(1) : normalized)
-      }
+    if (isAllowedDevModulePath(abs, root)) {
+      const normalized = abs.replace(/\\/g, '/')
+      return '/@fs/' + (normalized.startsWith('/') ? normalized.slice(1) : normalized)
     }
     return null
   }
 
   return (specifier: string): string => {
+    if (specifier.startsWith('#')) {
+      const resolved = resolveClientDependencySync(root, config.resolve, specifier, filePath)
+      return resolved ? toServableUrl(resolved) ?? specifier : specifier
+    }
     // 解析时剥离 ?query / #hash（如 svg?url、json?import），回写时再附加到结果 URL
     const suffixMatch = specifier.match(/[?#].*$/)
     const suffix = suffixMatch ? suffixMatch[0] : ''
@@ -1221,6 +1236,14 @@ function createModuleSpecifierResolver(
 
     // 4) 已改写的内部 URL 原样保留；其余 bare specifier 交给包中间件。
     if (baseSpec.startsWith('/')) return specifier
+    // Raw ESM dependencies (including Svelte's shared runtime) resolve their
+    // own unhoisted/self imports, with the same browser conditions as bundles.
+    const resolved = resolveClientDependencySync(root, config.resolve, baseSpec, filePath)
+    const rootResolved = resolved && resolveClientDependencySync(root, config.resolve, baseSpec)
+    if (resolved && resolved !== rootResolved) {
+      const url = `/@modules/${baseSpec}?id=${encodeURIComponent(resolved)}`
+      return url + (suffix.startsWith('?') ? '&' + suffix.slice(1) : suffix)
+    }
     return `/@modules/${specifier}`
   }
 }
@@ -1465,7 +1488,7 @@ function appendTimestampQuery(url: string, timestamp: number): string {
   return `${withoutHash}${withoutHash.includes('?') ? '&' : '?'}t=${timestamp}${hash}`
 }
 
-const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue']
+const RESOLVE_EXTENSIONS = ['.tsx', '.ts', '.jsx', '.js', '.mjs', '.json', '.vue', '.svelte']
 const ESM_CONDITIONS = ['import', 'browser', 'module', 'default']
 
 /** 从 /@modules/pkgName/... URL 中提取包名（支持 scoped 包） */
@@ -1733,7 +1756,7 @@ function isModuleRequest(
   destination?: string | string[],
 ): boolean {
   const cleanUrl = url.split(/[?#]/)[0]
-  if (/\.(ts|tsx|jsx|js|mjs|vue|css|json)$/.test(cleanUrl)) return true
+  if (/\.(ts|tsx|jsx|js|mjs|vue|svelte|css|json)$/.test(cleanUrl)) return true
   if (cleanUrl.endsWith('.wgsl')) {
     const query = new URLSearchParams(url.split('?')[1]?.split('#')[0])
     return query.has('raw') || query.has('url') || destination === 'script'

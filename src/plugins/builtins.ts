@@ -12,6 +12,8 @@ import { assetsPlugin } from './assets.js'
 import { vuePlugin } from './vue.js'
 import { htmlPlugin } from './html.js'
 import { solidPlugin } from './solid.js'
+import { sveltePlugin } from './svelte.js'
+import { preactPlugin } from './preact.js'
 
 export interface BuiltinPluginOptions {
   /** build 期 CSS 抽取引擎（serve 不传，dev 走 <style> 注入路径） */
@@ -24,7 +26,7 @@ export interface BuiltinPluginOptions {
 
 /**
  * Assemble built-in and user plugins using the selected environment's options.
- * Vue/Solid compilation precedes resolve, CSS, assets, optional dev HTML, and
+ * Framework compilation precedes resolve, CSS, assets, optional dev HTML, and
  * user plugins. Builds append CSS extraction when supplied and a virtual-module
  * resolver for server consumers. Environment filtering is performed separately.
  * @throws If an explicitly requested environment is not configured.
@@ -55,6 +57,8 @@ export function resolvePluginList(
       ? [vuePlugin(pluginConfig, opts.environmentName ?? 'client')]
       : []),
     ...(config.framework === 'solid' ? [solidPlugin(pluginConfig)] : []),
+    ...(config.framework === 'svelte' ? [sveltePlugin(pluginConfig)] : []),
+    ...(config.framework === 'preact' ? [preactPlugin(pluginConfig)] : []),
     resolvePlugin(pluginConfig),
     cssPlugin(pluginConfig, opts.cssEngine, consumer),
     assetsPlugin(pluginConfig),

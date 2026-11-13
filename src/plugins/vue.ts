@@ -24,7 +24,7 @@ const debug = createDebugger('nasti:vue')
 
 /** Vapor Mode 测试版免责声明：终端与浏览器控制台共用同一文案 */
 export const VAPOR_BETA_WARNING =
-  'Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.'
+  'Vapor is currently a beta feature in Vue and may contain bugs; the current beta version is v3.6.0-rc.15.'
 
 interface VueCompilerSfc {
   parse: (source: string, options?: any) => any
@@ -454,7 +454,7 @@ function resolveVaporMode(
     return false
   }
 
-  config.logger.warnOnce(VAPOR_BETA_WARNING)
+  config.logger.warnOnce(VAPOR_BETA_WARNING, { stream: 'stdout' })
   return true
 }
 

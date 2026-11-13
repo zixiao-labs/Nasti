@@ -33,6 +33,8 @@ type NastiPluginHook<K extends keyof RolldownPlugin, Handler> =
       sequential?: boolean
     })
 
+export type Framework = 'react' | 'vue' | 'solid' | 'svelte' | 'preact'
+
 export interface NastiConfig {
   /** 项目根目录 */
   root?: string
@@ -43,7 +45,7 @@ export interface NastiConfig {
   /** 打包目标平台：web（默认）或 electron */
   target?: 'web' | 'electron'
   /** 框架自动检测或手动指定 */
-  framework?: 'react' | 'vue' | 'solid' | 'auto'
+  framework?: Framework | 'auto'
   /** React JSX / Fast Refresh / Compiler 管线。仅在 framework 解析为 react 时生效。 */
   react?: ReactOptions
   /** Solid DOM/SSR JSX 编译选项。 */
@@ -803,7 +805,7 @@ export interface ResolvedConfig {
   mode: 'development' | 'production'
   target: 'web' | 'electron'
   /** `auto` 在配置解析阶段已收敛为具体框架 */
-  framework: 'react' | 'vue' | 'solid'
+  framework: Framework
   /** 解析后的 React 管线配置；Vue 项目仍保留该字段以简化插件读取。 */
   react: ResolvedReactOptions
   solid: { hydratable: boolean }

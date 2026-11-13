@@ -32,6 +32,7 @@ const JS_EXTENSIONS = /\.(js|mjs|cjs)$/
 const TS_EXTENSIONS = /\.(ts|mts|cts)$/
 const JSX_EXTENSIONS = /\.(jsx|tsx)$/
 const VUE_EXTENSION = /\.vue$/
+const SVELTE_EXTENSION = /\.svelte$/
 
 export function shouldTransform(id: string): boolean {
   return (
@@ -58,7 +59,7 @@ export function transformCode(
 
   const result = transformSync(filename, code, {
     typescript: isTS ? {} : undefined,
-    jsx: options.preserveJsx ? 'preserve' : isJSX || /\.tsx$/.test(filename)
+    jsx: options.preserveJsx ? 'preserve' : options.jsx || isJSX
       ? {
           runtime: options.jsxRuntime ?? 'automatic',
           importSource: options.jsxImportSource ?? 'react',
@@ -191,13 +192,14 @@ async function loadReactCompiler(): Promise<typeof import('oxc-transform-react')
 }
 
 /** 获取文件的模块类型 */
-export function getModuleType(id: string): 'ts' | 'tsx' | 'js' | 'jsx' | 'css' | 'json' | 'vue' | 'asset' {
+export function getModuleType(id: string): 'ts' | 'tsx' | 'js' | 'jsx' | 'css' | 'json' | 'vue' | 'svelte' | 'asset' {
   if (/\.tsx$/.test(id)) return 'tsx'
   if (/\.ts$/.test(id) || /\.mts$/.test(id)) return 'ts'
   if (/\.jsx$/.test(id)) return 'jsx'
   if (/\.css$/.test(id)) return 'css'
   if (/\.json$/.test(id)) return 'json'
   if (VUE_EXTENSION.test(id)) return 'vue'
+  if (SVELTE_EXTENSION.test(id)) return 'svelte'
   if (JS_EXTENSIONS.test(id)) return 'js'
   return 'asset'
 }

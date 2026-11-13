@@ -3,11 +3,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 
 import { createServer } from '../dist/index.js'
 
 const VAPOR_BETA_WARNING =
-  'Vapor Mode is a beta feature; Zixiao Labs and the Vue team do not provide guarantees against crashes in production environments, and it is not suitable for server-side rendering environments.'
+  'Vapor is currently a beta feature in Vue and may contain bugs; the current beta version is v3.6.0-rc.15.'
 
 function createFixture(t, prefix) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -19,8 +20,10 @@ function createFixture(t, prefix) {
 
 function createCapturingLogger() {
   const warnings = []
+  const warningOptions = []
   return {
     warnings,
+    warningOptions,
     logger: {
       hasWarned: false,
       info() {},
@@ -28,10 +31,11 @@ function createCapturingLogger() {
         this.hasWarned = true
         warnings.push(msg)
       },
-      warnOnce(msg) {
+      warnOnce(msg, options) {
         if (warnings.includes(msg)) return
         this.hasWarned = true
         warnings.push(msg)
+        warningOptions.push(options)
       },
       error() {},
       clearScreen() {},
@@ -59,7 +63,7 @@ test('Vue Vapor Mode compiles script setup vapor SFCs and emits beta warnings', 
     ].join('\n'),
   )
 
-  const { logger, warnings } = createCapturingLogger()
+  const { logger, warnings, warningOptions } = createCapturingLogger()
   const server = await createServer({
     root,
     framework: 'vue',
@@ -83,6 +87,23 @@ test('Vue Vapor Mode compiles script setup vapor SFCs and emits beta warnings', 
   // 同一会话再次转换不应重复终端警告
   await server.transformRequest('/src/App.vue?t=2')
   assert.equal(warnings.filter((msg) => msg === VAPOR_BETA_WARNING).length, 1)
+  assert.deepEqual(warningOptions, [{ stream: 'stdout' }])
+})
+
+test('Vue Vapor beta notice is printed once on stdout, not stderr', (t) => {
+  const root = createFixture(t, 'nasti-vapor-stdout-')
+  fs.writeFileSync(path.join(root, 'src/App.vue'), '<template vapor><p>Beta</p></template>')
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { createServer } from ${JSON.stringify(new URL('../dist/index.js', import.meta.url).href)};
+    const server = await createServer({ root: ${JSON.stringify(root)}, framework: 'vue', logLevel: 'warn' });
+    try {
+      await server.transformRequest('/src/App.vue');
+      await server.transformRequest('/src/App.vue?t=2');
+    } finally { await server.close(); }
+  `], { encoding: 'utf8', timeout: 10000 })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout.split(VAPOR_BETA_WARNING).length - 1, 1)
+  assert.ok(!result.stderr.includes(VAPOR_BETA_WARNING))
 })
 
 test('Vue Vapor Mode supports template-only vapor SFCs and features.vapor force', async (t) => {
@@ -126,7 +147,8 @@ test('Vue Vapor Mode supports template-only vapor SFCs and features.vapor force'
   const only = await server.transformRequest('/src/Only.vue')
   assert.ok(only?.code)
   assert.match(only.code, /__vapor:\s*true/)
-  assert.match(only.code, /__sfc__\.__multiRoot = true/)
+  // rc.15 infers fragment roots at runtime; the compiler no longer emits multiRoot.
+  assert.match(only.code, /return \[n0, n1\]/)
   assert.match(only.code, /console\.warn\(/)
 
   const forced = await server.transformRequest('/src/Forced.vue')

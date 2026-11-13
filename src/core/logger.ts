@@ -13,6 +13,8 @@ export interface LogOptions {
   timestamp?: boolean
   /** 关联的 Error（用于 hasErrorLogged 去重） */
   error?: Error | null
+  /** 显式将提示输出到 stdout；默认 warn/error 使用 stderr。 */
+  stream?: 'stdout'
 }
 
 export interface Logger {
@@ -84,7 +86,7 @@ export function createLogger(
 
   function output(type: LogType, msg: string, options: LogOptions = {}): void {
     if (thresh < LogLevels[type]) return
-    const method = type === 'info' ? 'log' : type
+    const method = type === 'info' || options.stream === 'stdout' ? 'log' : type
 
     if (options.error) {
       loggedErrors.add(options.error)

@@ -35,6 +35,19 @@ const diagnosticPlugin = {
   },
 }
 
+test('stdout warnings preserve warning severity, deduplication and logLevel', () => {
+  for (const level of ['info', 'warn', 'error', 'silent']) {
+    const { logs, logger } = capture(level)
+    logger.warnOnce('BETA_NOTICE', { stream: 'stdout' })
+    logger.warnOnce('BETA_NOTICE', { stream: 'stdout' })
+    logger.warn('NORMAL_WARNING')
+    assert.deepEqual(logs, level === 'info' || level === 'warn'
+      ? [['info', 'BETA_NOTICE'], ['warn', 'NORMAL_WARNING']]
+      : [])
+    assert.equal(logger.hasWarned, true)
+  }
+})
+
 for (const level of ['info', 'warn', 'error', 'silent']) {
   test(`Rolldown default diagnostics respect Nasti logLevel ${level} and customLogger`, async (t) => {
     const { logs, logger } = capture(level)

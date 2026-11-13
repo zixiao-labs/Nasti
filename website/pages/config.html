@@ -106,7 +106,7 @@
         <tr><td><code>base</code></td><td><code>string</code></td><td><code>'/'</code></td><td>公共基础路径</td></tr>
         <tr><td><code>mode</code></td><td><code>string</code></td><td><code>'development'</code></td><td>运行模式</td></tr>
         <tr><td><code>target</code></td><td><code>'web' | 'electron'</code></td><td><code>'web'</code></td><td>打包目标平台，详见 <a href="/pages/electron.html">Electron</a></td></tr>
-        <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'auto'</code></td><td><code>'auto'</code></td><td>框架类型；auto 会根据 <code>src/**/*.vue</code> 与 package.json 依赖解析为具体框架</td></tr>
+        <tr><td><code>framework</code></td><td><code>'react' | 'vue' | 'solid' | 'svelte' | 'preact' | 'auto'</code></td><td><code>'auto'</code></td><td>auto 优先检测 src 下最多五层的 .vue、.svelte 文件；否则按 React、Vue、Solid、Svelte、Preact 的依赖优先级选择，未识别时回退 React</td></tr>
         <tr><td><code>logLevel</code></td><td><code>'info' | 'warn' | 'error' | 'silent'</code></td><td><code>'info'</code></td><td>日志级别</td></tr>
         <tr><td><code>envPrefix</code></td><td><code>string | string[]</code></td><td><code>['NASTI_', 'VITE_']</code></td><td>暴露给客户端的环境变量前缀</td></tr>
         <tr><td><code>plugins</code></td><td><code>NastiPlugin[]</code></td><td><code>[]</code></td><td>插件列表</td></tr>

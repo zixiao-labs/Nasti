@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
 import type {
+  Framework,
   NastiConfig,
   ResolvedConfig,
   NastiPlugin,
@@ -67,13 +68,15 @@ export async function loadConfigFromFile(root: string): Promise<NastiConfig> {
 /**
  * Detect the framework from the project's src directory and package.json.
  *
- * A .vue file at most five directories below src takes priority. Across dependency
- * fields, React takes priority over Vue; Solid is selected only when neither is
- * declared. Otherwise, missing, unreadable, or invalid metadata falls back to React.
+ * Component files at most five directories below src take priority (Vue before
+ * Svelte). Dependency priority is React > Vue > Solid > Svelte > Preact, preserving
+ * existing projects' selection. Ambiguous projects can set framework explicitly.
+ * Missing, unreadable, or invalid metadata falls back to React.
  */
-export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
+export function detectFramework(root: string): Framework {
   const sourceRoot = path.resolve(root, 'src')
-  if (containsVueFile(sourceRoot)) return 'vue'
+  if (containsComponentFile(sourceRoot, '.vue')) return 'vue'
+  if (containsComponentFile(sourceRoot, '.svelte')) return 'svelte'
 
   const packagePath = path.resolve(root, 'package.json')
   if (fs.existsSync(packagePath)) {
@@ -91,6 +94,8 @@ export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
       if (hasVue && !hasReact) return 'vue'
       if (hasReact) return 'react'
       if (hasVue) return 'vue'
+      if ('svelte' in dependencies) return 'svelte'
+      if ('preact' in dependencies) return 'preact'
     } catch {
       // Invalid package.json is reported by package managers; framework detection
       // remains deterministic and falls back to the existing React behavior.
@@ -100,16 +105,16 @@ export function detectFramework(root: string): 'react' | 'vue' | 'solid' {
   return 'react'
 }
 
-function containsVueFile(dir: string, depth = 0): boolean {
+function containsComponentFile(dir: string, extension: string, depth = 0): boolean {
   if (depth > 5 || !fs.existsSync(dir)) return false
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name.endsWith('.vue')) return true
+      if (entry.isFile() && entry.name.endsWith(extension)) return true
       if (
         entry.isDirectory() &&
         entry.name !== 'node_modules' &&
         entry.name !== 'dist' &&
-        containsVueFile(path.join(dir, entry.name), depth + 1)
+        containsComponentFile(path.join(dir, entry.name), extension, depth + 1)
       ) {
         return true
       }
@@ -203,7 +208,7 @@ export async function resolveConfig(
     framework:
       (merged.framework ?? defaults.framework) === 'auto'
         ? detectFramework(root)
-        : (merged.framework as 'react' | 'vue' | 'solid'),
+        : (merged.framework as Framework),
     react: {
       include: merged.react?.include ?? defaultReact.include,
       exclude: merged.react?.exclude ?? defaultReact.exclude,
@@ -245,6 +250,10 @@ export async function resolveConfig(
     // Solid libraries publish uncompiled JSX under the `solid` condition.
     // Their default JS exports are DOM-only and cannot be used for SSR.
     resolved.resolve.conditions = ['solid', mode, ...resolved.resolve.conditions]
+  }
+  if (resolved.framework === 'svelte') {
+    // Libraries may export source components under the svelte condition.
+    resolved.resolve.conditions = ['svelte', mode, ...resolved.resolve.conditions]
   }
 
   // ── Environment API：解析 environments map（默认 client + ssr）──────────
@@ -343,6 +352,15 @@ export async function resolveConfig(
         // server 产物默认不压缩（可调试性优先，与 Vite SSR 默认一致），可显式覆盖
         minify: envOptions.build?.minify ?? (consumer === 'server' ? false : resolved.build.minify),
       },
+    }
+    if (resolved.framework === 'svelte' && consumer === 'server') {
+      const resolve = resolved.environments[name].resolve
+      if (resolve.noExternal !== true) {
+        // Svelte's compiler dev helpers and esm-env must see the same mode.
+        // Include its runtime dependencies too: pnpm need not expose these
+        // transitive packages in the application's output scope.
+        resolve.noExternal = [...resolve.noExternal, 'svelte', 'esm-env', 'clsx', 'devalue']
+      }
     }
   }
 

@@ -90,29 +90,35 @@
     "oxc-transform-react": "^0.153.0",
     "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
-    "vue": "3.6.0-rc.10"
+    "vue": "3.6.0-rc.15"
   },
   "optionalDependencies": {
-    "@vue/compiler-sfc": "3.6.0-rc.10",
+    "@vue/compiler-sfc": "3.6.0-rc.15",
     "lightningcss": "^1.33.0"
   },
   "peerDependencies": {
     "@babel/core": "^7.29.7",
+    "@prefresh/core": "^1.5.11",
+    "@prefresh/utils": "^1.2.1",
     "@tanstack/redact": "~0.2.1",
     "@tanstack/router-generator": "1.167.46",
     "@tanstack/start-plugin-core": "1.171.55",
     "babel-preset-solid": "^1.9.16",
     "oxc-transform-react": "^0.152.0 || ^0.153.0",
     "react-server-dom-webpack": "^19.0.0",
-    "solid-refresh": "^0.7.8"
+    "solid-refresh": "^0.7.8",
+    "svelte": "^5.0.0"
   },
   "peerDependenciesMeta": {
     "@babel/core": { "optional": true },
+    "@prefresh/core": { "optional": true },
+    "@prefresh/utils": { "optional": true },
     "@tanstack/redact": { "optional": true },
     "@tanstack/router-generator": { "optional": true },
     "@tanstack/start-plugin-core": { "optional": true },
     "babel-preset-solid": { "optional": true },
     "solid-refresh": { "optional": true },
+    "svelte": { "optional": true },
     "oxc-transform-react": {
       "optional": true
     },
