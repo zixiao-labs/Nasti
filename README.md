@@ -49,6 +49,18 @@ npx nasti dev
 npx nasti build
 ```
 
+### Agent Skill（pnpm）
+
+Nasti 随 npm 包提供 [`nasti` Agent Skill](./skills/nasti/SKILL.md)，供编码 Agent 查阅配置、命令、框架用法和 Vite 迁移注意事项。使用 [pnpm 12.11.0 或更新版本](https://pnpm.io/agent-skills)，并安装包含该 Skill 的 Nasti 版本：
+
+```bash
+pnpm add -D @nasti-toolchain/nasti
+```
+
+在使用 Nasti 的应用中将它装为直接开发依赖。然后在工作区根目录（单包项目就在项目根目录）准备 Agent 的技能目录，例如 `mkdir -p .agents/skills`，或用 `pnpm-workspace.yaml` 中的 `skills.dirs` 指定目录。
+
+在根目录运行 `pnpm approve`，审阅 Skill 后在提示中批准 `@nasti-toolchain/nasti`。pnpm 会把 Skill 链接到相应目录。
+
 ## 项目结构
 
 Nasti 期望的项目结构与 Vite 一致：

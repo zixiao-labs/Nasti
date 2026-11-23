@@ -27,6 +27,8 @@ try {
   // A tarball, not a file:directory link, prevents workspace dependencies from
   // hiding missing peers or selecting the root's development compiler.
   const [packed] = JSON.parse(npm(['pack', '--json', '--ignore-scripts', '--pack-destination', root], repo))
+  assert.ok(packed.files.some(({ path }) => path === 'skills/nasti/SKILL.md'),
+    'npm tarball must include the Nasti agent skill at the path pnpm discovers')
   const tarball = path.join(root, packed.filename)
   console.log(`Checking ${pkg.name}@${pkg.version} with npm ${npm(['--version'], root).trim()}`)
 

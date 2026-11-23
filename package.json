@@ -54,7 +54,8 @@
   "files": [
     "dist",
     "bin",
-    "client"
+    "client",
+    "skills"
   ],
   "scripts": {
     "build": "tsdown",
