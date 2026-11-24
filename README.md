@@ -51,7 +51,7 @@ npx nasti build
 
 ### Agent Skill（pnpm）
 
-Nasti 随 npm 包提供 [`nasti` Agent Skill](./skills/nasti/SKILL.md)，供编码 Agent 查阅配置、命令、框架用法和 Vite 迁移注意事项。使用 [pnpm 12.11.0 或更新版本](https://pnpm.io/agent-skills)，并安装包含该 Skill 的 Nasti 版本：
+从 2.11.0 起，Nasti 随 npm 包提供 [`nasti` Agent Skill](./skills/nasti/SKILL.md)，供编码 Agent 查阅配置、命令、框架用法和 Vite 迁移注意事项。使用 [pnpm 12.11.0 或更新版本](https://pnpm.io/agent-skills)：
 
 ```bash
 pnpm add -D @nasti-toolchain/nasti

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.11.0
+
+### Ship a pnpm-discoverable Nasti Agent Skill
+
+- Bundle the `nasti` Agent Skill with the npm package. It covers setup, common
+  CLI commands, framework configuration, Vite migration, and troubleshooting.
+- pnpm 12.11.0 or later can discover the Skill when Nasti is a direct dependency
+  and link it after approval. Nasti's runtime requirements are unchanged.
+- Verify that the published tarball includes `skills/nasti/SKILL.md` in the
+  packed-package smoke test.
+
 ## 2.10.1
 
 ### Use the current Rolldown code-splitting API
