@@ -38,7 +38,12 @@ For a new app, add `index.html` in the app root and point it to a real module:
 document.querySelector('#app')!.textContent = 'Hello from Nasti'
 ```
 
-Dev serves the source app. Build writes to `dist/` by default. Preview serves the built output, so rebuild before checking a change with preview. If you change `build.outDir`, pass the same directory to `nasti preview --outDir <dir>`.
+Dev serves the source app. Preview serves the built output, so rebuild before previewing changes. The build and preview CLI commands both default to `dist/`. If you set `build.outDir` to a different directory, pass the same `--outDir` to both commands so preview reads what build writes:
+
+```sh
+pnpm exec nasti build --outDir custom-dist
+pnpm exec nasti preview --outDir custom-dist
+```
 
 ## Configure or migrate
 
