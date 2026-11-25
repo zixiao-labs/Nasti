@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url'
 import path from 'node:path'
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import type {
   Framework,
   NastiConfig,
@@ -133,10 +134,15 @@ async function loadTsConfig(filePath: string): Promise<NastiConfig> {
     typescript: {},
   })
 
-  // 写入临时 .mjs 文件然后 import
-  const tmpFile = filePath + '.timestamp-' + Date.now() + '.mjs'
+  // 每次加载独占一个临时模块，并放在配置文件旁以保留相对导入的解析规则。
+  const tmpFile = `${filePath}.timestamp-${Date.now()}-${randomUUID()}.mjs`
+  const fd = fs.openSync(tmpFile, 'wx')
   try {
-    fs.writeFileSync(tmpFile, result.code)
+    try {
+      fs.writeFileSync(fd, result.code)
+    } finally {
+      fs.closeSync(fd)
+    }
     const mod = await import(pathToFileURL(tmpFile).href)
     return mod.default ?? mod
   } finally {
