@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.11.1
 
 - Fix a race where parallel loads of `nasti.config.ts` or `nasti.config.mts`
   could overwrite or remove each other's temporary module and fail with `ENOENT`.
